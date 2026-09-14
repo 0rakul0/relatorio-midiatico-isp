@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://relatorio:relatorio@localhost:5432/repercussao"
     tavily_api_key: str | None = None
+    youtube_api_key: str | None = None
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
     app_env: str = "development"

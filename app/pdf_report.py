@@ -16,6 +16,8 @@ def build_pdf(data: dict) -> bytes:
     from reportlab.platypus import KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     report, project, metrics, corpus = data["report"], data["project"], data["metrics"], data["corpus"]
+    traditional_corpus = data.get("traditional_corpus", [item for item in corpus if "youtube.com" not in (item.get("domain") or "").lower()])
+    social_corpus = data.get("social_corpus", [item for item in corpus if "youtube.com" in (item.get("domain") or "").lower()])
     styles = getSampleStyleSheet()
     title = ParagraphStyle("ReportTitle", parent=styles["Title"], fontName="Helvetica-Bold", fontSize=19, leading=23, textColor=colors.HexColor("#102b46"), spaceAfter=8)
     subtitle = ParagraphStyle("Subtitle", parent=styles["Normal"], fontSize=10, leading=14, textColor=colors.HexColor("#516579"), spaceAfter=14)
@@ -52,18 +54,44 @@ def build_pdf(data: dict) -> bytes:
         f"<b>{metrics.get('isp_mentioned_items', 0)} itens ({metrics.get('isp_protagonism_percent', 0)}%)</b> mencionam a instituição na amostra.",
     ]
     metric_content.extend([Paragraph("• " + item, body) for item in number_lines])
+    scout = metrics.get("media_scout", {})
+    if scout:
+        platforms = " · ".join(f"{item['platform']}: {item['status']}" for item in scout.get("platforms", []))
+        metric_content.append(Paragraph(
+            f"<b>{escape(_text(scout.get('name')))}</b> - {scout.get('web_tasks', 0)} consultas em sites e {scout.get('youtube_tasks', 0)} no YouTube planejadas. {escape(_text(platforms))}",
+            small,
+        ))
     portal_checks = metrics.get("portal_checks", [])
     if portal_checks:
         metric_content.append(Paragraph("CHECAGEM DE PORTAIS PRIORITÁRIOS", ParagraphStyle("PortalHeading", parent=heading, fontSize=11, leading=14, textColor=colors.black, spaceBefore=12)))
         metric_content.append(_table([["Portal", "Resultado", "Evidência"]] + [[item["portal"], item["result"], item["evidence"]] for item in portal_checks], [2.6 * cm, 4.3 * cm, 9.7 * cm], small, header_color=colors.HexColor("#f0f0f0"), header_text=colors.black))
+    priority_youtube = metrics.get("youtube_priority_channel_checks", [])
+    if priority_youtube:
+        metric_content.append(Paragraph("CHECAGEM DE CANAIS PRIORITÁRIOS NO YOUTUBE", ParagraphStyle("YoutubeChecksHeading", parent=heading, fontSize=11, leading=14, textColor=colors.black, spaceBefore=12)))
+        metric_content.append(_table([["Canal", "Resultado", "Vídeos", "Visualizações", "Link do vídeo de maior alcance"]] + [
+            [item["channel"], item["result"], str(item["videos"]), f"{item['views']:,}".replace(",", "."), item.get("lead_url", "")]
+            for item in priority_youtube
+        ], [2.2 * cm, 3.5 * cm, 1.7 * cm, 2.2 * cm, 7.0 * cm], small, header_color=colors.HexColor("#f0f0f0"), header_text=colors.black))
     story.append(KeepTogether(metric_content))
+    top_channels = metrics.get("top_youtube_channels", [])
+    if top_channels:
+        story.append(Paragraph("TOP 5 CANAIS NO YOUTUBE", ParagraphStyle("YoutubeHeading", parent=heading, fontSize=11, leading=14, textColor=colors.black, spaceBefore=12)))
+        story.append(_table([["#", "Canal", "Vídeos validados", "Visualizações", "Link do vídeo de maior alcance"]] + [
+            [str(index + 1), item["channel"], str(item["videos"]), f"{item['views']:,}".replace(",", "."), item.get("lead_url", "")]
+            for index, item in enumerate(top_channels)
+        ], [0.8 * cm, 3.0 * cm, 2.4 * cm, 2.6 * cm, 8.3 * cm], small))
     add_section("II. Enquadramento Dominante", report["dominant_framing"])
     story.append(Paragraph("III. Um Estudo, Muitas Pautas", heading)); story.append(_table([["Eixo temático", "Dado-âncora", "Cobertura"]] + [[x["axis"], x["anchor_data"], x["coverage"]] for x in report["thematic_axes"]], [4.1 * cm, 5.7 * cm, 6.8 * cm], small))
     add_section("IV. Recorte de Maior Rendimento Jornalístico", report["highest_yield"]); add_section("V. Camada Institucional e Disputa de Narrativa", report["institutional_narrative"])
     story.append(Paragraph("VI. Avaliação: Alcance, Profundidade e Riscos", heading)); story.append(_table([["Dimensão", "Avaliação", "Evidência"]] + [[x["dimension"], x["assessment"], x["evidence"]] for x in report["risk_assessment"]], [3.6 * cm, 4.7 * cm, 8.3 * cm], small))
     story.append(Paragraph("VII. Recomendações e Kit de Imprensa", heading)); story.extend([Paragraph("• " + escape(_text(item)), body) for item in report["recommendations"]]); story.append(_table([["Produto", "Finalidade"]] + [[x["product"], x["purpose"]] for x in report["press_kit"]], [6.5 * cm, 10.1 * cm], small))
     add_section("VIII. Síntese", report["synthesis"]); add_section("Anexo A - Nota Metodológica", report["methodological_note"])
-    story.append(PageBreak()); story.append(Paragraph("Anexo B - Corpus Auditável", heading)); story.append(Paragraph("A tabela reúne somente itens validados para análise, com ano de publicação, fonte, título e URL.", small)); story.append(_table([["#", "Ano", "Fonte", "Título", "URL"]] + [[str(i + 1), x.get("published_year", "Não informado"), x.get("source", x["domain"] or "Fonte aberta"), x["title"], x["url"]] for i, x in enumerate(corpus)], [0.55 * cm, 1.15 * cm, 2.35 * cm, 5.25 * cm, 7.0 * cm], small))
+    def corpus_table(rows):
+        if not rows:
+            return Paragraph("Nenhum item validado nesta categoria para a janela observada.", small)
+        return _table([["#", "Ano", "Fonte", "Título", "URL"]] + [[str(i + 1), x.get("published_year", "N/D"), x.get("source", x["domain"] or "Fonte aberta"), x["title"], x["url"]] for i, x in enumerate(rows)], [0.75 * cm, 1.05 * cm, 2.3 * cm, 5.2 * cm, 6.95 * cm], small)
+    story.append(PageBreak()); story.append(Paragraph("Anexo B - Sites Tradicionais", heading)); story.append(Paragraph("Itens validados em sites jornalísticos e institucionais, com ano de publicação, fonte, título e URL.", small)); story.append(corpus_table(traditional_corpus))
+    story.append(PageBreak()); story.append(Paragraph("Anexo C - Mídias Sociais e Plataformas", heading)); story.append(Paragraph("Itens validados em YouTube, Instagram, X e demais plataformas sociais conectadas.", small)); story.append(corpus_table(social_corpus))
     document.build(story, onFirstPage=page_number, onLaterPages=page_number)
     return buffer.getvalue()
 

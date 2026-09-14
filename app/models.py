@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -12,6 +12,7 @@ class Project(Base):
     launch_date: Mapped[date] = mapped_column(Date)
     collection_start: Mapped[date] = mapped_column(Date)
     collection_end: Mapped[date] = mapped_column(Date)
+    has_custom_date_window: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(40), default="DRAFT")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -51,6 +52,8 @@ class MediaItem(Base):
     published_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    view_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     search_source: Mapped[str] = mapped_column(String(50), default="manual")
     status: Mapped[str] = mapped_column(String(40), default="PENDING")
     discard_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

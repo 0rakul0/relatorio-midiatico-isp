@@ -2,7 +2,7 @@ from datetime import date
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select
+from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
 from app.database import Base, engine, get_db
 from app.models import GeneratedReport, MediaItem, OfficialFact, Project, SearchQuery
@@ -16,6 +16,17 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(engine)
+    # Migração leve para bancos SQLite/PostgreSQL já existentes, sem apagar o corpus.
+    columns = {column["name"] for column in inspect(engine).get_columns("media_items")}
+    with engine.begin() as connection:
+        if "source_name" not in columns:
+            connection.execute(text("ALTER TABLE media_items ADD COLUMN source_name VARCHAR(300)"))
+        if "view_count" not in columns:
+            connection.execute(text("ALTER TABLE media_items ADD COLUMN view_count INTEGER"))
+    project_columns = {column["name"] for column in inspect(engine).get_columns("projects")}
+    if "has_custom_date_window" not in project_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE projects ADD COLUMN has_custom_date_window BOOLEAN DEFAULT 0"))
 
 
 def project_or_404(db: Session, project_id: int) -> Project:
@@ -83,7 +94,7 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     launch = payload.launch_date or today
     if end < start: raise HTTPException(422, "collection_end deve ser posterior ao início")
     row = Project(topic=payload.topic, institution=payload.institution, launch_date=launch, collection_start=start, collection_end=end,
-                  status="CUSTOM_DATES" if has_custom_window else "DRAFT")
+                  has_custom_date_window=has_custom_window, status="CUSTOM_DATES" if has_custom_window else "DRAFT")
     db.add(row); db.commit(); db.refresh(row)
     try:
         discovery = discover_project_profile(db, row)

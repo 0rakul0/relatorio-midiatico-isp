@@ -14,7 +14,7 @@
 </head>
 <body>
 <header class="top screen-only"><div class="brand"><div class="mark">ISP</div><div><small>Inteligência de comunicação</small><h1>Relatório de Repercussão Midiática</h1></div></div><div id="api-status" class="status">Verificando API…</div></header>
-<main class="wrap"><div class="dashboard-grid screen-only"><section class="panel"><h2>Gerar relatório</h2><p class="note">Informe o tema. Sem datas, a busca cobre a série disponível desde o lançamento; com datas, a coleta fica restrita ao período informado.</p><form id="report-form"><label for="topic">Tema / produto</label><input id="topic" name="topic" value="Dossiê Mulher 2026" required minlength="3"><div class="form-actions"><div class="date-field"><label for="collection-start">Data início</label><input id="collection-start" type="date"></div><div class="date-field"><label for="collection-end">Data fim</label><input id="collection-end" type="date"></div><button id="submit">Abrir ou gerar relatório</button><button type="button" class="secondary" id="refresh-report">Atualizar pesquisa</button></div></form><div id="progress" class="progress hidden"></div></section><aside class="panel history"><h2>Histórico de buscas</h2><p class="note">Mantém a última versão de cada tema em cada dia.</p><div id="history-list" class="history-list">Carregando histórico…</div></aside></div><div id="actions" class="hidden"></div><div id="report-layout" class="report-layout hidden"><aside class="toc screen-only"><h2>Sumário</h2><nav id="toc-links"></nav><button class="secondary download-button" id="save-pdf">Baixar PDF</button></aside><article id="report" class="report-doc"></article></div></main>
+<main class="wrap"><div class="dashboard-grid screen-only"><section class="panel"><h2>Gerar relatório</h2><p class="note">Informe o tema. Sem datas, a busca cobre a série disponível desde o lançamento; com datas, a coleta fica restrita ao período informado.</p><form id="report-form"><label for="topic">Tema / produto</label><input id="topic" name="topic" value="Dossiê Mulher 2026" required minlength="3"><div class="form-actions"><div class="date-field"><label for="collection-start">Data início</label><input id="collection-start" type="date"></div><div class="date-field"><label for="collection-end">Data fim</label><input id="collection-end" type="date"></div><button id="submit">Gerar relatório completo</button><button type="button" class="secondary" id="refresh-report">Atualizar pesquisa</button></div></form><div id="progress" class="progress hidden"></div></section><aside class="panel history"><h2>Histórico de buscas</h2><p class="note">Mantém a última versão de cada tema em cada dia.</p><div id="history-list" class="history-list">Carregando histórico…</div></aside></div><div id="actions" class="hidden"></div><div id="report-layout" class="report-layout hidden"><aside class="toc screen-only"><h2>Sumário</h2><nav id="toc-links"></nav><button class="secondary download-button" id="save-pdf">Baixar PDF</button></aside><article id="report" class="report-doc"></article></div></main>
 <script>
 const $=s=>document.querySelector(s);const esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));const paragraph=v=>`<p>${esc(v)}</p>`;const api=async(path,opts={})=>{const r=await fetch(path,{headers:{'Content-Type':'application/json'},...opts});const d=await r.json();if(!r.ok)throw new Error(d.detail||JSON.stringify(d));return d};
 api('/health').then(()=>$('#api-status').textContent='API conectada').catch(()=>$('#api-status').textContent='API indisponível');
@@ -44,19 +44,50 @@ render = function (result) {
   block.innerHTML = '<h3 class="metric-heading">Repercussão por números</h3><ul class="metric-list"></ul><h3 class="metric-heading">Checagem de portais prioritários</h3>';
   const list = block.querySelector('ul');
   figures.forEach(value => { const item = document.createElement('li'); item.textContent = value; list.append(item); });
+  if (metrics.media_scout) {
+    const platforms = (metrics.media_scout.platforms || []).map(item => `${item.platform}: ${item.status}`).join(' · ');
+    block.insertAdjacentHTML('beforeend', `<p class="footer-note"><b>${esc(metrics.media_scout.name)}</b> — ${esc(metrics.media_scout.web_tasks || 0)} consultas em sites e ${esc(metrics.media_scout.youtube_tasks)} no YouTube planejadas. ${esc(platforms)}</p>`);
+  }
   const rows = (metrics.portal_checks || []).map(item => [esc(item.portal), esc(item.result), esc(item.evidence)]);
   block.insertAdjacentHTML('beforeend', table(['Portal', 'Resultado', 'Evidência'], rows));
+  const priorityYoutube = (metrics.youtube_priority_channel_checks || []).map(item => [
+    esc(item.channel), esc(item.result), String(item.videos), new Intl.NumberFormat('pt-BR').format(item.views),
+    `<a href="${esc(item.lead_url)}" target="_blank" rel="noreferrer">${esc(item.lead_title || 'Abrir vídeo')}</a>`,
+  ]);
+  if (priorityYoutube.length) {
+    block.insertAdjacentHTML('beforeend', '<h3 class="metric-heading">Checagem de canais prioritários no YouTube</h3>');
+    block.insertAdjacentHTML('beforeend', table(['Canal', 'Resultado', 'Vídeos validados', 'Visualizações', 'Vídeo de maior alcance'], priorityYoutube));
+  }
+  const topChannels = (metrics.top_youtube_channels || []).map((item, index) => [
+    String(index + 1), esc(item.channel), String(item.videos), new Intl.NumberFormat('pt-BR').format(item.views),
+    `<a href="${esc(item.lead_url)}" target="_blank" rel="noreferrer">${esc(item.lead_title || 'Abrir vídeo')}</a>`,
+  ]);
+  if (topChannels.length) {
+    block.insertAdjacentHTML('beforeend', '<h3 class="metric-heading">Top 5 canais no YouTube</h3>');
+    block.insertAdjacentHTML('beforeend', table(['#', 'Canal', 'Vídeos validados', 'Visualizações', 'Vídeo de maior alcance'], topChannels));
+  }
   report.insertBefore(block, framing);
+  const isSocial = item => /(^|\.)(youtube\.com|youtu\.be|instagram\.com|x\.com|twitter\.com)$/i.test(item.domain || '');
+  const traditionalCorpus = result.traditional_corpus || result.corpus.filter(item => !isSocial(item));
+  const socialCorpus = result.social_corpus || result.corpus.filter(isSocial);
+  const corpusRows = items => items.map((item, index) => [
+    String(index + 1), esc(item.published_year || 'N/D'), esc(item.source || item.domain), esc(item.title),
+    `<a href="${esc(item.url)}" target="_blank" rel="noreferrer">${esc(item.url)}</a>`,
+  ]);
   const corpusHeading = [...report.querySelectorAll('h2')].find(h => h.textContent.includes('Anexo B'));
   if (corpusHeading && corpusHeading.nextElementSibling) {
-    corpusHeading.textContent = 'Anexo B - Corpus Auditável';
-    const rows = result.corpus.map((item, index) => [
-      String(index + 1), esc(item.published_year || 'Não informado'), esc(item.source || item.domain), esc(item.title),
-      `<a href="${esc(item.url)}" target="_blank" rel="noreferrer">${esc(item.url)}</a>`,
-    ]);
-    corpusHeading.nextElementSibling.outerHTML = table(['#', 'Ano', 'Fonte', 'Título', 'URL'], rows, 'corpus');
+    corpusHeading.textContent = 'Anexo B - Sites Tradicionais';
+    corpusHeading.nextElementSibling.outerHTML = table(['#', 'Ano', 'Fonte', 'Título', 'URL'], corpusRows(traditionalCorpus), 'corpus');
+    const socialHeading = document.createElement('h2');
+    socialHeading.id = 'section-social-corpus'; socialHeading.textContent = 'Anexo C - Mídias Sociais e Plataformas';
+    const socialTable = document.createRange().createContextualFragment(table(['#', 'Ano', 'Fonte', 'Título', 'URL'], corpusRows(socialCorpus), 'corpus'));
+    // O primeiro .footer-note pertence ao bloco de métricas; o anexo deve ser
+    // inserido antes do rodapé final, depois de todo o Anexo B.
+    const footer = report.lastElementChild;
+    footer.before(socialHeading, socialTable);
     const tocLink = [...document.querySelectorAll('#toc-links a')].find(link => link.textContent.includes('Anexo B'));
     if (tocLink) tocLink.textContent = corpusHeading.textContent;
+    document.querySelector('#toc-links').insertAdjacentHTML('beforeend', `<a href="#${socialHeading.id}">${socialHeading.textContent}</a>`);
   }
 };
 </script>
@@ -121,7 +152,7 @@ async function generateReport(forceRefresh = false) {
     progress.textContent = 'Planejando buscas, coletando fontes, validando corpus e redigindo relatório…';
     const result = await api(`/projects/${created.id}/run`, {method:'POST'});
     activeProjectId = result.project.id;
-    progress.textContent = `Concluído: ${result.metrics.items_found} itens encontrados; ${result.metrics.valid_items} validados; ${result.metrics.unique_vehicles} veículos.`;
+    progress.textContent = `Concluído: ${result.metrics.items_found} itens encontrados; ${result.metrics.valid_items} validados; ${result.metrics.unique_vehicles} fontes; ${result.youtube_collected || 0} vídeos do YouTube processados.`;
     render(result); await loadHistory();
   } catch (error) { progress.textContent = 'Não foi possível gerar o relatório: ' + error.message; }
   finally { button.disabled = false; refresh.disabled = false; }
