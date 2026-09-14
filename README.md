@@ -33,17 +33,29 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-Abra `http://127.0.0.1:8000/docs` para testar a API. Fora do Docker, altere no `.env` o host da URL de banco de `postgres` para `localhost`. Para busca real, informe `TAVILY_API_KEY` no arquivo `.env`. Sem chave, o planejamento e a inserção manual de evidências continuam funcionando.
+Abra `http://127.0.0.1:8000/docs` para testar a API. Fora do Docker, altere no `.env` o host da URL de banco de `postgres` para `localhost`. Para busca real, informe `TAVILY_API_KEY` no arquivo `.env`. Sem chave, o planejamento e a inserção manual de evidências continuam funcionando. Para os endpoints de IA, informe também `OPENAI_API_KEY`; o modelo pode ser ajustado por `OPENAI_MODEL` (padrão: `gpt-4.1-mini`).
 
 ## Fluxo
 
-1. `POST /projects` cria o relatório e registra tema, período e janela.
+1. `POST /projects` recebe o tema, pesquisa fontes institucionais e tenta confirmar instituição, lançamento e fatos. A série histórica é configurada do lançamento confirmado até o dia atual.
 2. `POST /projects/{id}/official-facts` registra fatos extraídos do documento oficial, com página/evidência.
 3. `POST /projects/{id}/plan-searches` gera consultas auditáveis.
 4. `POST /projects/{id}/collect` usa Tavily, se configurado.
 5. `POST /projects/{id}/validate-and-classify` normaliza, remove duplicatas e classifica o corpus.
 6. `GET /projects/{id}/metrics` retorna métricas calculadas por SQL.
 7. `GET /projects/{id}/report` gera o rascunho baseado exclusivamente no corpus validado.
+
+Se a data de lançamento não vier acompanhada de evidência suficiente, o projeto fica como `PROFILE_NEEDS_REVIEW`: o sistema não afirma uma data inventada e a janela deve ser revisada antes da coleta.
+
+Os fatos e seus URLs de origem podem ser auditados em `GET /projects/{id}/official-facts`.
+
+## Recursos de IA (OpenAI)
+
+- `POST /projects/{id}/ai/plan-searches` cria consultas a partir dos fatos oficiais.
+- `POST /projects/{id}/ai/classify` analisa somente itens já validados.
+- `GET /projects/{id}/ai/report` redige a partir de métricas SQL e evidências validadas, seguindo a estrutura: resumo executivo, oito seções analíticas, nota metodológica e corpus auditável.
+
+Esses endpoints não habilitam ferramentas para a LLM: ela não consulta a web, não acessa o banco e não altera registros fora das consultas ou classificações solicitadas. As respostas estruturadas são solicitadas em JSON e não são armazenadas pela API da OpenAI (`store=False`).
 
 ## Princípios institucionais
 

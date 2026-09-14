@@ -70,3 +70,11 @@ class Classification(Base):
     evidence: Mapped[str] = mapped_column(Text)
     errors: Mapped[list] = mapped_column(JSON, default=list)
 
+
+class GeneratedReport(Base):
+    __tablename__ = "generated_reports"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), unique=True, index=True)
+    body: Mapped[dict] = mapped_column(JSON)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+

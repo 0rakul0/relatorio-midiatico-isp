@@ -5,9 +5,9 @@ from pydantic import BaseModel, Field, HttpUrl
 class ProjectCreate(BaseModel):
     topic: str = Field(min_length=3, max_length=300)
     institution: str = "Instituto de Segurança Pública"
-    launch_date: date
-    collection_start: date
-    collection_end: date
+    launch_date: date | None = None
+    collection_start: date | None = None
+    collection_end: date | None = None
 
 
 class OfficialFactCreate(BaseModel):
