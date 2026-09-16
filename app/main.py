@@ -2,10 +2,10 @@ from datetime import date
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import inspect, select, text
+from sqlalchemy import delete, inspect, select, text
 from sqlalchemy.orm import Session
 from app.database import Base, engine, get_db
-from app.models import GeneratedReport, MediaItem, OfficialFact, Project, SearchQuery
+from app.models import Classification, GeneratedReport, MediaItem, OfficialFact, Project, SearchQuery
 from app.schemas import ManualMediaItemCreate, OfficialFactCreate, ProjectCreate
 from app.services import cached_report_for_project, cached_report_for_topic, canonicalize, classify_with_llm, collect_tavily, discover_project_profile, draft_report_with_llm, export_report_pdf, metrics, plan_queries, plan_queries_with_llm, run_full_methodology, validate_and_classify
 
@@ -75,6 +75,36 @@ def historical_report(project_id: int, db: Session = Depends(get_db)):
     if not report:
         raise HTTPException(404, "Versão do relatório não encontrada")
     return {"report": report}
+
+
+@app.delete("/reports/history/{project_id}", status_code=204)
+def delete_historical_report(project_id: int, db: Session = Depends(get_db)):
+    """Remove o item exibido no histórico, incluindo revisões do mesmo tema e dia."""
+    target = db.execute(
+        select(Project, GeneratedReport)
+        .join(GeneratedReport, GeneratedReport.project_id == Project.id)
+        .where(Project.id == project_id)
+    ).first()
+    if not target:
+        raise HTTPException(404, "Versão do relatório não encontrada")
+    target_project, target_report = target
+    target_day = target_report.generated_at.date() if target_report.generated_at else None
+    matching_project_ids = [
+        project.id for project, generated in db.execute(
+            select(Project, GeneratedReport).join(GeneratedReport, GeneratedReport.project_id == Project.id)
+        ).all()
+        if project.topic.strip().casefold() == target_project.topic.strip().casefold()
+        and (generated.generated_at.date() if generated.generated_at else None) == target_day
+    ]
+    item_ids = select(MediaItem.id).where(MediaItem.project_id.in_(matching_project_ids))
+    db.execute(delete(Classification).where(Classification.media_item_id.in_(item_ids)))
+    db.execute(delete(GeneratedReport).where(GeneratedReport.project_id.in_(matching_project_ids)))
+    db.execute(delete(OfficialFact).where(OfficialFact.project_id.in_(matching_project_ids)))
+    db.execute(delete(SearchQuery).where(SearchQuery.project_id.in_(matching_project_ids)))
+    db.execute(delete(MediaItem).where(MediaItem.project_id.in_(matching_project_ids)))
+    db.execute(delete(Project).where(Project.id.in_(matching_project_ids)))
+    db.commit()
+    return Response(status_code=204)
 
 
 @app.get("/", include_in_schema=False)

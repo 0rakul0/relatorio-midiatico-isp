@@ -102,6 +102,71 @@ def mentions_named_topic(text: str, project_terms: set[str]) -> bool:
     return bool(project_terms.intersection(normalized_topic_terms(text)))
 
 
+def is_police_deaths_in_august_rio_topic(topic: str) -> bool:
+    """Identifica o recorte estrito de mortes de policiais no Rio em agosto."""
+    terms = normalized_topic_terms(topic)
+    normalized = normalized_text(topic)
+    return {"policia", "morto", "agosto"}.issubset(terms) and "rio de janeiro" in normalized
+
+
+def matches_police_deaths_in_august_rio(text: str) -> bool:
+    """Exige vítima policial, morte, território e referência temporal no mesmo item.
+
+    A busca por palavras soltas (por exemplo, apenas "polícia" e "Rio") trazia
+    ocorrências policiais sem relação com a morte de um agente. Para esse tema
+    específico, preferimos excluir resultados ambíguos a ampliar artificialmente
+    o corpus.
+    """
+    normalized = normalized_text(text)
+    police = r"(?:policial(?:es)?|pm(?:s)?|policia\s+(?:militar|civil)|agente\s+(?:da\s+)?policia)"
+    death = r"(?:morto|morta|mortos|mortas|assassinad[oa]s?|morreu|falec(?:eu|eram))"
+    # Os termos precisam descrever o mesmo fato, e não apenas aparecerem em
+    # parágrafos desconexos de uma página longa, um PDF ou uma página de índice.
+    event = re.compile(rf"\b{police}\b.{{0,120}}\b{death}\b|\b{death}\b.{{0,120}}\b{police}\b")
+    for match in event.finditer(normalized):
+        context = normalized[max(0, match.start() - 320):match.end() + 320]
+        has_rio = bool(re.search(r"\b(?:rio\s+de\s+janeiro|estado\s+do\s+rio|rj)\b", context))
+        has_august_2026 = bool(re.search(r"\bagosto\s+(?:de\s+)?2026\b|\b2026\b[^.]{0,100}\bagosto\b", context))
+        if has_rio and has_august_2026:
+            return True
+    return False
+
+
+def has_police_death_event(text: str) -> bool:
+    """Filtro barato: identifica candidato que merece leitura semântica completa."""
+    normalized = normalized_text(text)
+    police = r"(?:policial(?:es)?|pm(?:s)?|policia\s+(?:militar|civil)|agente\s+(?:da\s+)?policia)"
+    death = r"(?:morto|morta|mortos|mortas|assassinad[oa]s?|morreu|falec(?:eu|eram))"
+    return bool(re.search(rf"\b{police}\b.{{0,120}}\b{death}\b|\b{death}\b.{{0,120}}\b{police}\b", normalized))
+
+
+def review_police_death_item_with_llm(item: MediaItem) -> dict:
+    """Lê o conteúdo de um candidato e decide a aderência ao recorte solicitado."""
+    schema = {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "matches_topic": {"type": "boolean"},
+            "police_victim": {"type": "boolean"},
+            "death_event": {"type": "boolean"},
+            "occurred_in_rio": {"type": "boolean"},
+            "occurred_in_august_2026": {"type": "boolean"},
+            "evidence": {"type": "string"},
+            "reason": {"type": "string"},
+        },
+        "required": ["matches_topic", "police_victim", "death_event", "occurred_in_rio", "occurred_in_august_2026", "evidence", "reason"],
+    }
+    instructions = """Você faz a triagem factual de uma única matéria jornalística.
+Determine se ela descreve a morte de um policial ocorrida no Rio de Janeiro em agosto de 2026.
+Leia o título, resumo e conteúdo fornecidos. Só marque matches_topic como true se TODAS as condições forem comprovadas pelo texto: a vítima era policial; houve morte; o fato ocorreu no Rio de Janeiro; e ocorreu em agosto de 2026. A data de publicação não prova a data do fato. Não aceite morte causada por policial, morte de civil, investigação de morte, outro estado ou menção histórica. Em evidence, registre a passagem curta que sustenta a decisão; se faltar prova, explique em reason."""
+    return structured_response(
+        instructions=instructions,
+        payload={"media_item": {"title": item.title, "url": item.url, "published_at": str(item.published_at) if item.published_at else None,
+                                "snippet": item.snippet, "content": (item.content or "")[:12000]}},
+        schema_name="police_death_topic_review",
+        schema=schema,
+    )
+
+
 def discover_project_profile(db: Session, project: Project) -> dict:
     """Localiza fontes e extrai perfil documental antes da série histórica."""
     has_custom_window = project.has_custom_date_window
@@ -181,6 +246,13 @@ def plan_queries(db: Session, project: Project) -> list[SearchQuery]:
         (f'"{project.topic}" "{project.institution}"', "geral", "Localizar cobertura que identifica a instituição", 1),
         (f'site:youtube.com "{project.topic}"', "youtube", "Localizar vídeos e matérias publicadas no YouTube", 2),
     ]
+    if is_police_deaths_in_august_rio_topic(project.topic):
+        base.insert(0, (
+            '"policial morto" "Rio de Janeiro" "agosto de 2026"',
+            "geral",
+            "Recorte estrito: morte de policial no Rio de Janeiro em agosto de 2026",
+            1,
+        ))
     base += [(f'"{project.topic}" "{term}"', "tematica", f"Indicador oficial: {term}", 1) for term in terms[:12]]
     base += [(f'site:{domain} "{project.topic}"', "veiculo", f"Checagem nominal: {domain}", 2) for domain in PRIORITY_DOMAINS]
     existing = set(db.scalars(select(SearchQuery.query).where(SearchQuery.project_id == project.id)).all())
@@ -220,6 +292,12 @@ def plan_queries_with_llm(db: Session, project: Project) -> list[SearchQuery]:
     if youtube_query not in existing:
         row = SearchQuery(project_id=project.id, query=youtube_query, kind="youtube", rationale="Localizar vídeos e matérias publicadas no YouTube", priority=2)
         db.add(row); created.append(row)
+    if is_police_deaths_in_august_rio_topic(project.topic):
+        strict_query = '"policial morto" "Rio de Janeiro" "agosto de 2026"'
+        if strict_query not in existing:
+            row = SearchQuery(project_id=project.id, query=strict_query, kind="geral",
+                              rationale="Recorte estrito: morte de policial no Rio de Janeiro em agosto de 2026", priority=1)
+            db.add(row); created.append(row); existing.add(strict_query)
     for task in MediaScout(project.topic).web_tasks():
         if task.query not in existing:
             row = SearchQuery(project_id=project.id, query=task.query, kind="media_scout_web", rationale=task.rationale, priority=2)
@@ -361,8 +439,7 @@ def youtube_video_details(api_key: str, video_ids: list[str]) -> dict[str, dict]
 
 def validate_and_classify(db: Session, project: Project) -> dict:
     items = db.scalars(select(MediaItem).where(MediaItem.project_id == project.id)).all()
-    valid = discarded = 0
-    topic_words = set(project.topic.lower().replace('"', '').split())
+    valid = discarded = semantic_reviews = 0
     project_terms = normalized_topic_terms(project.topic)
     window_start, window_end = media_window(project)
     for item in items:
@@ -383,14 +460,40 @@ def validate_and_classify(db: Session, project: Project) -> dict:
             item.status, item.discard_reason = "OUTSIDE_COLLECTION_WINDOW", f"Ano {inferred_year} anterior ao lançamento em {window_start.isoformat()}"
             discarded += 1; continue
         body = " ".join(filter(None, [item.title, item.snippet, item.content])).lower()
-        related = len(topic_words.intersection(set(body.split()))) >= 1 or "instituto de segurança pública" in body or " isp " in f" {body} "
+        strict_police_topic = is_police_deaths_in_august_rio_topic(project.topic)
         related = mentions_named_topic(body, project_terms)
-        if item.search_source == "youtube_api":
-            # Mantido explicitamente para documentar que vídeos seguem a mesma
-            # regra nominal usada no corpus de sites.
-            related = mentions_named_topic(body, project_terms)
+        semantic_evidence = None
+        if strict_police_topic:
+            if not has_police_death_event(body):
+                related = False
+            else:
+                semantic_reviews += 1
+                try:
+                    review = review_police_death_item_with_llm(item)
+                except RuntimeError as exc:
+                    item.status, item.discard_reason = "SEMANTIC_REVIEW_UNAVAILABLE", f"Não foi possível concluir a leitura semântica: {exc}"
+                    discarded += 1; continue
+                # A leitura semântica interpreta o papel da vítima e o fato;
+                # a inclusão ainda exige que local e período estejam escritos
+                # no próprio corpus. Isso evita aceitar uma conclusão da LLM
+                # que contradiga a evidência fornecida.
+                related = review["matches_topic"] and all((
+                    review["police_victim"], review["death_event"],
+                    review["occurred_in_rio"], review["occurred_in_august_2026"],
+                    matches_police_deaths_in_august_rio(body),
+                ))
+                semantic_evidence = review["evidence"]
+                if not related:
+                    reason = review["reason"]
+                    if review["matches_topic"] and not matches_police_deaths_in_august_rio(body):
+                        reason = "A conclusão semântica não possui evidência textual explícita de local e período no mesmo fato"
+                    item.status, item.discard_reason = "NOT_RELATED", f"Triagem semântica: {reason}"
+                    discarded += 1; continue
         if not related:
-            item.status, item.discard_reason = "NOT_RELATED", "Sem evidência textual suficiente de relação com o tema ou ISP"
+            reason = "Sem evidência textual suficiente de relação com o tema ou ISP"
+            if strict_police_topic:
+                reason = "Não apresenta no mesmo fato uma vítima policial e sua morte; não segue para análise semântica"
+            item.status, item.discard_reason = "NOT_RELATED", reason
             discarded += 1; continue
         item.status, item.discard_reason = "VALID", None
         theme = next((fact.label for fact in db.scalars(select(OfficialFact).where(OfficialFact.project_id == project.id)).all() if fact.label.lower() in body), "Geral")
@@ -398,10 +501,10 @@ def validate_and_classify(db: Session, project: Project) -> dict:
         classification = db.scalar(select(Classification).where(Classification.media_item_id == item.id))
         if not classification:
             db.add(Classification(media_item_id=item.id, theme=theme, framing="A determinar por revisão analítica", isp_mentioned=mention,
-                tone_toward_institution="NEUTRO", fidelity_status="PENDENTE", evidence=(item.snippet or item.title)[:1000], errors=[]))
+                tone_toward_institution="NEUTRO", fidelity_status="PENDENTE", evidence=(semantic_evidence or item.snippet or item.title)[:1000], errors=[]))
         valid += 1
     db.commit()
-    return {"valid": valid, "discarded": discarded}
+    return {"valid": valid, "discarded": discarded, "semantic_reviews": semantic_reviews}
 
 
 def classify_with_llm(db: Session, project: Project) -> dict:
