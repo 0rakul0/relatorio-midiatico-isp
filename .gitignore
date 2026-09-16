@@ -1,8 +1,10 @@
 .env
-__pycache__/
-.pytest_cache/
 .venv/
+__pycache__/
 *.pyc
-
-/tmp
-/output/pdf
+.pytest_cache/
+.idea/
+*.db
+*.sqlite
+*.sqlite3
+postgres_data/

@@ -1,62 +1,95 @@
 from datetime import date
+from threading import Thread
+
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import delete, inspect, select, text
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
-from app.database import Base, engine, get_db
-from app.config import get_settings
-from app.models import Classification, GeneratedReport, MediaItem, OfficialFact, Project, SearchQuery
-from app.schemas import LLMSettingsUpdate, ManualMediaItemCreate, OfficialFactCreate, ProjectCreate
-from app.services import cached_report_for_project, cached_report_for_topic, canonicalize, classify_with_llm, collect_tavily, discover_project_profile, draft_report_with_llm, export_report_pdf, metrics, plan_queries, plan_queries_with_llm, requested_month_window, run_full_methodology, validate_and_classify
 
-app = FastAPI(title="ISP Repercussão Midiática", version="0.1.0")
+from app.config import get_settings
+from app.database import SessionLocal, get_db
+from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report, fact_events_for_report
+from app.execution import (
+    RunCancelled,
+    active_run_for_project,
+    check_cancelled,
+    create_run,
+    mark_run_cancelled,
+    mark_run_completed,
+    mark_run_failed,
+    mark_run_started,
+    request_cancel,
+    run_snapshot,
+    update_stage,
+)
+from app.models import (
+    Classification,
+    FactAssertion,
+    FactEvent,
+    GeneratedReport,
+    MediaItem,
+    OfficialFact,
+    Project,
+    SearchQuery,
+)
+from app.report_qa import run_report_qa
+from app.schema_upgrade import ensure_schema
+from app.schemas import LLMSettingsUpdate, ManualMediaItemCreate, OfficialFactCreate, ProjectCreate
+from app.services import (
+    cached_report_for_project,
+    cached_report_for_topic,
+    canonicalize,
+    classify_with_llm,
+    collect_tavily,
+    discover_project_profile,
+    draft_report_with_llm,
+    export_report_pdf,
+    metrics,
+    plan_queries,
+    plan_queries_with_llm,
+    run_full_methodology,
+    validate_and_classify,
+)
+from app.topic_profile import requested_month_window
+
+
+app = FastAPI(title="ISP Repercussão Midiática", version="0.2.2")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
 @app.on_event("startup")
 def startup():
-    Base.metadata.create_all(engine)
-    # Migração leve para bancos SQLite/PostgreSQL já existentes, sem apagar o corpus.
-    columns = {column["name"] for column in inspect(engine).get_columns("media_items")}
-    with engine.begin() as connection:
-        if "source_name" not in columns:
-            connection.execute(text("ALTER TABLE media_items ADD COLUMN source_name VARCHAR(300)"))
-        if "view_count" not in columns:
-            connection.execute(text("ALTER TABLE media_items ADD COLUMN view_count INTEGER"))
-    project_columns = {column["name"] for column in inspect(engine).get_columns("projects")}
-    if "has_custom_date_window" not in project_columns:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE projects ADD COLUMN has_custom_date_window BOOLEAN DEFAULT 0"))
+    ensure_schema()
 
 
 def project_or_404(db: Session, project_id: int) -> Project:
     project = db.get(Project, project_id)
-    if not project: raise HTTPException(404, "Projeto não encontrado")
+    if not project:
+        raise HTTPException(404, "Projeto não encontrado")
     return project
 
 
 @app.get("/health")
-def health(): return {"status": "ok"}
+def health():
+    return {"status": "ok", "version": "0.2.2"}
 
 
 @app.get("/settings/llm")
 def get_llm_settings():
     settings = get_settings()
-    return {"provider": settings.llm_provider, "model": settings.groq_model if settings.llm_provider == "groq" else settings.openai_model}
+    return {
+        "provider": "openai",
+        "model": settings.openai_model,
+        "configured": bool(settings.openai_api_key),
+    }
 
 
 @app.post("/settings/llm")
 def update_llm_settings(payload: LLMSettingsUpdate):
     settings = get_settings()
-    if payload.provider == "groq" and not settings.groq_api_key:
-        raise HTTPException(422, "GROQ_API_KEY não configurada no servidor")
-    if payload.provider == "openai" and not settings.openai_api_key:
-        raise HTTPException(422, "OPENAI_API_KEY não configurada no servidor")
-    settings.llm_provider = payload.provider
-    if payload.provider == "groq": settings.groq_model = payload.model
-    else: settings.openai_model = payload.model
-    return {"provider": payload.provider, "model": payload.model}
+    settings.openai_model = payload.model
+    return {"provider": "openai", "model": settings.openai_model}
 
 
 @app.get("/reports/history")
@@ -74,17 +107,28 @@ def report_history(db: Session = Depends(get_db)):
         if version_key in seen_versions:
             continue
         seen_versions.add(version_key)
-        history.append({
-            "id": project.id, "topic": project.topic, "institution": project.institution,
-            "launch_date": str(project.launch_date), "generated_at": generated.generated_at,
-        })
+        history.append(
+            {
+                "id": project.id,
+                "topic": project.topic,
+                "institution": project.institution,
+                "project_type": project.project_type,
+                "generated_at": generated.generated_at,
+                "qa_status": generated.qa_status,
+            }
+        )
         if len(history) == 20:
             break
     return history
 
 
 @app.get("/reports/cache")
-def cached_report(topic: str, collection_start: date | None = None, collection_end: date | None = None, db: Session = Depends(get_db)):
+def cached_report(
+    topic: str,
+    collection_start: date | None = None,
+    collection_end: date | None = None,
+    db: Session = Depends(get_db),
+):
     report = cached_report_for_topic(db, topic, collection_start, collection_end)
     return {"cached": bool(report), "report": report}
 
@@ -99,7 +143,6 @@ def historical_report(project_id: int, db: Session = Depends(get_db)):
 
 @app.delete("/reports/history/{project_id}", status_code=204)
 def delete_historical_report(project_id: int, db: Session = Depends(get_db)):
-    """Remove o item exibido no histórico, incluindo revisões do mesmo tema e dia."""
     target = db.execute(
         select(Project, GeneratedReport)
         .join(GeneratedReport, GeneratedReport.project_id == Project.id)
@@ -107,16 +150,22 @@ def delete_historical_report(project_id: int, db: Session = Depends(get_db)):
     ).first()
     if not target:
         raise HTTPException(404, "Versão do relatório não encontrada")
+
     target_project, target_report = target
     target_day = target_report.generated_at.date() if target_report.generated_at else None
     matching_project_ids = [
-        project.id for project, generated in db.execute(
+        project.id
+        for project, generated in db.execute(
             select(Project, GeneratedReport).join(GeneratedReport, GeneratedReport.project_id == Project.id)
         ).all()
         if project.topic.strip().casefold() == target_project.topic.strip().casefold()
         and (generated.generated_at.date() if generated.generated_at else None) == target_day
     ]
+
+    event_ids = select(FactEvent.id).where(FactEvent.project_id.in_(matching_project_ids))
     item_ids = select(MediaItem.id).where(MediaItem.project_id.in_(matching_project_ids))
+    db.execute(delete(FactAssertion).where(FactAssertion.event_id.in_(event_ids)))
+    db.execute(delete(FactEvent).where(FactEvent.project_id.in_(matching_project_ids)))
     db.execute(delete(Classification).where(Classification.media_item_id.in_(item_ids)))
     db.execute(delete(GeneratedReport).where(GeneratedReport.project_id.in_(matching_project_ids)))
     db.execute(delete(OfficialFact).where(OfficialFact.project_id.in_(matching_project_ids)))
@@ -135,46 +184,150 @@ def dashboard():
 @app.post("/projects", status_code=201)
 def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     today = date.today()
-    has_custom_window = bool(payload.collection_start or payload.collection_end)
-    if has_custom_window:
-        start = payload.collection_start or payload.collection_end
-        end = payload.collection_end or payload.collection_start
+    inferred_window = requested_month_window(payload.topic)
+
+    if payload.collection_start or payload.collection_end:
+        collection_start = payload.collection_start or payload.collection_end
+        collection_end = payload.collection_end or payload.collection_start
+        has_custom_window = True
+    elif inferred_window:
+        collection_start, collection_end = inferred_window
+        has_custom_window = True
     else:
-        inferred_window = requested_month_window(payload.topic)
-        if inferred_window:
-            start, end = inferred_window
-            # A data explícita no tema é uma instrução do solicitante e deve
-            # permanecer intacta após a descoberta do perfil documental.
-            has_custom_window = True
-        else:
-            start = end = today
-    launch = payload.launch_date or today
-    if end < start: raise HTTPException(422, "collection_end deve ser posterior ao início")
-    row = Project(topic=payload.topic, institution=payload.institution, launch_date=launch, collection_start=start, collection_end=end,
-                  has_custom_date_window=has_custom_window, status="CUSTOM_DATES" if has_custom_window else "DRAFT")
-    db.add(row); db.commit(); db.refresh(row)
-    try:
-        discovery = discover_project_profile(db, row)
-    except RuntimeError as exc:
-        discovery = {"status": "PROFILE_NEEDS_REVIEW", "warning": str(exc)}
-    return {"id": row.id, "status": row.status, "discovery": discovery}
+        collection_start = collection_end = today
+        has_custom_window = False
+
+    event_start = payload.event_start or (inferred_window[0] if inferred_window else collection_start)
+    event_end = payload.event_end or (inferred_window[1] if inferred_window else collection_end)
+
+    if collection_end < collection_start:
+        raise HTTPException(422, "collection_end deve ser posterior ao início")
+    if event_end < event_start:
+        raise HTTPException(422, "event_end deve ser posterior ao início")
+
+    row = Project(
+        topic=payload.topic,
+        institution=payload.institution,
+        launch_date=payload.launch_date or today,
+        collection_start=collection_start,
+        collection_end=collection_end,
+        event_start=event_start,
+        event_end=event_end,
+        fact_grace_days=10,
+        has_custom_date_window=has_custom_window,
+        project_type="AUTO",
+        status="CUSTOM_DATES" if has_custom_window else "DRAFT",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    return {
+        "id": row.id,
+        "status": row.status,
+        "discovery": {
+            "status": "DEFERRED",
+            "message": "O perfil será executado como a primeira etapa acompanhada do relatório.",
+        },
+    }
 
 
 @app.post("/projects/{project_id}/discover-profile")
 def discover_profile(project_id: int, db: Session = Depends(get_db)):
-    try: return discover_project_profile(db, project_or_404(db, project_id))
-    except RuntimeError as exc: raise HTTPException(503, str(exc))
+    try:
+        return discover_project_profile(db, project_or_404(db, project_id))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+def _run_project_worker(run_id: str, project_id: int) -> None:
+    mark_run_started(run_id)
+    db = SessionLocal()
+    try:
+        project = db.get(Project, project_id)
+        if not project:
+            raise RuntimeError("Projeto não encontrado")
+
+        result = run_full_methodology(
+            db,
+            project,
+            progress_callback=lambda key, status, detail=None: update_stage(run_id, key, status, detail),
+            cancel_check=lambda: check_cancelled(run_id),
+        )
+        check_cancelled(run_id)
+        qa_status = (result.get("qa") or {}).get("status", "N/D")
+        mark_run_completed(run_id, f"Relatório concluído. QA: {qa_status}")
+    except RunCancelled:
+        db.rollback()
+        project = db.get(Project, project_id)
+        if project:
+            project.status = "RUN_CANCELLED"
+            db.commit()
+        mark_run_cancelled(run_id)
+    except Exception as exc:
+        db.rollback()
+        project = db.get(Project, project_id)
+        if project:
+            project.status = "RUN_FAILED"
+            db.commit()
+        mark_run_failed(run_id, str(exc))
+    finally:
+        db.close()
 
 
 @app.post("/projects/{project_id}/run")
 def run_project(project_id: int, db: Session = Depends(get_db)):
-    try: return run_full_methodology(db, project_or_404(db, project_id))
-    except RuntimeError as exc: raise HTTPException(503, str(exc))
+    try:
+        return run_full_methodology(db, project_or_404(db, project_id))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@app.post("/projects/{project_id}/run-async", status_code=202)
+def run_project_async(project_id: int, db: Session = Depends(get_db)):
+    project_or_404(db, project_id)
+    active = active_run_for_project(project_id)
+    if active:
+        return {"run": active}
+
+    state = create_run(project_id)
+    thread = Thread(
+        target=_run_project_worker,
+        args=(state.run_id, project_id),
+        name=f"report-run-{state.run_id[:8]}",
+        daemon=True,
+    )
+    thread.start()
+    return {"run": run_snapshot(state.run_id)}
+
+
+@app.get("/runs/{run_id}")
+def get_run_status(run_id: str):
+    snapshot = run_snapshot(run_id)
+    if not snapshot:
+        raise HTTPException(404, "Execução não encontrada")
+    return snapshot
+
+
+@app.post("/runs/{run_id}/cancel")
+def cancel_run(run_id: str):
+    snapshot = run_snapshot(run_id)
+    if not snapshot:
+        raise HTTPException(404, "Execução não encontrada")
+    accepted = request_cancel(run_id)
+    return {
+        "accepted": accepted,
+        "run": run_snapshot(run_id),
+    }
 
 
 @app.post("/projects/{project_id}/official-facts", status_code=201)
 def add_official_fact(project_id: int, payload: OfficialFactCreate, db: Session = Depends(get_db)):
-    project_or_404(db, project_id); row = OfficialFact(project_id=project_id, **payload.model_dump()); db.add(row); db.commit(); db.refresh(row)
+    project_or_404(db, project_id)
+    row = OfficialFact(project_id=project_id, **payload.model_dump())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
     return {"id": row.id}
 
 
@@ -182,8 +335,37 @@ def add_official_fact(project_id: int, payload: OfficialFactCreate, db: Session 
 def official_facts(project_id: int, db: Session = Depends(get_db)):
     project_or_404(db, project_id)
     rows = db.scalars(select(OfficialFact).where(OfficialFact.project_id == project_id)).all()
-    return [{"id": row.id, "label": row.label, "value": row.value, "source_reference": row.source_reference,
-             "page": row.page, "evidence": row.evidence} for row in rows]
+    return [
+        {
+            "id": row.id,
+            "label": row.label,
+            "value": row.value,
+            "source_reference": row.source_reference,
+            "page": row.page,
+            "evidence": row.evidence,
+            "indicator": row.indicator,
+            "geography": row.geography,
+            "period_start": row.period_start,
+            "period_end": row.period_end,
+            "unit": row.unit,
+        }
+        for row in rows
+    ]
+
+
+@app.get("/projects/{project_id}/facts")
+def facts(project_id: int, db: Session = Depends(get_db)):
+    project_or_404(db, project_id)
+    return fact_events_for_report(db, project_id)
+
+
+@app.get("/projects/{project_id}/facts/{event_id}/evidence")
+def fact_evidence(project_id: int, event_id: int, db: Session = Depends(get_db)):
+    project_or_404(db, project_id)
+    event = db.scalar(select(FactEvent).where(FactEvent.id == event_id, FactEvent.project_id == project_id))
+    if not event:
+        raise HTTPException(404, "Evento factual não encontrado")
+    return [item for item in fact_assertions_for_report(db, project_id) if item["event_id"] == event_id]
 
 
 @app.post("/projects/{project_id}/plan-searches")
@@ -193,31 +375,62 @@ def create_plan(project_id: int, db: Session = Depends(get_db)):
 
 @app.post("/projects/{project_id}/ai/plan-searches")
 def create_ai_plan(project_id: int, db: Session = Depends(get_db)):
-    try: return {"created": len(plan_queries_with_llm(db, project_or_404(db, project_id)))}
-    except RuntimeError as exc: raise HTTPException(503, str(exc))
+    try:
+        return {"created": len(plan_queries_with_llm(db, project_or_404(db, project_id)))}
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @app.get("/projects/{project_id}/searches")
 def searches(project_id: int, db: Session = Depends(get_db)):
     project_or_404(db, project_id)
-    return [{"id": x.id, "query": x.query, "kind": x.kind, "rationale": x.rationale, "executed_at": x.executed_at} for x in db.scalars(select(SearchQuery).where(SearchQuery.project_id == project_id)).all()]
+    return [
+        {
+            "id": row.id,
+            "query": row.query,
+            "kind": row.kind,
+            "purpose": row.purpose,
+            "rationale": row.rationale,
+            "priority": row.priority,
+            "executed_at": row.executed_at,
+        }
+        for row in db.scalars(select(SearchQuery).where(SearchQuery.project_id == project_id)).all()
+    ]
 
 
 @app.post("/projects/{project_id}/collect")
 def collect(project_id: int, db: Session = Depends(get_db)):
     project_or_404(db, project_id)
-    try: return {"added": collect_tavily(db, project_id)}
-    except RuntimeError as exc: raise HTTPException(503, str(exc))
+    try:
+        return {"added": collect_tavily(db, project_id)}
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @app.post("/projects/{project_id}/media-items", status_code=201)
 def add_manual_item(project_id: int, payload: ManualMediaItemCreate, db: Session = Depends(get_db)):
-    project_or_404(db, project_id); url = str(payload.url); canonical = canonicalize(url)
+    project_or_404(db, project_id)
+    url = str(payload.url)
+    canonical = canonicalize(url)
     if db.scalar(select(MediaItem.id).where(MediaItem.project_id == project_id, MediaItem.canonical_url == canonical)):
         raise HTTPException(409, "URL já existe no corpus")
-    row = MediaItem(project_id=project_id, title=payload.title, url=url, canonical_url=canonical, domain=payload.url.host,
-        published_at=payload.published_at, snippet=payload.snippet, content=payload.content, query_id=payload.query_id, search_source="manual")
-    db.add(row); db.commit(); return {"id": row.id}
+    row = MediaItem(
+        project_id=project_id,
+        title=payload.title,
+        url=url,
+        canonical_url=canonical,
+        domain=payload.url.host,
+        published_at=payload.published_at,
+        snippet=payload.snippet,
+        content=payload.content,
+        query_id=payload.query_id,
+        search_source="manual",
+        discovery_purposes=[payload.purpose],
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"id": row.id}
 
 
 @app.post("/projects/{project_id}/validate-and-classify")
@@ -227,35 +440,77 @@ def validate(project_id: int, db: Session = Depends(get_db)):
 
 @app.post("/projects/{project_id}/ai/classify")
 def classify_ai(project_id: int, db: Session = Depends(get_db)):
-    try: return classify_with_llm(db, project_or_404(db, project_id))
-    except RuntimeError as exc: raise HTTPException(503, str(exc))
+    try:
+        return classify_with_llm(db, project_or_404(db, project_id))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @app.get("/projects/{project_id}/metrics")
 def get_metrics(project_id: int, db: Session = Depends(get_db)):
-    project_or_404(db, project_id); return metrics(db, project_id)
+    project_or_404(db, project_id)
+    return metrics(db, project_id)
 
 
 @app.get("/projects/{project_id}/report")
 def report(project_id: int, db: Session = Depends(get_db)):
-    project = project_or_404(db, project_id); data = metrics(db, project_id)
+    project = project_or_404(db, project_id)
+    data = metrics(db, project_id)
     dominant = data["themes"][0]["theme"] if data["themes"] else "não identificado"
-    return {"title": f"Relatório de Repercussão Midiática — {project.topic}", "methodological_note": "A amostra descreve fontes abertas auditáveis; não mede audiência ou alcance e ausência de resultado não prova ausência de cobertura.",
-            "executive_summary": f"Na janela de {project.collection_start} a {project.collection_end}, foram localizados {data['items_found']} itens, dos quais {data['valid_items']} foram validados em {data['unique_vehicles']} veículos. O tema mais frequente foi {dominant}. O ISP foi identificado como fonte em {data['isp_protagonism_percent']}% dos itens validados.", "metrics": data}
+    return {
+        "title": f"Relatório de Repercussão Midiática — {project.topic}",
+        "methodological_note": (
+            "A amostra descreve fontes abertas auditáveis. Ausência de item validado não prova ausência de cobertura, "
+            "e a camada factual é separada da janela de publicação."
+        ),
+        "executive_summary": (
+            f"Na janela de {project.collection_start} a {project.collection_end}, foram localizados {data['items_found']} itens, "
+            f"dos quais {data['valid_items']} foram validados em {data['unique_vehicles']} veículos. "
+            f"O tema mais frequente foi {dominant}. A camada factual estruturou {data['facts']['events']} evento(s)."
+        ),
+        "metrics": data,
+        "facts": fact_events_for_main_report(db, project_id),
+    }
 
 
 @app.get("/projects/{project_id}/ai/report")
 def ai_report(project_id: int, db: Session = Depends(get_db)):
-    try: return draft_report_with_llm(db, project_or_404(db, project_id))
-    except RuntimeError as exc: raise HTTPException(503, str(exc))
+    try:
+        return draft_report_with_llm(db, project_or_404(db, project_id))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@app.post("/projects/{project_id}/qa")
+def qa_report(project_id: int, db: Session = Depends(get_db)):
+    project = project_or_404(db, project_id)
+    payload = cached_report_for_project(db, project_id)
+    if not payload:
+        raise HTTPException(404, "Relatório ainda não foi gerado")
+    return run_report_qa(db, project, payload)
 
 
 @app.get("/projects/{project_id}/export.pdf")
 def export_pdf(project_id: int, db: Session = Depends(get_db)):
     project = project_or_404(db, project_id)
     try:
-        content = export_report_pdf(db, project)
+        content = export_report_pdf(db, project, allow_draft=False)
     except RuntimeError as exc:
-        raise HTTPException(503, str(exc))
-    filename = "relatorio-repercussao-midiatica-" + "".join(char if char.isalnum() else "-" for char in project.topic.lower()).strip("-") + ".pdf"
+        raise HTTPException(409, str(exc)) from exc
+    filename = "relatorio-repercussao-midiatica-" + "".join(
+        char if char.isalnum() else "-" for char in project.topic.lower()
+    ).strip("-") + ".pdf"
+    return Response(content=content, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.get("/projects/{project_id}/export-draft.pdf")
+def export_draft_pdf(project_id: int, db: Session = Depends(get_db)):
+    project = project_or_404(db, project_id)
+    try:
+        content = export_report_pdf(db, project, allow_draft=True)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    filename = "RASCUNHO-relatorio-repercussao-midiatica-" + "".join(
+        char if char.isalnum() else "-" for char in project.topic.lower()
+    ).strip("-") + ".pdf"
     return Response(content=content, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
