@@ -19,6 +19,25 @@ from app.prompts import ANALYST_PROMPT, DOCUMENTALIST_PROMPT, QUERY_PLANNER_PROM
 PRIORITY_PORTALS = [*PRIORITY_WEB_PORTALS, ("Youtube", "www.youtube.com")]
 PRIORITY_DOMAINS = [domain for _, domain in PRIORITY_PORTALS]
 
+MONTHS_PT = {
+    "janeiro": 1, "fevereiro": 2, "marco": 3, "abril": 4,
+    "maio": 5, "junho": 6, "julho": 7, "agosto": 8,
+    "setembro": 9, "outubro": 10, "novembro": 11, "dezembro": 12,
+}
+
+
+def requested_month_window(topic: str) -> tuple[date, date] | None:
+    """Extrai um único mês/ano explicitamente pedido no tema, se houver."""
+    normalized = normalized_text(topic)
+    matches = re.findall(r"\b(" + "|".join(MONTHS_PT) + r")\s+(?:de\s+)?(20\d{2})\b", normalized)
+    unique = {(MONTHS_PT[month], int(year)) for month, year in matches}
+    if len(unique) != 1:
+        return None
+    month, year = unique.pop()
+    start = date(year, month, 1)
+    next_month = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
+    return start, date.fromordinal(next_month.toordinal() - 1)
+
 def canonicalize(url: str) -> str:
     parsed = urlparse(url)
     # Em URLs normais removemos parâmetros de rastreamento. No YouTube, porém,
@@ -78,7 +97,9 @@ def source_label(item: MediaItem) -> str:
 
 
 def media_window(project: Project) -> tuple[date, date]:
-    """Janela auditável: lançamento (ou início manual posterior) até o fim definido."""
+    """Retorna o recorte pedido; só aplica lançamento à janela automática."""
+    if project.has_custom_date_window:
+        return project.collection_start, project.collection_end
     start = project.collection_start
     if project.launch_date and project.launch_date > start:
         start = project.launch_date
@@ -192,8 +213,13 @@ def discover_project_profile(db: Session, project: Project) -> dict:
             url = result.get("url")
             if url and url not in seen:
                 seen.add(url)
+                # A descoberta precisa de evidência para identificar o produto,
+                # não da página inteira. O limite preserva margem para modelos
+                # com TPM menor, como os planos iniciais da Groq.
                 sources.append({"title": result.get("title", "Sem título"), "url": url,
-                                "content": (result.get("raw_content") or result.get("content") or "")[:8000]})
+                                "content": (result.get("raw_content") or result.get("content") or "")[:1500]})
+
+    sources = sources[:6]
 
     if not sources:
         project.status = "PROFILE_NEEDS_REVIEW"
@@ -223,7 +249,10 @@ def discover_project_profile(db: Session, project: Project) -> dict:
                 launch_confirmed = True
         except ValueError:
             pass
-    project.collection_end = date.today()
+    # A data expressa pelo usuário (inclusive no tema) não pode ser estendida
+    # silenciosamente até a data de execução do relatório.
+    if not has_custom_window:
+        project.collection_end = date.today()
     project.status = "PROFILED" if launch_confirmed else "PROFILE_NEEDS_REVIEW"
     facts_added = 0
     for fact in result["official_facts"]:
@@ -270,7 +299,8 @@ def plan_queries_with_llm(db: Session, project: Project) -> list[SearchQuery]:
     facts = db.scalars(select(OfficialFact).where(OfficialFact.project_id == project.id)).all()
     result = structured_response(
         instructions=QUERY_PLANNER_PROMPT,
-        payload={"project": {"topic": project.topic, "institution": project.institution}, "official_facts": [
+        payload={"project": {"topic": project.topic, "institution": project.institution,
+                             "collection_start": str(project.collection_start), "collection_end": str(project.collection_end)}, "official_facts": [
             {"label": fact.label, "value": fact.value, "source_reference": fact.source_reference, "page": fact.page, "evidence": fact.evidence}
             for fact in facts
         ]},
@@ -558,7 +588,8 @@ def draft_report_with_llm(db: Session, project: Project) -> dict:
     }, "required": ["title", "interpretive_title", "subtitle", "executive_summary", "opening", "panorama", "dominant_framing", "thematic_axes", "highest_yield", "institutional_narrative", "risk_assessment", "recommendations", "press_kit", "synthesis", "methodological_note"]}
     result = structured_response(
         instructions=WRITER_PROMPT + " Estruture exatamente como: Resumo Executivo; Abertura; I. Panorama da Repercussão; II. Enquadramento Dominante; III. Um Estudo, Muitas Pautas; IV. Recorte de Maior Rendimento Jornalístico; V. Camada Institucional e Disputa de Narrativa; VI. Avaliação: Alcance, Profundidade e Riscos; VII. Recomendações e Kit de Imprensa; VIII. Síntese; Anexo A - Nota Metodológica. Não afirme informação que não esteja nas métricas, fatos oficiais ou itens validados. O corpus auditável será anexado pelo sistema, portanto não invente URLs.",
-        payload={"project": {"topic": project.topic, "institution": project.institution, "collection_start": str(project.collection_start), "collection_end": str(project.collection_end)},
+        payload={"project": {"topic": project.topic, "institution": project.institution, "collection_start": str(project.collection_start), "collection_end": str(project.collection_end),
+                             "main_scope": f"{project.collection_start} a {project.collection_end}"},
                  "metrics": data, "official_facts": [{"label": fact.label, "value": fact.value, "evidence": fact.evidence, "source": fact.source_reference} for fact in facts],
                  "validated_items": [{"title": item.title, "url": item.url, "evidence": classification.evidence, "theme": classification.theme, "framing": classification.framing} for item, classification in items]},
         schema_name="structured_media_report",

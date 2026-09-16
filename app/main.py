@@ -5,9 +5,10 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import delete, inspect, select, text
 from sqlalchemy.orm import Session
 from app.database import Base, engine, get_db
+from app.config import get_settings
 from app.models import Classification, GeneratedReport, MediaItem, OfficialFact, Project, SearchQuery
-from app.schemas import ManualMediaItemCreate, OfficialFactCreate, ProjectCreate
-from app.services import cached_report_for_project, cached_report_for_topic, canonicalize, classify_with_llm, collect_tavily, discover_project_profile, draft_report_with_llm, export_report_pdf, metrics, plan_queries, plan_queries_with_llm, run_full_methodology, validate_and_classify
+from app.schemas import LLMSettingsUpdate, ManualMediaItemCreate, OfficialFactCreate, ProjectCreate
+from app.services import cached_report_for_project, cached_report_for_topic, canonicalize, classify_with_llm, collect_tavily, discover_project_profile, draft_report_with_llm, export_report_pdf, metrics, plan_queries, plan_queries_with_llm, requested_month_window, run_full_methodology, validate_and_classify
 
 app = FastAPI(title="ISP Repercussão Midiática", version="0.1.0")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -37,6 +38,25 @@ def project_or_404(db: Session, project_id: int) -> Project:
 
 @app.get("/health")
 def health(): return {"status": "ok"}
+
+
+@app.get("/settings/llm")
+def get_llm_settings():
+    settings = get_settings()
+    return {"provider": settings.llm_provider, "model": settings.groq_model if settings.llm_provider == "groq" else settings.openai_model}
+
+
+@app.post("/settings/llm")
+def update_llm_settings(payload: LLMSettingsUpdate):
+    settings = get_settings()
+    if payload.provider == "groq" and not settings.groq_api_key:
+        raise HTTPException(422, "GROQ_API_KEY não configurada no servidor")
+    if payload.provider == "openai" and not settings.openai_api_key:
+        raise HTTPException(422, "OPENAI_API_KEY não configurada no servidor")
+    settings.llm_provider = payload.provider
+    if payload.provider == "groq": settings.groq_model = payload.model
+    else: settings.openai_model = payload.model
+    return {"provider": payload.provider, "model": payload.model}
 
 
 @app.get("/reports/history")
@@ -120,7 +140,14 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
         start = payload.collection_start or payload.collection_end
         end = payload.collection_end or payload.collection_start
     else:
-        start = end = today
+        inferred_window = requested_month_window(payload.topic)
+        if inferred_window:
+            start, end = inferred_window
+            # A data explícita no tema é uma instrução do solicitante e deve
+            # permanecer intacta após a descoberta do perfil documental.
+            has_custom_window = True
+        else:
+            start = end = today
     launch = payload.launch_date or today
     if end < start: raise HTTPException(422, "collection_end deve ser posterior ao início")
     row = Project(topic=payload.topic, institution=payload.institution, launch_date=launch, collection_start=start, collection_end=end,

@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Literal
 from pydantic import BaseModel, Field, HttpUrl
 
 
@@ -8,6 +9,11 @@ class ProjectCreate(BaseModel):
     launch_date: date | None = None
     collection_start: date | None = None
     collection_end: date | None = None
+
+
+class LLMSettingsUpdate(BaseModel):
+    provider: Literal["openai", "groq"]
+    model: str = Field(min_length=1, max_length=120)
 
 
 class OfficialFactCreate(BaseModel):

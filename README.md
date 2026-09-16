@@ -42,7 +42,27 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-Abra `http://127.0.0.1:8000/docs` para testar a API. Fora do Docker, altere no `.env` o host da URL de banco de `postgres` para `localhost`. Para busca real, informe `TAVILY_API_KEY` no arquivo `.env`. Sem chave, o planejamento e a inserção manual de evidências continuam funcionando. Para os endpoints de IA, informe também `OPENAI_API_KEY`; o modelo pode ser ajustado por `OPENAI_MODEL` (padrão: `gpt-4.1-mini`).
+Abra `http://127.0.0.1:8000/docs` para testar a API. Fora do Docker, altere no `.env` o host da URL de banco de `postgres` para `localhost`. Para busca real, informe `TAVILY_API_KEY` no arquivo `.env`. Sem chave, o planejamento e a inserção manual de evidências continuam funcionando.
+
+### Provedor de IA
+
+Por padrão, a aplicação usa OpenAI:
+
+```dotenv
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sua_chave
+OPENAI_MODEL=gpt-4.1-mini
+```
+
+Para usar Groq como alternativa, defina as variáveis abaixo no `.env` local. A chave não deve ser incluída em arquivos versionados:
+
+```dotenv
+LLM_PROVIDER=groq
+GROQ_API_KEY=sua_chave
+GROQ_MODEL=openai/gpt-oss-120b
+```
+
+`openai/gpt-oss-120b` é a configuração recomendada para planejamento, análise semântica e redação. Para triagem de grande volume com menor custo, use `openai/gpt-oss-20b` apenas após validar a qualidade das respostas no seu corpus.
 
 ## Fluxo dos agentes
 

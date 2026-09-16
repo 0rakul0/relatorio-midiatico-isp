@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     youtube_api_key: str | None = None
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
+    llm_provider: str = "openai"
+    groq_api_key: str | None = None
+    groq_model: str = "openai/gpt-oss-120b"
     app_env: str = "development"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
