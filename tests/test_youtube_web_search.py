@@ -17,7 +17,7 @@ def test_youtube_url_validation_accepts_only_youtube_hosts():
     assert canonicalize("https://youtu.be/abc123") == canonicalize("https://www.youtube.com/watch?v=abc123")
 
 
-def test_collect_youtube_uses_openai_web_search_and_rejects_external_urls(monkeypatch):
+def test_collect_youtube_uses_duckduckgo_and_rejects_external_urls(monkeypatch):
     from app import services
 
     engine = create_engine("sqlite://")
@@ -33,38 +33,38 @@ def test_collect_youtube_uses_openai_web_search_and_rejects_external_urls(monkey
     session.add(project)
     session.commit()
 
-    def fake_web_search(**_kwargs):
-        return {
-            "videos": [
-                {
-                    "title": "Vídeo encontrado",
-                    "url": "https://www.youtube.com/watch?v=abc123&utm_source=test",
-                    "channel": "ISP RJ",
-                    "published_at": "2026-08-12",
-                    "description": "Descrição do vídeo",
-                    "view_count": 1_868,
-                },
-                {
-                    "title": "Resultado externo",
-                    "url": "https://example.com/video",
-                    "channel": None,
-                    "published_at": None,
-                    "description": None,
-                    "view_count": None,
-                },
-            ]
-    }
+    def fake_videos(query, **_kwargs):
+        return [
+            {
+                "title": "Vídeo encontrado",
+                "url": "https://www.youtube.com/watch?v=abc123&utm_source=test",
+                "channel": "ISP RJ",
+                "published_at": "2026-08-12",
+                "description": "Descrição do vídeo",
+                "view_count": 1_868,
+                "provider": "duckduckgo_video",
+            },
+            {
+                "title": "Resultado externo",
+                "url": "https://example.com/video",
+                "channel": None,
+                "published_at": None,
+                "description": None,
+                "view_count": None,
+                "provider": "duckduckgo_video",
+            },
+        ]
 
-    monkeypatch.setattr(services, "web_search_structured_response", fake_web_search)
-    assert services.collect_youtube_web_search(session, project) == 1
+    monkeypatch.setattr(services, "duckduckgo_videos", fake_videos)
+    assert services.collect_youtube_duckduckgo(session, project) == 1
 
     item = session.scalar(select(MediaItem))
     assert item.canonical_url == canonicalize("https://www.youtube.com/watch?v=abc123")
-    assert item.search_source == "openai_web_search"
+    assert item.search_source == "duckduckgo_video"
     assert item.source_name == "ISP RJ"
     assert item.view_count == 1_868
     assert item.source_provenance[0]["view_count"] == 1_868
-    assert item.source_provenance[0]["source"] == "openai_web_search"
+    assert item.source_provenance[0]["source"] == "duckduckgo_video"
 
     services._record_source_provenance(
         item,

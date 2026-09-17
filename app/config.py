@@ -10,11 +10,12 @@ class Settings(BaseSettings):
     # A v2.2 usa somente OpenAI. Mantemos um único modelo configurável.
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
-    # Legado de instalações anteriores; a execução atual não consome a API do
-    # YouTube e sempre usa OpenAI Web Search.
+    # YouTube Data API e opcional. Sem chave, a coleta usa DuckDuckGo Videos.
     youtube_api_key: str | None = None
+
+    # Legado de .env anteriores. Mantidos para compatibilidade; a versao atual
+    # nao usa modelos OpenAI para pesquisar a web.
     youtube_search_model: str = "gpt-5-mini"
-    # Modelo usado pelo fallback geral de pesquisa web (sites/portais).
     web_search_model: str = "gpt-5.5"
     # Compatibilidade: limite bruto que o provedor pode devolver por tarefa.
     youtube_web_search_max_results: int = 15
@@ -35,10 +36,19 @@ class Settings(BaseSettings):
     # Quantas consultas complementares a IA pode sugerir dentro do limite acima.
     max_llm_search_queries: int = 4
 
-    # Orçamento de consultas OpenAI Web Search usadas como fallback.
-    # 0 = herdar MAX_SEARCH_QUERIES. Quando o Tavily retorna erro duro de
-    # plano/quota/autenticacao, o circuit breaker libera automaticamente
-    # todas as consultas restantes da execucao para o Web Search.
+    # DuckDuckGo e o fallback de pesquisa quando o Tavily nao puder responder.
+    # 0 = herdar MAX_SEARCH_QUERIES. Nao exige chave de API.
+    max_duckduckgo_fallback_queries: int = 0
+    duckduckgo_region: str = "br-pt"
+    duckduckgo_safesearch: str = "moderate"
+    duckduckgo_max_retries: int = 2
+    duckduckgo_retry_base_seconds: float = 0.8
+    duckduckgo_fetch_pages: bool = True
+    duckduckgo_fetch_max_chars: int = 12000
+    duckduckgo_fetch_timeout_seconds: float = 10.0
+
+    # Legado de configuracoes anteriores. Mantido para nao quebrar .env antigos,
+    # mas a coleta atual nao usa OpenAI Web Search.
     max_web_search_fallback_queries: int = 0
 
     # Orçamento total da descoberta inicial: buscas e análise estruturada do

@@ -199,7 +199,7 @@ class MediaScout:
     def platform_status(youtube_enabled: bool) -> list[dict[str, str]]:
         return [
             {"platform": "Sites jornalísticos", "status": "ativo"},
-            {"platform": "YouTube", "status": "ativo" if youtube_enabled else "aguarda OPENAI_API_KEY"},
+            {"platform": "YouTube", "status": "ativo" if youtube_enabled else "indisponível"},
             {"platform": "Instagram", "status": "conector planejado"},
             {"platform": "X", "status": "conector planejado"},
         ]

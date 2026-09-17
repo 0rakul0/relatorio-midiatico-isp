@@ -56,7 +56,7 @@ from app.services import (
 from app.topic_profile import requested_topic_window
 
 
-app = FastAPI(title="ISP Repercussão Midiática", version="0.2.7")
+app = FastAPI(title="ISP Repercussão Midiática", version="0.2.8")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
@@ -77,19 +77,22 @@ def health():
     settings = get_settings()
     return {
         "status": "ok",
-        "version": "0.2.7",
+        "version": "0.2.8",
         "search_limits": {
             "max_search_results": settings.max_search_results,
             "max_results_per_query": settings.max_results_per_query,
             "max_search_queries": settings.max_search_queries,
             "max_llm_search_queries": settings.max_llm_search_queries,
-            "max_web_search_fallback_queries": settings.max_web_search_fallback_queries,
+            "max_duckduckgo_fallback_queries": settings.max_duckduckgo_fallback_queries,
+            "duckduckgo_region": settings.duckduckgo_region,
+            "duckduckgo_safesearch": settings.duckduckgo_safesearch,
+            "duckduckgo_fetch_pages": settings.duckduckgo_fetch_pages,
             "max_profile_discovery_calls": settings.max_profile_discovery_calls,
             "max_youtube_tasks": settings.max_youtube_tasks,
             "max_youtube_results_total": settings.max_youtube_results_total,
             "max_youtube_results_per_task": settings.max_youtube_results_per_task,
-            "web_search_model": settings.web_search_model,
-            "youtube_search_model": settings.youtube_search_model,
+            "web_search_provider": "tavily+duckduckgo",
+            "youtube_search_provider": "youtube_api+duckduckgo",
         },
         "ai_limits": {
             "max_semantic_reviews": settings.max_semantic_reviews,

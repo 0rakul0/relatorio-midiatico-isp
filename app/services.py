@@ -19,8 +19,16 @@ from app.fact_layer import (
     plan_nominal_followups,
     resolve_project_facts,
 )
-from app.llm import llm_is_configured, structured_response, web_search_structured_response
+from app.llm import llm_is_configured, structured_response
 from app.media_scout import MediaScout
+from app.duckduckgo_provider import (
+    DuckDuckGoUnavailable,
+    duckduckgo_available,
+    fetch_url_text,
+    search_news as duckduckgo_news,
+    search_text as duckduckgo_text,
+    search_videos as duckduckgo_videos,
+)
 from app.models import Classification, GeneratedReport, MediaItem, OfficialFact, Project, SearchQuery
 from app.pdf_report import build_pdf
 from app.prompts import ANALYST_PROMPT, DOCUMENTALIST_PROMPT, MEDIA_RELEVANCE_PROMPT, QUERY_PLANNER_PROMPT, WRITER_PROMPT
@@ -376,8 +384,8 @@ def discover_project_profile(db: Session, project: Project) -> dict:
     seen: set[str] = set()
 
     # O primeiro request real funciona como teste do Tavily. Se houver erro
-    # duro de plano/quota/autenticação, o restante da descoberta vai direto
-    # para OpenAI Web Search, sem insistir no Tavily nesta execução.
+    # duro de plano/quota/autenticacao, o restante da descoberta vai direto
+    # para DuckDuckGo, sem consumir OpenAI Web Search.
     tavily_client = None
     if tavily_key:
         try:
@@ -387,7 +395,7 @@ def discover_project_profile(db: Session, project: Project) -> dict:
             tavily_client = None
 
     tavily_circuit_open = tavily_client is None
-    tavily_disable_reason = "TAVILY_API_KEY não configurada" if tavily_client is None else None
+    tavily_disable_reason = "TAVILY_API_KEY nao configurada" if tavily_client is None else None
     discovery_stats = {
         "call_budget": call_budget,
         "profile_reserved": profile_reserved,
@@ -398,35 +406,11 @@ def discover_project_profile(db: Session, project: Project) -> dict:
         "tavily_attempts": 0,
         "tavily_successes": 0,
         "tavily_circuit_open": bool(tavily_circuit_open),
-        "web_search_queries": 0,
-    }
-
-    fallback_schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "results": {
-                "type": "array",
-                "maxItems": 5,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "title": {"type": "string"},
-                        "url": {"type": "string"},
-                        "content": {"type": ["string", "null"]},
-                    },
-                    "required": ["title", "url", "content"],
-                },
-            }
-        },
-        "required": ["results"],
+        "duckduckgo_queries": 0,
+        "duckduckgo_results": 0,
     }
 
     for query in searches:
-        # Uma consulta equivale a UMA chamada externa. O fallback é usado nas
-        # próximas consultas quando Tavily fica indisponível, nunca para repetir
-        # a mesma intenção apenas porque ela não retornou itens.
         if discovery_stats["external_search_calls"] >= search_budget:
             break
 
@@ -449,7 +433,7 @@ def discover_project_profile(db: Session, project: Project) -> dict:
                     seen.add(url)
                     sources.append(
                         {
-                            "title": result.get("title", "Sem título"),
+                            "title": result.get("title", "Sem titulo"),
                             "url": url,
                             "content": (result.get("raw_content") or result.get("content") or "")[:3500],
                             "search_provider": "tavily",
@@ -461,51 +445,55 @@ def discover_project_profile(db: Session, project: Project) -> dict:
                     tavily_circuit_open = True
                     tavily_disable_reason = str(exc)[:1000]
                     discovery_stats["tavily_circuit_open"] = True
-        elif llm_is_configured():
-            site_match = re.search(r"(?:^|\s)site:([^\s]+)", query, flags=re.IGNORECASE)
-            site_domain = site_match.group(1).strip().strip('"\'()[]{}').split('/')[0] if site_match else None
-            allowed_domains = [site_domain] if site_domain else None
+                else:
+                    # Falha transitoria: esta intencao ainda pode ser tentada no DDG.
+                    tavily_circuit_open = False
 
-            try:
-                discovery_stats["external_search_calls"] += 1
-                discovery_stats["web_search_queries"] += 1
-                fallback = web_search_structured_response(
-                    instructions=(
-                        "Pesquise fontes REAIS para confirmar a existência e, separadamente, a publicação de um "
-                        "produto institucional do Instituto de Segurança Pública. Preserve o nome exato do produto. "
-                        "Priorize páginas oficiais do ISP/Governo do RJ e fontes jornalísticas confiáveis. "
-                        "Uma previsão futura de lançamento não prova publicação efetiva. Não invente datas, URLs ou "
-                        "conteúdo. Retorne somente resultados materialmente relacionados ao produto pesquisado."
-                    ),
-                    payload={
-                        "query": query,
-                        "topic": project.topic,
-                        "product_name": product_name,
-                        "tavily_unavailable_reason": tavily_disable_reason,
-                    },
-                    schema_name="institutional_profile_web_sources_v2",
-                    schema=fallback_schema,
-                    allowed_domains=allowed_domains,
-                    model=settings.web_search_model,
-                    retry_without_domain_filter=False,
-                    max_output_tokens=3500,
-                )
-                for result in fallback.get("results", []):
-                    url = (result.get("url") or "").strip()
-                    if not url or url in seen:
-                        continue
-                    seen.add(url)
-                    sources.append(
-                        {
-                            "title": result.get("title") or "Sem título",
-                            "url": url,
-                            "content": (result.get("content") or "")[:3500],
-                            "search_provider": "openai_web_search",
-                            "search_query": query,
-                        }
+            # Tavily respondeu com itens; nao duplicamos a mesma consulta no DDG.
+            if any(source.get("search_query") == query for source in sources):
+                if len(sources) >= 10:
+                    break
+                continue
+
+        try:
+            discovery_stats["external_search_calls"] += 1
+            discovery_stats["duckduckgo_queries"] += 1
+            ddg_rows = duckduckgo_text(
+                query,
+                max_results=5,
+                region=settings.duckduckgo_region,
+                safesearch=settings.duckduckgo_safesearch,
+                retries=settings.duckduckgo_max_retries,
+                retry_base_seconds=settings.duckduckgo_retry_base_seconds,
+            )
+            site_domain = _site_domain_from_query(query)
+            for result in ddg_rows:
+                url = (result.get("url") or "").strip()
+                if not url or url in seen:
+                    continue
+                host = urlparse(url).netloc.lower().split(":")[0]
+                if site_domain and not (host == site_domain or host.endswith("." + site_domain)):
+                    continue
+                seen.add(url)
+                content = None
+                if settings.duckduckgo_fetch_pages:
+                    content = fetch_url_text(
+                        url,
+                        max_chars=min(settings.duckduckgo_fetch_max_chars, 12000),
+                        timeout=settings.duckduckgo_fetch_timeout_seconds,
                     )
-            except RuntimeError:
-                pass
+                sources.append(
+                    {
+                        "title": result.get("title") or "Sem titulo",
+                        "url": url,
+                        "content": (content or result.get("snippet") or "")[:3500],
+                        "search_provider": result.get("provider") or "duckduckgo_text",
+                        "search_query": query,
+                    }
+                )
+                discovery_stats["duckduckgo_results"] += 1
+        except DuckDuckGoUnavailable:
+            pass
 
         if len(sources) >= 10:
             break
@@ -1412,7 +1400,7 @@ def _site_domain_from_query(query_text: str) -> str | None:
     return domain or None
 
 
-def _collect_openai_web_search_query(
+def _collect_duckduckgo_query(
     db: Session,
     project: Project,
     query: SearchQuery,
@@ -1422,17 +1410,12 @@ def _collect_openai_web_search_query(
     cancel_check: Callable[[], None] | None = None,
     progress_detail: Callable[[str], None] | None = None,
 ) -> dict[str, int]:
-    """Executa uma consulta via OpenAI Web Search como fallback do Tavily.
+    """Executa uma consulta DuckDuckGo como fallback do Tavily.
 
-    O schema foi mantido deliberadamente simples. O Web Search cuida de
-    localizar paginas; a relevancia fina continua sendo decidida pelo hard
-    guard deterministico e pela validacao semantica em lote. Isso torna o
-    fallback mais robusto do que pedir que a mesma chamada pesquise e faca
-    classificacao editorial detalhada ao mesmo tempo.
+    DuckDuckGo localiza as paginas; o conteudo principal e enriquecido por um
+    request HTTP simples quando habilitado. A relevancia editorial continua no
+    hard guard deterministico e na validacao semantica posterior.
     """
-    if not llm_is_configured():
-        raise RuntimeError("OPENAI_API_KEY não configurada para fallback Web Search")
-
     if cancel_check:
         cancel_check()
 
@@ -1440,92 +1423,65 @@ def _collect_openai_web_search_query(
     start, end = query_window(project, query)
     has_window = _valid_search_window(start, end)
     site_domain = _site_domain_from_query(query.query)
-    allowed_domains = [site_domain] if site_domain else None
-
-    schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "results": {
-                "type": "array",
-                "maxItems": max(1, min(20, max_results)),
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "title": {"type": "string"},
-                        "url": {"type": "string"},
-                        "published_at": {"type": ["string", "null"]},
-                        "snippet": {"type": ["string", "null"]},
-                        "source_name": {"type": ["string", "null"]},
-                        "evidence": {"type": ["string", "null"]},
-                    },
-                    "required": [
-                        "title", "url", "published_at", "snippet", "source_name", "evidence",
-                    ],
-                },
-            }
-        },
-        "required": ["results"],
-    }
-
-    instructions = """Você é o agente de fallback de pesquisa web de um sistema de repercussão midiática.
-Use obrigatoriamente a ferramenta de pesquisa web e execute a consulta recebida. Retorne somente
-paginas REAIS e acessiveis. Nao invente URL, titulo, data, veiculo ou trecho.
-
-Quando houver um operador site: na consulta, priorize esse dominio. Se o filtro tecnico de dominio
-nao estiver disponivel, preserve o operador site: que ja existe no texto da consulta.
-
-Para produto institucional, mantenha o nome/ancora do produto como foco da busca. Uma pagina que
-apenas trate do mesmo assunto amplo nao deve ser retornada como repercussao do produto. O campo
-`evidence` deve trazer, quando disponivel, um trecho curto que mostre a ligacao com o produto,
-instituicao ou dado atribuido. Se nao houver trecho verificavel, use null.
-
-Quando temporal_mode=explicit_window, priorize a janela informada. Quando for topic_driven, nao
-invente datas. Uma lista vazia e preferivel a resultados duvidosos. Retorne apenas o JSON pedido."""
 
     if progress_detail:
         provider_note = f" restrito a {site_domain}" if site_domain else ""
-        progress_detail(f"OpenAI Web Search{provider_note}: {query.query[:100]}")
+        progress_detail(f"DuckDuckGo{provider_note}: {query.query[:100]}")
 
-    result = web_search_structured_response(
-        instructions=instructions,
-        payload={
-            "project": _project_payload(project),
-            "topic_profile": project.topic_profile or {},
-            "query": query.query,
-            "purpose": query.purpose,
-            "rationale": query.rationale,
-            "collection_start": start.isoformat() if has_window and start else None,
-            "collection_end": end.isoformat() if has_window and end else None,
-            "temporal_mode": "explicit_window" if has_window else "topic_driven",
-        },
-        schema_name="web_search_fallback_results_v3",
-        schema=schema,
-        allowed_domains=allowed_domains,
-        max_output_tokens=4200,
-        model=settings.web_search_model,
-        retry_without_domain_filter=True,
-        fallback_model=settings.youtube_search_model,
-    )
+    search_kwargs = {
+        "max_results": max(1, max_results * 2),
+        "region": settings.duckduckgo_region,
+        "safesearch": settings.duckduckgo_safesearch,
+        "retries": settings.duckduckgo_max_retries,
+        "retry_base_seconds": settings.duckduckgo_retry_base_seconds,
+    }
+
+    # Repercussao usa o indice de noticias porque ele preserva data e veiculo.
+    # Se nao houver retorno, cai para busca textual sem consumir OpenAI.
+    if query.purpose == "MEDIA_REPERCUSSION":
+        rows = duckduckgo_news(query.query, **search_kwargs)
+        if not rows:
+            rows = duckduckgo_text(query.query, **search_kwargs)
+    else:
+        rows = duckduckgo_text(query.query, **search_kwargs)
 
     returned = 0
     added = 0
     rejected = 0
     duplicate_hits = 0
 
-    for item_data in (result.get("results") or [])[:max_results]:
-        returned += 1
+    for item_data in rows:
+        if returned >= max_results:
+            break
+        if cancel_check:
+            cancel_check()
+
         url = (item_data.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
             rejected += 1
             continue
 
+        host = urlparse(url).netloc.lower().split(":")[0]
+        if site_domain and not (host == site_domain or host.endswith("." + site_domain)):
+            rejected += 1
+            continue
+
+        published_at = result_publication_date(item_data.get("published_at"))
+        if has_window and published_at and not (start <= published_at <= end):
+            rejected += 1
+            continue
+
+        returned += 1
         snippet = item_data.get("snippet")
-        evidence = item_data.get("evidence")
-        guard_content = " ".join(
-            part for part in [snippet, evidence] if isinstance(part, str) and part.strip()
-        )
+        content = None
+        if settings.duckduckgo_fetch_pages:
+            content = fetch_url_text(
+                url,
+                max_chars=settings.duckduckgo_fetch_max_chars,
+                timeout=settings.duckduckgo_fetch_timeout_seconds,
+            )
+        guard_content = content or snippet or ""
+
         if query.purpose == "MEDIA_REPERCUSSION" and not _collection_guard(
             project,
             title=item_data.get("title"),
@@ -1536,9 +1492,8 @@ invente datas. Uma lista vazia e preferivel a resultados duvidosos. Retorne apen
             continue
 
         canonical = canonicalize(url)
-        host = urlparse(url).netloc.lower()
-        published_at = result_publication_date(item_data.get("published_at"))
         source_name = item_data.get("source_name") or host
+        provider = str(item_data.get("provider") or "duckduckgo")
         existing = existing_items.get(canonical)
 
         if existing:
@@ -1546,11 +1501,11 @@ invente datas. Uma lista vazia e preferivel a resultados duvidosos. Retorne apen
             _append_purpose(existing, query.purpose)
             _record_source_provenance(
                 existing,
-                source="openai_web_search",
+                source=provider,
                 title=item_data.get("title"),
                 url=url,
                 published_at=item_data.get("published_at"),
-                snippet=guard_content or snippet,
+                snippet=snippet,
                 channel=source_name,
                 query=query.query,
             )
@@ -1567,7 +1522,7 @@ invente datas. Uma lista vazia e preferivel a resultados duvidosos. Retorne apen
         row = MediaItem(
             project_id=project.id,
             query_id=query.id,
-            title=item_data.get("title") or "Sem título",
+            title=item_data.get("title") or "Sem titulo",
             url=url,
             canonical_url=canonical,
             domain=host,
@@ -1575,17 +1530,16 @@ invente datas. Uma lista vazia e preferivel a resultados duvidosos. Retorne apen
             snippet=snippet,
             content=guard_content or snippet,
             source_name=source_name,
-            search_source="openai_web_search",
+            search_source="duckduckgo",
             source_provenance=[
                 {
-                    "source": "openai_web_search",
+                    "source": provider,
                     "title": item_data.get("title"),
                     "url": url,
                     "published_at": item_data.get("published_at"),
                     "snippet": snippet,
                     "channel": source_name,
                     "view_count": None,
-                    "evidence": evidence,
                     "query": query.query,
                     "retrieved_at": datetime.now(timezone.utc).isoformat(),
                 }
@@ -1598,9 +1552,9 @@ invente datas. Uma lista vazia e preferivel a resultados duvidosos. Retorne apen
 
     if progress_detail:
         progress_detail(
-            "OpenAI Web Search concluido: "
+            "DuckDuckGo concluido: "
             f"{returned} retornado(s), {added} novo(s), {duplicate_hits} duplicado(s), "
-            f"{rejected} rejeitado(s) pelo filtro tematico"
+            f"{rejected} rejeitado(s)"
         )
 
     return {
@@ -1652,16 +1606,12 @@ def collect_tavily(
     progress_detail: Callable[[str], None] | None = None,
     stats: dict[str, int] | None = None,
 ) -> int:
-    """Coleta web com Tavily primario e circuit breaker para OpenAI Web Search.
+    """Coleta web com Tavily primario e DuckDuckGo como fallback independente.
 
-    A primeira consulta real ja funciona como teste do Tavily. Nao existe um
-    health-check separado. Enquanto o Tavily responde normalmente ele continua
-    sendo usado. Se surgir uma falha dura de plano/quota/autenticacao, o circuito
-    e aberto e TODAS as consultas restantes desta execucao vao direto para o
-    OpenAI Web Search, sem tentar Tavily novamente.
-
-    Falhas transitórias isoladas nao abrem o circuito: apenas aquela consulta
-    usa o fallback e a proxima ainda pode tentar Tavily.
+    O Tavily continua sendo usado enquanto responde normalmente. Uma falha dura
+    de plano/quota/autenticacao abre o circuit breaker e envia as consultas
+    restantes diretamente ao DuckDuckGo. Falhas transitorias usam DuckDuckGo
+    apenas naquela consulta e permitem nova tentativa do Tavily na seguinte.
     """
     settings = get_settings()
     tavily_key = settings.tavily_api_key
@@ -1670,18 +1620,20 @@ def collect_tavily(
     if tavily_key:
         try:
             from tavily import TavilyClient
+
             client = TavilyClient(api_key=tavily_key)
         except Exception:
             client = None
 
-    if client is None and not llm_is_configured():
+    if client is None and not duckduckgo_available():
         raise RuntimeError(
-            "Nem TAVILY_API_KEY nem OPENAI_API_KEY estão configuradas para a coleta web"
+            "Tavily nao esta configurado e DuckDuckGo nao esta instalado. "
+            "Execute `uv add ddgs`."
         )
 
     project = db.get(Project, project_id)
     if not project:
-        raise RuntimeError("Projeto não encontrado")
+        raise RuntimeError("Projeto nao encontrado")
 
     existing_items = {
         item.canonical_url: item
@@ -1705,11 +1657,11 @@ def collect_tavily(
         "tavily_hard_failures": 0,
         "tavily_circuit_breaker_trips": 0,
         "tavily_switched_at_query": 0,
-        "web_search_fallback_queries": 0,
-        "web_search_fallback_results": 0,
-        "web_search_fallback_added": 0,
-        "web_search_fallback_rejected": 0,
-        "web_search_fallback_zero_accept": 0,
+        "duckduckgo_fallback_queries": 0,
+        "duckduckgo_fallback_results": 0,
+        "duckduckgo_fallback_added": 0,
+        "duckduckgo_fallback_rejected": 0,
+        "duckduckgo_fallback_zero_accept": 0,
         "failed_queries": 0,
         "global_result_limit": global_limit,
         "global_limit_reached": 0,
@@ -1720,9 +1672,9 @@ def collect_tavily(
     total_queries = len(queries)
 
     tavily_circuit_open = client is None
-    tavily_disable_reason = "TAVILY_API_KEY não configurada" if client is None else None
+    tavily_disable_reason = "TAVILY_API_KEY nao configurada" if client is None else None
 
-    configured_budget = int(settings.max_web_search_fallback_queries)
+    configured_budget = int(settings.max_duckduckgo_fallback_queries)
     fallback_budget = (
         max(1, settings.max_search_queries)
         if configured_budget <= 0
@@ -1738,27 +1690,23 @@ def collect_tavily(
         counters["tavily_hard_failures"] += 1
         counters["tavily_circuit_breaker_trips"] += 1
         counters["tavily_switched_at_query"] = query_index
-        # Erro duro significa que insistir no Tavily nao faz sentido. Libera
-        # todas as consultas restantes para o Web Search, mesmo que um limite
-        # de fallback menor tenha sido configurado anteriormente.
         fallback_budget = max(fallback_budget, settings.max_search_queries)
         if progress_detail:
             progress_detail(
                 "Tavily respondeu com bloqueio de plano/quota/autenticacao. "
-                "Circuit breaker aberto: todas as proximas consultas desta execucao "
-                "irao direto para OpenAI Web Search."
+                "Circuit breaker aberto: as proximas consultas irao direto para DuckDuckGo."
             )
 
     for query_index, query in enumerate(queries, start=1):
         if cancel_check:
             cancel_check()
 
-        start, end = query_window(project, query)
-        has_window = _valid_search_window(start, end)
+        start_date, end_date = query_window(project, query)
+        has_window = _valid_search_window(start_date, end_date)
         mode = (
-            f"janela {start.isoformat()} a {end.isoformat()}"
+            f"janela {start_date.isoformat()} a {end_date.isoformat()}"
             if has_window
-            else "busca temática sem filtro temporal"
+            else "busca tematica sem filtro temporal"
         )
 
         remaining_global = global_limit - added
@@ -1796,8 +1744,8 @@ def collect_tavily(
             if is_youtube_query:
                 params["include_domains"] = ["youtube.com", "youtu.be"]
             if has_window:
-                params["start_date"] = start.isoformat()
-                params["end_date"] = end.isoformat()
+                params["start_date"] = start_date.isoformat()
+                params["end_date"] = end_date.isoformat()
 
             counters["tavily_attempts"] += 1
             try:
@@ -1805,9 +1753,6 @@ def collect_tavily(
                 counters["tavily_queries"] += 1
             except Exception as exc:
                 tavily_error = str(exc)
-
-                # Primeiro verifica falha dura. Se for quota/upgrade, NAO faz
-                # qualquer segundo teste no Tavily, inclusive retry de data.
                 if _is_tavily_hard_failure(exc):
                     open_tavily_circuit(tavily_error, query_index)
                 else:
@@ -1822,8 +1767,8 @@ def collect_tavily(
                         retry_params.pop("end_date", None)
                         if progress_detail:
                             progress_detail(
-                                f"Consulta {query_index}/{total_queries}: Tavily rejeitou apenas a janela; "
-                                "repetindo a mesma consulta sem filtro temporal"
+                                f"Consulta {query_index}/{total_queries}: Tavily rejeitou a janela; "
+                                "repetindo sem filtro temporal"
                             )
                         counters["tavily_attempts"] += 1
                         try:
@@ -1834,10 +1779,10 @@ def collect_tavily(
                             if _is_tavily_hard_failure(retry_exc):
                                 open_tavily_circuit(tavily_error, query_index)
         else:
-            tavily_error = tavily_disable_reason or "Tavily desativado nesta execução"
+            tavily_error = tavily_disable_reason or "Tavily desativado nesta execucao"
             if progress_detail:
                 progress_detail(
-                    f"Consulta {query_index}/{total_queries} via OpenAI Web Search: {query.query[:100]}"
+                    f"Consulta {query_index}/{total_queries} via DuckDuckGo: {query.query[:100]}"
                 )
 
         if isinstance(response, dict) and response.get("error"):
@@ -1886,7 +1831,7 @@ def collect_tavily(
                 row = MediaItem(
                     project_id=project_id,
                     query_id=query.id,
-                    title=result.get("title") or "Sem título",
+                    title=result.get("title") or "Sem titulo",
                     url=url,
                     canonical_url=canonical,
                     domain=urlparse(url).netloc.lower(),
@@ -1918,17 +1863,15 @@ def collect_tavily(
             db.commit()
             continue
 
-        # Sem resposta Tavily: a consulta corrente e todas as seguintes (quando
-        # o circuito estiver aberto) sao executadas no Web Search.
-        if llm_is_configured() and counters["web_search_fallback_queries"] < fallback_budget:
+        if counters["duckduckgo_fallback_queries"] < fallback_budget:
             if progress_detail and not tavily_circuit_open:
-                reason = (tavily_error or "falha não especificada")[:160]
+                reason = (tavily_error or "falha nao especificada")[:160]
                 progress_detail(
                     f"Consulta {query_index}/{total_queries}: Tavily falhou ({reason}); "
-                    "OpenAI Web Search assumindo apenas esta consulta"
+                    "DuckDuckGo assumindo esta consulta"
                 )
             try:
-                fallback_result = _collect_openai_web_search_query(
+                fallback_result = _collect_duckduckgo_query(
                     db,
                     project,
                     query,
@@ -1939,45 +1882,38 @@ def collect_tavily(
                 )
                 fallback_added = int(fallback_result.get("added", 0))
                 added += fallback_added
-                counters["web_search_fallback_queries"] += 1
-                counters["web_search_fallback_results"] += int(fallback_result.get("returned", 0))
-                counters["web_search_fallback_added"] += fallback_added
-                counters["web_search_fallback_rejected"] += int(fallback_result.get("rejected", 0))
+                counters["duckduckgo_fallback_queries"] += 1
+                counters["duckduckgo_fallback_results"] += int(fallback_result.get("returned", 0))
+                counters["duckduckgo_fallback_added"] += fallback_added
+                counters["duckduckgo_fallback_rejected"] += int(fallback_result.get("rejected", 0))
                 if fallback_added == 0:
-                    counters["web_search_fallback_zero_accept"] += 1
+                    counters["duckduckgo_fallback_zero_accept"] += 1
                 query.executed_at = datetime.now(timezone.utc)
                 counters["queries_successful"] += 1
                 db.commit()
                 continue
-            except RuntimeError as web_exc:
+            except DuckDuckGoUnavailable as ddg_exc:
                 db.rollback()
-                counters["web_search_fallback_queries"] += 1
+                counters["duckduckgo_fallback_queries"] += 1
                 counters["failed_queries"] += 1
                 errors.append(
-                    f"{query.query}: OpenAI Web Search={web_exc}"
-                    + (f" | Tavily={tavily_error}" if not tavily_circuit_open else "")
+                    f"{query.query}: DuckDuckGo={ddg_exc}"
+                    + (f" | Tavily={tavily_error}" if tavily_error else "")
                 )
                 if progress_detail:
                     progress_detail(
-                        f"Consulta {query_index}/{total_queries}: OpenAI Web Search falhou; seguindo para a próxima"
+                        f"Consulta {query_index}/{total_queries}: DuckDuckGo falhou; seguindo para a proxima"
                     )
                 continue
 
-        if llm_is_configured() and counters["web_search_fallback_queries"] >= fallback_budget:
-            counters["failed_queries"] += 1
-            errors.append(
-                f"{query.query}: orçamento de fallback OpenAI ({fallback_budget}) atingido"
-            )
-            if progress_detail:
-                progress_detail(
-                    f"Consulta {query_index}/{total_queries}: orçamento de Web Search atingido"
-                )
-            continue
-
         counters["failed_queries"] += 1
         errors.append(
-            f"{query.query}: Tavily indisponível e OPENAI_API_KEY não configurada para fallback"
+            f"{query.query}: orcamento de fallback DuckDuckGo ({fallback_budget}) atingido"
         )
+        if progress_detail:
+            progress_detail(
+                f"Consulta {query_index}/{total_queries}: orcamento de DuckDuckGo atingido"
+            )
 
     if stats is not None:
         stats.clear()
@@ -1987,10 +1923,10 @@ def collect_tavily(
         summary = " | ".join(errors[:3])
         if tavily_circuit_open:
             raise RuntimeError(
-                "Tavily foi desativado nesta execução e o OpenAI Web Search também não conseguiu "
+                "Tavily foi desativado nesta execucao e o DuckDuckGo tambem nao conseguiu "
                 f"concluir nenhuma consulta. {summary}"[:2000]
             )
-        raise RuntimeError(f"Coleta web indisponível. {summary}"[:2000])
+        raise RuntimeError(f"Coleta web indisponivel. {summary}"[:2000])
 
     return added
 
@@ -2004,8 +1940,8 @@ def collect_youtube_api(
 ) -> int:
     """Coleta preferencial pela YouTube Data API v3.
 
-    Se a API estiver sem chave, sem quota ou indisponível, o chamador deve
-    usar o agente OpenAI Web Search como fallback.
+    Se a API estiver sem chave, sem quota ou indisponivel, o chamador deve
+    usar DuckDuckGo Videos como fallback.
     """
     settings = get_settings()
     if not settings.youtube_api_key:
@@ -2148,63 +2084,28 @@ def collect_youtube_api(
     return added
 
 
-def collect_youtube_web_search(
+def collect_youtube_duckduckgo(
     db: Session,
     project: Project,
     *,
     cancel_check: Callable[[], None] | None = None,
     progress_detail: Callable[[str], None] | None = None,
 ) -> int:
+    """Pesquisa videos via DDGS sem usar OpenAI Web Search."""
     settings = get_settings()
     tasks = youtube_tasks_for_execution(project)
     total_limit = max(1, settings.max_youtube_results_total)
     per_task_cap = max(1, settings.max_youtube_results_per_task)
-    start, end = media_window(project)
-    schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "videos": {
-                "type": "array",
-                "maxItems": max(1, min(15, per_task_cap)),
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "title": {"type": "string"},
-                        "url": {"type": "string"},
-                        "channel": {"type": ["string", "null"]},
-                        "published_at": {"type": ["string", "null"]},
-                        "description": {"type": ["string", "null"]},
-                        "view_count": {"type": ["integer", "null"], "minimum": 0},
-                    },
-                    "required": ["title", "url", "channel", "published_at", "description", "view_count"],
-                },
-            }
-        },
-        "required": ["videos"],
-    }
-    instructions = """Você é um agente de pesquisa de repercussão midiática no YouTube.
-Use obrigatoriamente a ferramenta de pesquisa web disponível. Retorne somente vídeos reais
-e pertinentes à consulta. Quando collection_start e collection_end estiverem preenchidos e
-formarem uma janela válida, respeite essa janela. Quando estiverem nulos, não invente datas:
-faça uma busca temática usando o assunto, entidades, ano e contexto presentes na consulta.
-Não invente nem complete campos ausentes. A URL deve ser a página do vídeo no YouTube (youtube.com ou youtu.be), não
-uma página de resultado, canal, playlist, Short sem URL de vídeo verificável, nem fonte externa.
-Mantenha título, canal, data, descrição e visualizações fiéis à página encontrada. O campo `title`
-deve ser o título real do vídeo; não use apenas uma data, o nome do canal ou texto genérico como
-título. Se o título real não puder ser recuperado com segurança, descarte o resultado em vez de
-inventar um título. Retorne `view_count` somente como inteiro quando a página ou o resultado da
-busca exibir uma contagem explícita; em qualquer outro caso use null. Não estime, arredonde nem
-converta abreviações ambíguas. Retorne apenas o JSON no formato solicitado; uma lista vazia é
-preferível a um resultado duvidoso."""
-
+    start_date, end_date = media_window(project)
+    has_window = _valid_search_window(start_date, end_date)
     total_tasks = len(tasks)
+
     existing_items = {
         item.canonical_url: item
         for item in db.scalars(select(MediaItem).where(MediaItem.project_id == project.id)).all()
     }
     added = 0
+
     for task_index, task in enumerate(tasks, start=1):
         is_priority_task = task.target != "Busca temática"
         if added >= total_limit and not is_priority_task:
@@ -2214,97 +2115,109 @@ preferível a um resultado duvidoso."""
         if cancel_check:
             cancel_check()
         if progress_detail:
-            progress_detail(f"Busca {task_index}/{total_tasks} no YouTube: {task.target}")
-        result = web_search_structured_response(
-            instructions=instructions,
-            payload={
-                "query": task.query,
-                "target": task.target,
-                "rationale": task.rationale,
-                "collection_start": start.isoformat() if start else None,
-                "collection_end": end.isoformat() if end else None,
-                "temporal_mode": "explicit_window" if _valid_search_window(start, end) else "topic_driven",
-            },
-            schema_name="youtube_video_search",
-            schema=schema,
-            allowed_domains=["youtube.com", "youtu.be"],
-            model=settings.youtube_search_model,
-            retry_without_domain_filter=True,
-        )
+            progress_detail(f"DuckDuckGo Video {task_index}/{total_tasks}: {task.target}")
+
         task_limit = min(
             settings.youtube_web_search_max_results,
             1 if is_priority_task else per_task_cap,
             max(1 if is_priority_task else 0, total_limit - added),
         )
-        for video in result["videos"][:task_limit]:
-            if added >= total_limit:
+        # Busca um pouco mais que o limite final porque ainda filtraremos canal,
+        # dominio, janela temporal e aderencia ao tema.
+        raw_limit = max(5, min(20, task_limit * 4))
+        rows = duckduckgo_videos(
+            task.query,
+            max_results=raw_limit,
+            region=settings.duckduckgo_region,
+            safesearch=settings.duckduckgo_safesearch,
+            retries=settings.duckduckgo_max_retries,
+            retry_base_seconds=settings.duckduckgo_retry_base_seconds,
+        )
+
+        accepted_for_task = 0
+        for video in rows:
+            if accepted_for_task >= task_limit or added >= total_limit:
                 break
-            url = video["url"].strip()
+            if cancel_check:
+                cancel_check()
+
+            url = str(video.get("url") or "").strip()
             if not is_youtube_url(url):
                 continue
-            if is_priority_task and not matches_priority_youtube_channel(video.get("channel"), task.target):
-                # Mencionar o canal no título/descrição não prova que o vídeo
-                # foi publicado por ele; sem a identidade do canal, descarta.
+
+            channel = video.get("channel")
+            if is_priority_task and not matches_priority_youtube_channel(channel, task.target):
                 continue
+
+            published_at = result_publication_date(video.get("published_at"))
+            if has_window and published_at and not (start_date <= published_at <= end_date):
+                continue
+
+            description = video.get("description") or None
+            title = video.get("title") or "Video sem titulo"
             if not _collection_guard(
                 project,
-                title=video.get("title"),
-                snippet=video.get("description"),
-                content=video.get("description"),
+                title=title,
+                snippet=description,
+                content=description,
             ):
                 continue
+
             raw_view_count = video.get("view_count")
             view_count = (
                 raw_view_count
-                if isinstance(raw_view_count, int) and not isinstance(raw_view_count, bool) and raw_view_count >= 0
+                if isinstance(raw_view_count, int)
+                and not isinstance(raw_view_count, bool)
+                and raw_view_count >= 0
                 else None
             )
+
             canonical = canonicalize(url)
             existing = existing_items.get(canonical)
             if existing:
                 _record_source_provenance(
                     existing,
-                    source="openai_web_search",
-                    title=video["title"],
+                    source="duckduckgo_video",
+                    title=title,
                     url=url,
-                    published_at=video["published_at"],
-                    snippet=video["description"],
-                    channel=video["channel"],
+                    published_at=video.get("published_at"),
+                    snippet=description,
+                    channel=channel,
                     view_count=view_count,
                     query=task.query,
                     target=task.target,
                 )
-                existing.title = video["title"] or existing.title
-                existing.published_at = result_publication_date(video["published_at"]) or existing.published_at
-                existing.snippet = video["description"] or existing.snippet
-                existing.content = video["description"] or existing.content
-                existing.source_name = video["channel"] or existing.source_name
+                existing.title = title or existing.title
+                existing.published_at = published_at or existing.published_at
+                existing.snippet = description or existing.snippet
+                existing.content = description or existing.content
+                existing.source_name = channel or existing.source_name
                 existing.view_count = view_count if view_count is not None else existing.view_count
-                existing.search_source = "openai_web_search"
+                existing.search_source = "duckduckgo_video"
                 _append_purpose(existing, "MEDIA_REPERCUSSION")
+                accepted_for_task += 1
                 continue
 
-            description = video["description"]
             row = MediaItem(
                 project_id=project.id,
-                title=video["title"] or "Vídeo sem título",
+                title=title,
                 url=url,
                 canonical_url=canonical,
                 domain=urlparse(url).netloc.lower(),
-                published_at=result_publication_date(video["published_at"]),
+                published_at=published_at,
                 snippet=description,
                 content=description,
-                source_name=video["channel"] or "YouTube",
+                source_name=channel or "YouTube",
                 view_count=view_count,
-                search_source="openai_web_search",
+                search_source="duckduckgo_video",
                 source_provenance=[
                     {
-                        "source": "openai_web_search",
-                        "title": video["title"],
+                        "source": "duckduckgo_video",
+                        "title": title,
                         "url": url,
-                        "published_at": video["published_at"],
+                        "published_at": video.get("published_at"),
                         "snippet": description,
-                        "channel": video["channel"],
+                        "channel": channel,
                         "view_count": view_count,
                         "query": task.query,
                         "target": task.target,
@@ -2316,8 +2229,14 @@ preferível a um resultado duvidoso."""
             db.add(row)
             existing_items[canonical] = row
             added += 1
+            accepted_for_task += 1
+
     db.commit()
     return added
+
+
+# Alias temporario para instalacoes que importavam o nome antigo.
+collect_youtube_web_search = collect_youtube_duckduckgo
 
 
 def collect_media_agents(
@@ -2329,11 +2248,10 @@ def collect_media_agents(
     web_progress: Callable[[str], None] | None = None,
     youtube_progress: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
-    """Executa coletores independentes e devolve o resultado de cada agente.
+    """Executa coletores independentes sem depender de OpenAI Web Search.
 
-    A coleta Tavily termina antes da coleta no YouTube para que URLs idênticas
-    sejam mescladas no mesmo item e possam receber validação cruzada. Os agentes
-    e seus tratamentos isolados de falhas continuam independentes.
+    Web: Tavily primario, DuckDuckGo fallback.
+    YouTube: YouTube Data API quando configurada, DuckDuckGo Videos fallback.
     """
 
     def web_agent() -> dict[str, object]:
@@ -2347,18 +2265,18 @@ def collect_media_agents(
                 progress_detail=web_progress,
                 stats=web_stats,
             )
-            fallback_queries = int(web_stats.get("web_search_fallback_queries", 0))
+            fallback_queries = int(web_stats.get("duckduckgo_fallback_queries", 0))
             failed_queries = int(web_stats.get("failed_queries", 0))
             status = "COMPLETED"
             if failed_queries:
                 status = "PARTIAL"
             elif fallback_queries:
-                status = "FALLBACK_WEB_SEARCH"
+                status = "FALLBACK_DUCKDUCKGO"
             return {
                 "status": status,
                 "collected": collected,
                 "error": None,
-                "provider": "tavily+openai_web_search" if fallback_queries else "tavily",
+                "provider": "tavily+duckduckgo" if fallback_queries else "tavily",
                 "stats": web_stats,
             }
         except RuntimeError as exc:
@@ -2381,28 +2299,61 @@ def collect_media_agents(
         try:
             local_project = session.get(Project, project.id)
             if not local_project:
-                raise RuntimeError("Projeto não encontrado")
+                raise RuntimeError("Projeto nao encontrado")
 
-            if llm_is_configured():
+            settings = get_settings()
+            api_error: str | None = None
+            if settings.youtube_api_key:
                 try:
-                    collected = collect_youtube_web_search(
-                        session, local_project, cancel_check=cancel_check,
+                    collected = collect_youtube_api(
+                        session,
+                        local_project,
+                        cancel_check=cancel_check,
                         progress_detail=youtube_progress,
                     )
                     return {
                         "status": "COMPLETED",
-                        "collected": collected, "error": None, "provider": "openai_web_search",
+                        "collected": collected,
+                        "error": None,
+                        "provider": "youtube_api",
                     }
                 except RuntimeError as exc:
                     session.rollback()
-                    return {"status": "UNAVAILABLE", "collected": 0, "error": str(exc)[:1000], "provider": "openai_web_search"}
+                    api_error = str(exc)[:1000]
+                    if youtube_progress:
+                        youtube_progress(
+                            "YouTube Data API indisponivel; usando DuckDuckGo Videos como fallback"
+                        )
 
-            return {"status": "NOT_CONFIGURED", "collected": 0, "error": "OPENAI_API_KEY não configurada para a pesquisa no YouTube.", "provider": None}
+            try:
+                collected = collect_youtube_duckduckgo(
+                    session,
+                    local_project,
+                    cancel_check=cancel_check,
+                    progress_detail=youtube_progress,
+                )
+                return {
+                    "status": "FALLBACK_DUCKDUCKGO" if api_error else "COMPLETED",
+                    "collected": collected,
+                    "error": api_error,
+                    "provider": "duckduckgo_video",
+                }
+            except (RuntimeError, DuckDuckGoUnavailable) as exc:
+                session.rollback()
+                detail = str(exc)[:1000]
+                if api_error:
+                    detail = f"YouTube API: {api_error} | DuckDuckGo: {detail}"[:1000]
+                return {
+                    "status": "UNAVAILABLE",
+                    "collected": 0,
+                    "error": detail,
+                    "provider": "duckduckgo_video",
+                }
         finally:
             session.close()
 
-    # Os agentes são independentes: uma falha na busca web não impede o agente
-    # do YouTube de usar a API oficial ou o fallback OpenAI Web Search.
+    # Mantemos a execucao sequencial para que URLs coincidentes possam ser
+    # mescladas e depois comparadas na validacao cruzada.
     web = web_agent()
     youtube = youtube_agent()
 
@@ -2420,7 +2371,7 @@ def validate_tavily_youtube_metadata(
     cancel_check: Callable[[], None] | None = None,
     progress_detail: Callable[[str], None] | None = None,
 ) -> dict[str, int | bool]:
-    """Compara metadados do mesmo vídeo obtidos por Tavily e OpenAI Web Search."""
+    """Compara metadados do mesmo video obtidos por dois coletores independentes."""
     if not llm_is_configured():
         return {"validated": 0, "skipped": True}
 
@@ -2438,23 +2389,28 @@ def validate_tavily_youtube_metadata(
         },
         "required": ["status", "matching_fields", "conflicting_fields", "detail"],
     }
-    instructions = """Você é um agente de validação cruzada de metadados de vídeos.
-Compare exclusivamente os dois registros recebidos: um obtido pelo Tavily e outro pela
-OpenAI Web Search restrita ao YouTube. Não pesquise a web e não infira dados ausentes.
-Considere a URL canônica igual como confirmação da identidade do vídeo. Compare título,
-canal, data de publicação, descrição e visualizações apenas quando ambos os registros trouxerem
-o campo. Visualizações são uma fotografia no tempo: considere compatível uma diferença de até
-10% ou 5.000 visualizações, o que for maior; não compare se qualquer fonte omitir a contagem.
-Use INSUFFICIENT_EVIDENCE se somente a URL puder ser comparada; PARTIALLY_CONFIRMED se
-ao menos um metadado adicional concordar sem conflito; CONFLICT se houver divergência
-material em qualquer campo comparável; CONFIRMED se todos os campos comparáveis
-concordarem. Explique em português de forma curta e factual."""
+    instructions = """Voce e um agente de validacao cruzada de metadados de videos.
+Compare exclusivamente os dois registros recebidos: um obtido pelo Tavily e outro por um
+coletor independente de video (DuckDuckGo Videos ou YouTube Data API). Nao pesquise a web e
+nao infira dados ausentes. Considere a URL canonica igual como confirmacao da identidade do
+video. Compare titulo, canal, data de publicacao, descricao e visualizacoes apenas quando ambos
+os registros trouxerem o campo. Visualizacoes sao uma fotografia no tempo: considere compativel
+uma diferenca de ate 10% ou 5.000 visualizacoes, o que for maior; nao compare se qualquer fonte
+omitir a contagem. Use INSUFFICIENT_EVIDENCE se somente a URL puder ser comparada;
+PARTIALLY_CONFIRMED se ao menos um metadado adicional concordar sem conflito; CONFLICT se houver
+divergencia material em qualquer campo comparavel; CONFIRMED se todos os campos comparaveis
+concordarem. Explique em portugues de forma curta e factual."""
 
     candidates = []
     for item in db.scalars(select(MediaItem).where(MediaItem.project_id == project.id)).all():
         sources = {row.get("source"): row for row in (item.source_provenance or [])}
-        if "tavily" in sources and "openai_web_search" in sources:
-            candidates.append((item, sources["tavily"], sources["openai_web_search"]))
+        secondary_name = None
+        if "duckduckgo_video" in sources:
+            secondary_name = "duckduckgo_video"
+        elif "youtube_api" in sources:
+            secondary_name = "youtube_api"
+        if "tavily" in sources and secondary_name:
+            candidates.append((item, sources["tavily"], sources[secondary_name], secondary_name))
 
     if not candidates:
         return {
@@ -2466,16 +2422,21 @@ concordarem. Explique em português de forma curta e factual."""
     settings = get_settings()
     validation_cap = max(1, settings.max_cross_validations)
     validated = 0
-    for index, (item, tavily, web_search) in enumerate(candidates, start=1):
+    for index, (item, tavily, secondary, secondary_name) in enumerate(candidates, start=1):
         if validated >= validation_cap:
             break
         if cancel_check:
             cancel_check()
         if progress_detail:
-            progress_detail(f"Vídeo {index}/{len(candidates)}: {item.title[:90]}")
+            progress_detail(f"Video {index}/{len(candidates)}: {item.title[:90]}")
         result = structured_response(
             instructions=instructions,
-            payload={"canonical_url": item.canonical_url, "tavily": tavily, "openai_web_search": web_search},
+            payload={
+                "canonical_url": item.canonical_url,
+                "tavily": tavily,
+                "secondary_provider": secondary_name,
+                "secondary": secondary,
+            },
             schema_name="youtube_cross_validation",
             schema=schema,
             max_output_tokens=700,
@@ -2780,7 +2741,7 @@ def validate_and_classify(
 
         publication_date = inferred_publication_date(item)
         is_social = (
-            item.search_source in {"youtube", "youtube_api", "openai_web_search"}
+            item.search_source in {"youtube", "youtube_api", "duckduckgo_video"}
             or is_youtube_host(item.domain or "")
         )
 
@@ -3271,8 +3232,8 @@ def metrics(db: Session, project_id: int) -> dict:
     elif youtube_unavailable:
         youtube_note = "A pesquisa web no YouTube ficou indisponível nesta execução; isso não representa ausência de cobertura na plataforma."
     elif youtube_status == "NOT_CONFIGURED":
-        youtube_note = "YouTube não foi consultado porque OPENAI_API_KEY não está configurada."
-    platforms = MediaScout.platform_status(llm_is_configured())
+        youtube_note = "YouTube não foi consultado porque nenhum coletor disponível conseguiu executar a busca."
+    platforms = MediaScout.platform_status(not youtube_disabled and not youtube_unavailable)
     for platform in platforms:
         if platform["platform"] != "YouTube":
             continue
@@ -3800,9 +3761,9 @@ def run_full_methodology(
 
     # 3. Coleta web + YouTube opcional.
     check()
-    stage("collection", "RUNNING", "Consultando fontes web: Tavily primário com fallback automático para OpenAI Web Search")
+    stage("collection", "RUNNING", "Consultando fontes web: Tavily primário com fallback automático para DuckDuckGo")
     if flags["enable_youtube"]:
-        stage("youtube", "RUNNING", "Pesquisando vídeos no YouTube: API oficial com fallback para OpenAI Web Search")
+        stage("youtube", "RUNNING", "Pesquisando vídeos no YouTube: API oficial com fallback para DuckDuckGo Videos")
     else:
         stage("youtube", "SKIPPED", f"Desativado pelo perfil {execution_profile}")
 
@@ -3819,7 +3780,7 @@ def run_full_methodology(
     web_stats = web.get("stats") or {}
     if web["status"] == "COMPLETED":
         stage("collection", "DONE", f"{collected} novo(s) item(ns) coletado(s) via Tavily")
-    elif web["status"] == "FALLBACK_WEB_SEARCH":
+    elif web["status"] == "FALLBACK_DUCKDUCKGO":
         switch_note = ""
         if int(web_stats.get("tavily_circuit_breaker_trips", 0)):
             switch_note = (
@@ -3829,11 +3790,11 @@ def run_full_methodology(
         stage(
             "collection",
             "DONE",
-            f"{collected} novo(s) item(ns); OpenAI Web Search: "
-            f"{int(web_stats.get('web_search_fallback_queries', 0))} consulta(s), "
-            f"{int(web_stats.get('web_search_fallback_results', 0))} resultado(s) retornado(s), "
-            f"{int(web_stats.get('web_search_fallback_added', 0))} aceito(s) e "
-            f"{int(web_stats.get('web_search_fallback_rejected', 0))} rejeitado(s) pelo filtro temático."
+            f"{collected} novo(s) item(ns); DuckDuckGo: "
+            f"{int(web_stats.get('duckduckgo_fallback_queries', 0))} consulta(s), "
+            f"{int(web_stats.get('duckduckgo_fallback_results', 0))} resultado(s) retornado(s), "
+            f"{int(web_stats.get('duckduckgo_fallback_added', 0))} aceito(s) e "
+            f"{int(web_stats.get('duckduckgo_fallback_rejected', 0))} rejeitado(s) pelo filtro temático."
             f"{switch_note}",
         )
     elif web["status"] == "PARTIAL":
@@ -3841,7 +3802,7 @@ def run_full_methodology(
             "collection",
             "DONE",
             f"Coleta parcial: {collected} novo(s) item(ns); "
-            f"fallback OpenAI aceitou {int(web_stats.get('web_search_fallback_added', 0))} item(ns); "
+            f"fallback DuckDuckGo aceitou {int(web_stats.get('duckduckgo_fallback_added', 0))} item(ns); "
             f"{int(web_stats.get('failed_queries', 0))} consulta(s) não puderam ser concluídas",
         )
     else:
@@ -3857,8 +3818,8 @@ def run_full_methodology(
     project.youtube_collection_error = youtube.get("error")
     if project.youtube_collection_status == "DISABLED":
         stage("youtube", "SKIPPED", f"Desativado pelo perfil {execution_profile}")
-    elif project.youtube_collection_status == "FALLBACK_WEB_SEARCH":
-        stage("youtube", "DONE", f"Fallback OpenAI Web Search concluído: {youtube_collected} vídeo(s)")
+    elif project.youtube_collection_status == "FALLBACK_DUCKDUCKGO":
+        stage("youtube", "DONE", f"Fallback DuckDuckGo Videos concluído: {youtube_collected} vídeo(s)")
     elif project.youtube_collection_status == "UNAVAILABLE":
         stage(
             "youtube",
@@ -3866,7 +3827,7 @@ def run_full_methodology(
             "Coleta no YouTube indisponível; isso não será interpretado como ausência de cobertura.",
         )
     elif project.youtube_collection_status == "NOT_CONFIGURED":
-        stage("youtube", "SKIPPED", "YouTube API e fallback OpenAI Web Search não configurados")
+        stage("youtube", "SKIPPED", "Nenhum coletor do YouTube está disponível nesta execução")
     else:
         stage("youtube", "DONE", f"{youtube_collected} vídeo(s) coletado(s)")
     db.commit()
