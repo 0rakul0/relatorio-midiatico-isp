@@ -8,6 +8,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.cost_tracker import cost_context, set_cost_operation
 from app.database import SessionLocal, get_db
 from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report, fact_events_for_report
 from app.execution import (
@@ -28,6 +29,7 @@ from app.models import (
     FactAssertion,
     FactEvent,
     GeneratedReport,
+    LLMCall,
     MediaItem,
     OfficialFact,
     Project,
@@ -54,7 +56,7 @@ from app.services import (
 from app.topic_profile import requested_topic_window
 
 
-app = FastAPI(title="ISP Repercussão Midiática", version="0.2.5")
+app = FastAPI(title="ISP Repercussão Midiática", version="0.2.7")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
@@ -75,13 +77,14 @@ def health():
     settings = get_settings()
     return {
         "status": "ok",
-        "version": "0.2.5",
+        "version": "0.2.7",
         "search_limits": {
             "max_search_results": settings.max_search_results,
             "max_results_per_query": settings.max_results_per_query,
             "max_search_queries": settings.max_search_queries,
             "max_llm_search_queries": settings.max_llm_search_queries,
             "max_web_search_fallback_queries": settings.max_web_search_fallback_queries,
+            "max_profile_discovery_calls": settings.max_profile_discovery_calls,
             "max_youtube_tasks": settings.max_youtube_tasks,
             "max_youtube_results_total": settings.max_youtube_results_total,
             "max_youtube_results_per_task": settings.max_youtube_results_per_task,
@@ -116,6 +119,90 @@ def update_llm_settings(payload: LLMSettingsUpdate):
     settings = get_settings()
     settings.openai_model = payload.model
     return {"provider": "openai", "model": settings.openai_model}
+
+
+def _costs_rows(rows) -> list[dict]:
+    return [
+        {
+            "id": row.id,
+            "project_id": row.project_id,
+            "run_id": row.run_id,
+            "operation": row.operation,
+            "schema_name": row.schema_name,
+            "caller": row.caller,
+            "model": row.model,
+            "success": row.success,
+            "error": row.error,
+            "input_tokens": row.input_tokens,
+            "output_tokens": row.output_tokens,
+            "cached_input_tokens": row.cached_input_tokens,
+            "search_calls": row.search_calls,
+            "cost_usd": row.cost_usd,
+            "created_at": row.created_at,
+        }
+        for row in rows
+    ]
+
+
+@app.get("/costs")
+def costs(db: Session = Depends(get_db), limit: int = 200):
+    rows = db.execute(
+        select(LLMCall).order_by(LLMCall.id.desc()).limit(max(1, min(limit, 1000)))
+    ).scalars().all()
+    return {"calls": _costs_rows(rows)}
+
+
+@app.get("/costs/summary")
+def costs_summary(db: Session = Depends(get_db)):
+    calls = db.query(LLMCall).all()
+    return _summarize_costs(calls)
+
+
+@app.get("/projects/{project_id}/costs")
+def project_costs(project_id: int, db: Session = Depends(get_db)):
+    project_or_404(db, project_id)
+    calls = db.scalars(
+        select(LLMCall).where(LLMCall.project_id == project_id).order_by(LLMCall.id.desc())
+    ).all()
+    return {"project_id": project_id, "calls": _costs_rows(calls), "summary": _summarize_costs(calls)}
+
+
+def _summarize_costs(calls) -> dict:
+    totals = {
+        "total_cost_usd": 0.0,
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_cached_input_tokens": 0,
+        "total_search_calls": 0,
+        "calls": len(calls),
+        "by_model": {},
+        "by_operation": {},
+    }
+    for call in calls:
+        totals["total_cost_usd"] += call.cost_usd or 0.0
+        totals["total_input_tokens"] += call.input_tokens or 0
+        totals["total_output_tokens"] += call.output_tokens or 0
+        totals["total_cached_input_tokens"] += call.cached_input_tokens or 0
+        totals["total_search_calls"] += call.search_calls or 0
+        model_bucket = totals["by_model"].setdefault(
+            call.model, {"model": call.model, "cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "calls": 0}
+        )
+        _add_to_bucket(model_bucket, call)
+        op_key = call.operation or "desconhecida"
+        op_bucket = totals["by_operation"].setdefault(
+            op_key, {"operation": op_key, "cost_usd": 0.0, "calls": 0}
+        )
+        op_bucket["cost_usd"] += call.cost_usd or 0.0
+        op_bucket["calls"] += 1
+    totals["total_cost_usd"] = round(totals["total_cost_usd"], 6)
+    return totals
+
+
+def _add_to_bucket(bucket: dict, call) -> None:
+    bucket["cost_usd"] = round(bucket["cost_usd"] + (call.cost_usd or 0.0), 6)
+    bucket["input_tokens"] += call.input_tokens or 0
+    bucket["output_tokens"] += call.output_tokens or 0
+    bucket["calls"] += 1
 
 
 @app.get("/reports/history")
@@ -288,7 +375,8 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
 @app.post("/projects/{project_id}/discover-profile")
 def discover_profile(project_id: int, db: Session = Depends(get_db)):
     try:
-        return discover_project_profile(db, project_or_404(db, project_id))
+        with cost_context(project_id=project_id, operation="discover_profile"):
+            return discover_project_profile(db, project_or_404(db, project_id))
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
 
@@ -301,12 +389,18 @@ def _run_project_worker(run_id: str, project_id: int) -> None:
         if not project:
             raise RuntimeError("Projeto não encontrado")
 
-        result = run_full_methodology(
-            db,
-            project,
-            progress_callback=lambda key, status, detail=None: update_stage(run_id, key, status, detail),
-            cancel_check=lambda: check_cancelled(run_id),
-        )
+        def progress(key: str, status: str, detail: str | None = None) -> None:
+            if status == "RUNNING":
+                set_cost_operation(key)
+            update_stage(run_id, key, status, detail)
+
+        with cost_context(project_id=project_id, run_id=run_id):
+            result = run_full_methodology(
+                db,
+                project,
+                progress_callback=progress,
+                cancel_check=lambda: check_cancelled(run_id),
+            )
         check_cancelled(run_id)
         qa_status = (result.get("qa") or {}).get("status", "N/D")
         mark_run_completed(run_id, f"Relatório concluído. QA: {qa_status}")
@@ -355,10 +449,14 @@ def run_project_async(project_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/runs/{run_id}")
-def get_run_status(run_id: str):
+def get_run_status(run_id: str, db: Session = Depends(get_db)):
     snapshot = run_snapshot(run_id)
     if not snapshot:
         raise HTTPException(404, "Execução não encontrada")
+    calls = db.scalars(
+        select(LLMCall).where(LLMCall.run_id == run_id).order_by(LLMCall.id.asc())
+    ).all()
+    snapshot["costs"] = _summarize_costs(calls)
     return snapshot
 
 
@@ -429,7 +527,8 @@ def create_plan(project_id: int, db: Session = Depends(get_db)):
 @app.post("/projects/{project_id}/ai/plan-searches")
 def create_ai_plan(project_id: int, db: Session = Depends(get_db)):
     try:
-        return {"created": len(plan_queries_with_llm(db, project_or_404(db, project_id)))}
+        with cost_context(project_id=project_id, operation="plan_queries"):
+            return {"created": len(plan_queries_with_llm(db, project_or_404(db, project_id)))}
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
 
@@ -494,7 +593,8 @@ def validate(project_id: int, db: Session = Depends(get_db)):
 @app.post("/projects/{project_id}/ai/classify")
 def classify_ai(project_id: int, db: Session = Depends(get_db)):
     try:
-        return classify_with_llm(db, project_or_404(db, project_id))
+        with cost_context(project_id=project_id, operation="classify"):
+            return classify_with_llm(db, project_or_404(db, project_id))
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
 
@@ -540,7 +640,8 @@ def report(project_id: int, db: Session = Depends(get_db)):
 @app.get("/projects/{project_id}/ai/report")
 def ai_report(project_id: int, db: Session = Depends(get_db)):
     try:
-        return draft_report_with_llm(db, project_or_404(db, project_id))
+        with cost_context(project_id=project_id, operation="draft_report"):
+            return draft_report_with_llm(db, project_or_404(db, project_id))
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
 
@@ -551,7 +652,8 @@ def qa_report(project_id: int, db: Session = Depends(get_db)):
     payload = cached_report_for_project(db, project_id)
     if not payload:
         raise HTTPException(404, "Relatório ainda não foi gerado")
-    return run_report_qa(db, project, payload)
+    with cost_context(project_id=project_id, operation="report_qa"):
+        return run_report_qa(db, project, payload)
 
 
 @app.get("/projects/{project_id}/export.pdf")

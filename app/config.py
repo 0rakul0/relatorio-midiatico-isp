@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     # Legado de instalações anteriores; a execução atual não consome a API do
     # YouTube e sempre usa OpenAI Web Search.
     youtube_api_key: str | None = None
-    youtube_search_model: str = "gpt-5.5"
+    youtube_search_model: str = "gpt-5-mini"
     # Modelo usado pelo fallback geral de pesquisa web (sites/portais).
     web_search_model: str = "gpt-5.5"
     # Compatibilidade: limite bruto que o provedor pode devolver por tarefa.
@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # plano/quota/autenticacao, o circuit breaker libera automaticamente
     # todas as consultas restantes da execucao para o Web Search.
     max_web_search_fallback_queries: int = 0
+
+    # Orçamento total da descoberta inicial: buscas e análise estruturada do
+    # perfil somadas. Com OpenAI configurada, uma chamada fica reservada para
+    # a análise final e as demais para pesquisa.
+    max_profile_discovery_calls: int = 4
 
     max_fact_source_chars: int = 16000
 

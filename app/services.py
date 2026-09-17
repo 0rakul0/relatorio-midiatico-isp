@@ -309,9 +309,20 @@ def _project_payload(project: Project, *, for_report: bool = False) -> dict:
 
 
 def discover_project_profile(db: Session, project: Project) -> dict:
+    """Descobre e confirma um produto institucional sem confundir existência e data de lançamento.
+
+    Estados distintos ficam registrados em ``topic_profile``:
+    - product_status=PUBLISHED: há evidência de que o produto já foi publicado/divulgado;
+    - product_status=ANNOUNCED: o produto foi anunciado, mas a publicação efetiva não foi confirmada;
+    - product_status=NOT_CONFIRMED: as fontes coletadas não confirmam o produto;
+    - launch_date_confirmed=True: existe evidência explícita da data REAL de lançamento.
+
+    Uma previsão de lançamento nunca vira ``launch_date`` confirmado.
+    """
     profile = build_topic_profile(project.topic)
     project.project_type = profile["project_type"]
     project.topic_profile = profile
+
     # Só propagamos datas da repercussão para os fatos quando existe uma
     # janela explícita/inferida. Sem datas, a pauta permanece temática.
     if project.has_custom_date_window:
@@ -334,16 +345,39 @@ def discover_project_profile(db: Session, project: Project) -> dict:
 
     settings = get_settings()
     tavily_key = settings.tavily_api_key
-    searches = [
-        f'"{project.topic}" "Instituto de Segurança Pública"',
-        f'site:isp.rj.gov.br "{project.topic}"',
-        f'"{project.topic}" lançamento',
+    product_name = str(profile.get("product_name") or project.topic or "").strip()
+
+    # A descoberta de produto usa fontes oficiais atuais do registry, em vez de
+    # depender apenas do domínio legado isp.rj.gov.br.
+    preferred_official_labels = {"ISP", "ISP Conecta", "Governo do RJ"}
+    official_domains = [
+        source["domain"]
+        for source in OFFICIAL_SECURITY_SOURCES
+        if source.get("label") in preferred_official_labels
     ]
+
+    # O orçamento cobre TODAS as chamadas externas da descoberta do produto:
+    # 1 perfil do tema (build_topic_profile) + 1 agente documentalista +
+    # o restante disponível para as buscas. Assim a etapa nunca passa de
+    # max_profile_discovery_calls chamadas mesmo quando Tavily está ausente.
+    call_budget = max(1, min(4, settings.max_profile_discovery_calls))
+    llm_available = llm_is_configured()
+    profile_reserved = 1 if llm_available else 0
+    analysis_reserved = 1 if llm_available else 0
+    search_budget = max(0, call_budget - profile_reserved - analysis_reserved)
+    searches = [
+        f'"{product_name}" "Instituto de Segurança Pública"',
+        f'"{product_name}" divulgado',
+        *[f'site:{domain} "{product_name}"' for domain in official_domains],
+    ]
+    searches = list(dict.fromkeys(query for query in searches if query.strip()))[:search_budget]
+
     sources: list[dict] = []
     seen: set[str] = set()
 
-    # Tavily é o provedor primário, mas a descoberta do perfil não pode depender
-    # dele. Se estiver ausente ou falhar, o OpenAI Web Search assume a consulta.
+    # O primeiro request real funciona como teste do Tavily. Se houver erro
+    # duro de plano/quota/autenticação, o restante da descoberta vai direto
+    # para OpenAI Web Search, sem insistir no Tavily nesta execução.
     tavily_client = None
     if tavily_key:
         try:
@@ -351,6 +385,21 @@ def discover_project_profile(db: Session, project: Project) -> dict:
             tavily_client = TavilyClient(api_key=tavily_key)
         except Exception:
             tavily_client = None
+
+    tavily_circuit_open = tavily_client is None
+    tavily_disable_reason = "TAVILY_API_KEY não configurada" if tavily_client is None else None
+    discovery_stats = {
+        "call_budget": call_budget,
+        "profile_reserved": profile_reserved,
+        "analysis_reserved": analysis_reserved,
+        "search_budget": search_budget,
+        "external_search_calls": 0,
+        "profile_analysis_calls": 0,
+        "tavily_attempts": 0,
+        "tavily_successes": 0,
+        "tavily_circuit_open": bool(tavily_circuit_open),
+        "web_search_queries": 0,
+    }
 
     fallback_schema = {
         "type": "object",
@@ -375,8 +424,15 @@ def discover_project_profile(db: Session, project: Project) -> dict:
     }
 
     for query in searches:
-        query_added = 0
-        if tavily_client is not None:
+        # Uma consulta equivale a UMA chamada externa. O fallback é usado nas
+        # próximas consultas quando Tavily fica indisponível, nunca para repetir
+        # a mesma intenção apenas porque ela não retornou itens.
+        if discovery_stats["external_search_calls"] >= search_budget:
+            break
+
+        if not tavily_circuit_open and tavily_client is not None:
+            discovery_stats["external_search_calls"] += 1
+            discovery_stats["tavily_attempts"] += 1
             try:
                 response = tavily_client.search(
                     query=query,
@@ -385,8 +441,9 @@ def discover_project_profile(db: Session, project: Project) -> dict:
                     search_depth="advanced",
                     timeout=15,
                 )
+                discovery_stats["tavily_successes"] += 1
                 for result in response.get("results", []):
-                    url = result.get("url")
+                    url = (result.get("url") or "").strip()
                     if not url or url in seen:
                         continue
                     seen.add(url)
@@ -394,24 +451,44 @@ def discover_project_profile(db: Session, project: Project) -> dict:
                         {
                             "title": result.get("title", "Sem título"),
                             "url": url,
-                            "content": (result.get("raw_content") or result.get("content") or "")[:2500],
+                            "content": (result.get("raw_content") or result.get("content") or "")[:3500],
+                            "search_provider": "tavily",
+                            "search_query": query,
                         }
                     )
-                    query_added += 1
-            except Exception:
-                query_added = 0
+            except Exception as exc:
+                if _is_tavily_hard_failure(exc):
+                    tavily_circuit_open = True
+                    tavily_disable_reason = str(exc)[:1000]
+                    discovery_stats["tavily_circuit_open"] = True
+        elif llm_is_configured():
+            site_match = re.search(r"(?:^|\s)site:([^\s]+)", query, flags=re.IGNORECASE)
+            site_domain = site_match.group(1).strip().strip('"\'()[]{}').split('/')[0] if site_match else None
+            allowed_domains = [site_domain] if site_domain else None
 
-        if query_added == 0 and llm_is_configured():
             try:
+                discovery_stats["external_search_calls"] += 1
+                discovery_stats["web_search_queries"] += 1
                 fallback = web_search_structured_response(
                     instructions=(
-                        "Pesquise fontes reais para confirmar um produto institucional do Instituto de Segurança Pública. "
-                        "Priorize a página oficial do ISP e fontes que mencionem explicitamente o produto e seu lançamento. "
-                        "Não invente datas, URLs ou conteúdo. Retorne apenas resultados materialmente relacionados."
+                        "Pesquise fontes REAIS para confirmar a existência e, separadamente, a publicação de um "
+                        "produto institucional do Instituto de Segurança Pública. Preserve o nome exato do produto. "
+                        "Priorize páginas oficiais do ISP/Governo do RJ e fontes jornalísticas confiáveis. "
+                        "Uma previsão futura de lançamento não prova publicação efetiva. Não invente datas, URLs ou "
+                        "conteúdo. Retorne somente resultados materialmente relacionados ao produto pesquisado."
                     ),
-                    payload={"query": query, "topic": project.topic},
-                    schema_name="institutional_profile_web_sources",
+                    payload={
+                        "query": query,
+                        "topic": project.topic,
+                        "product_name": product_name,
+                        "tavily_unavailable_reason": tavily_disable_reason,
+                    },
+                    schema_name="institutional_profile_web_sources_v2",
                     schema=fallback_schema,
+                    allowed_domains=allowed_domains,
+                    model=settings.web_search_model,
+                    retry_without_domain_filter=False,
+                    max_output_tokens=3500,
                 )
                 for result in fallback.get("results", []):
                     url = (result.get("url") or "").strip()
@@ -422,14 +499,31 @@ def discover_project_profile(db: Session, project: Project) -> dict:
                         {
                             "title": result.get("title") or "Sem título",
                             "url": url,
-                            "content": (result.get("content") or "")[:2500],
+                            "content": (result.get("content") or "")[:3500],
+                            "search_provider": "openai_web_search",
+                            "search_query": query,
                         }
                     )
             except RuntimeError:
                 pass
 
-    sources = sources[:8]
+        if len(sources) >= 10:
+            break
+
+    sources = sources[:10]
     if not sources or not llm_is_configured():
+        profile_state = dict(project.topic_profile or {})
+        profile_state.update(
+            {
+                "product_status": "NOT_CONFIRMED",
+                "product_confirmed": False,
+                "product_published": False,
+                "launch_date_confirmed": False,
+                "launch_status": "NOT_FOUND",
+                "profile_discovery_stats": discovery_stats,
+            }
+        )
+        project.topic_profile = profile_state
         project.status = "PROFILE_NEEDS_REVIEW"
         db.commit()
         return {
@@ -437,8 +531,12 @@ def discover_project_profile(db: Session, project: Project) -> dict:
             "project_type": project.project_type,
             "sources": len(sources),
             "facts": 0,
-            "launch_required": True,
-            "warning": "Não foi possível confirmar o lançamento com evidência suficiente",
+            "product_confirmed": False,
+            "product_published": False,
+            "launch_date_confirmed": False,
+            "launch_required": False,
+            "warning": "Não foi possível confirmar documentalmente a publicação do produto",
+            "discovery_stats": discovery_stats,
         }
 
     schema = {
@@ -446,7 +544,20 @@ def discover_project_profile(db: Session, project: Project) -> dict:
         "additionalProperties": False,
         "properties": {
             "institution": {"type": ["string", "null"]},
+            "product_status": {
+                "type": "string",
+                "enum": ["PUBLISHED", "ANNOUNCED", "NOT_CONFIRMED"],
+            },
+            "product_evidence": {"type": ["string", "null"]},
+            "product_source_index": {"type": ["integer", "null"], "minimum": 0},
+            "launch_status": {
+                "type": "string",
+                "enum": ["CONFIRMED_ACTUAL", "EXPECTED_ONLY", "NOT_FOUND"],
+            },
             "launch_date": {"type": ["string", "null"]},
+            "expected_launch_date": {"type": ["string", "null"]},
+            "launch_evidence": {"type": ["string", "null"]},
+            "launch_source_index": {"type": ["integer", "null"], "minimum": 0},
             "official_facts": {
                 "type": "array",
                 "maxItems": 20,
@@ -471,25 +582,65 @@ def discover_project_profile(db: Session, project: Project) -> dict:
                 },
             },
         },
-        "required": ["institution", "launch_date", "official_facts"],
+        "required": [
+            "institution",
+            "product_status",
+            "product_evidence",
+            "product_source_index",
+            "launch_status",
+            "launch_date",
+            "expected_launch_date",
+            "launch_evidence",
+            "launch_source_index",
+            "official_facts",
+        ],
     }
+
+    discovery_stats["profile_analysis_calls"] = 1
     result = structured_response(
         instructions=DOCUMENTALIST_PROMPT,
-        payload={"topic": project.topic, "sources": sources},
-        schema_name="institutional_product_profile",
+        payload={"topic": project.topic, "product_name": product_name, "sources": sources},
+        schema_name="institutional_product_profile_v2",
         schema=schema,
+        max_output_tokens=5500,
     )
 
     if result.get("institution"):
-        project.institution = result["institution"][:200]
+        project.institution = str(result["institution"])[:200]
+
+    product_status = str(result.get("product_status") or "NOT_CONFIRMED")
+    launch_status = str(result.get("launch_status") or "NOT_FOUND")
+
+    def source_from_index(value: object) -> dict | None:
+        if not isinstance(value, int) or isinstance(value, bool):
+            return None
+        return sources[value] if 0 <= value < len(sources) else None
+
+    product_source = source_from_index(result.get("product_source_index"))
+    launch_source = source_from_index(result.get("launch_source_index"))
+
     launch_confirmed = False
-    if result.get("launch_date"):
+    parsed_launch_date: date | None = None
+    if launch_status == "CONFIRMED_ACTUAL" and result.get("launch_date"):
         try:
-            parsed = date.fromisoformat(result["launch_date"][:10])
-            project.launch_date = parsed
-            launch_confirmed = True
+            parsed_launch_date = date.fromisoformat(str(result["launch_date"])[:10])
+            launch_confirmed = bool(result.get("launch_evidence"))
         except ValueError:
+            parsed_launch_date = None
             launch_confirmed = False
+
+    # Uma data real de lançamento confirmada implica que o produto já foi publicado.
+    if launch_confirmed:
+        product_status = "PUBLISHED"
+
+    product_confirmed = product_status in {"PUBLISHED", "ANNOUNCED"}
+    product_published = product_status == "PUBLISHED"
+
+    # Se o usuário informou manualmente a data, não a sobrescrevemos. Caso contrário,
+    # somente uma data REAL confirmada documentalmente pode atualizar launch_date.
+    options = project.execution_options or {}
+    if launch_confirmed and parsed_launch_date and not options.get("launch_date_user_supplied"):
+        project.launch_date = parsed_launch_date
 
     facts_added = 0
     for fact in result.get("official_facts", []):
@@ -525,19 +676,60 @@ def discover_project_profile(db: Session, project: Project) -> dict:
         )
         facts_added += 1
 
+    expected_launch_date = None
+    if result.get("expected_launch_date"):
+        try:
+            expected_launch_date = date.fromisoformat(str(result["expected_launch_date"])[:10]).isoformat()
+        except ValueError:
+            expected_launch_date = None
+
     profile_state = dict(project.topic_profile or {})
-    profile_state["launch_date_confirmed"] = bool(launch_confirmed)
+    profile_state.update(
+        {
+            "product_status": product_status,
+            "product_confirmed": product_confirmed,
+            "product_published": product_published,
+            "product_confirmation_evidence": result.get("product_evidence"),
+            "product_confirmation_source": product_source.get("url") if product_source else None,
+            "launch_status": launch_status,
+            "launch_date_confirmed": bool(launch_confirmed),
+            "launch_evidence": result.get("launch_evidence"),
+            "launch_confirmation_source": launch_source.get("url") if launch_source else None,
+            "expected_launch_date": expected_launch_date,
+            "profile_discovery_stats": discovery_stats,
+        }
+    )
     project.topic_profile = profile_state
-    project.status = "PROFILED" if launch_confirmed else "PROFILE_NEEDS_REVIEW"
+
+    # A data exata deixa de ser requisito para aceitar o perfil. Se há evidência
+    # de que o produto já foi publicado, o perfil está resolvido mesmo sem data.
+    project.status = "PROFILED" if product_published else "PROFILE_NEEDS_REVIEW"
     db.commit()
+
+    warning = None
+    if product_published and not launch_confirmed:
+        warning = "Produto publicado confirmado; data exata de lançamento não localizada"
+    elif product_status == "ANNOUNCED":
+        warning = "Produto anunciado, mas publicação efetiva ainda não confirmada"
+    elif not product_confirmed:
+        warning = "Produto institucional identificado pelo tema, mas não confirmado documentalmente nas fontes coletadas"
+
     return {
         "status": project.status,
         "project_type": project.project_type,
         "sources": len(sources),
         "facts": facts_added,
+        "product_status": product_status,
+        "product_confirmed": product_confirmed,
+        "product_published": product_published,
+        "launch_status": launch_status,
         "launch_date_confirmed": launch_confirmed,
+        "launch_date": parsed_launch_date.isoformat() if launch_confirmed and parsed_launch_date else None,
+        "expected_launch_date": expected_launch_date,
+        "launch_required": False,
+        "warning": warning,
+        "discovery_stats": discovery_stats,
     }
-
 
 def _existing_queries(db: Session, project_id: int) -> set[str]:
     return set(db.scalars(select(SearchQuery.query).where(SearchQuery.project_id == project_id)).all())
@@ -2037,6 +2229,7 @@ preferível a um resultado duvidoso."""
             schema=schema,
             allowed_domains=["youtube.com", "youtu.be"],
             model=settings.youtube_search_model,
+            retry_without_domain_filter=True,
         )
         task_limit = min(
             settings.youtube_web_search_max_results,
@@ -3566,12 +3759,28 @@ def run_full_methodology(
             "project_type": project.project_type,
             "topic_profile": project.topic_profile,
         }
-    profile_warning = None
-    if project.project_type == "INSTITUTIONAL_PRODUCT" and project.status == "PROFILE_NEEDS_REVIEW":
-        # A data de lançamento é útil, mas não é requisito para medir repercussão.
-        # O pipeline segue de forma temática e o PDF simplesmente não exibe uma
-        # data de lançamento não confirmada.
-        profile_warning = "produto institucional identificado; lançamento não confirmado, seguindo por busca temática"
+    profile_note = None
+    if project.project_type == "INSTITUTIONAL_PRODUCT":
+        profile_state = project.topic_profile or {}
+        product_status = str(profile_state.get("product_status") or "NOT_CONFIRMED")
+        launch_confirmed = bool(profile_state.get("launch_date_confirmed"))
+
+        if product_status == "PUBLISHED":
+            trusted_launch = _trusted_launch_date(project)
+            if launch_confirmed and trusted_launch:
+                profile_note = (
+                    f"produto publicado confirmado · lançamento real confirmado em "
+                    f"{trusted_launch.isoformat()}"
+                )
+            else:
+                profile_note = "produto publicado confirmado · data exata de lançamento não confirmada"
+        elif product_status == "ANNOUNCED":
+            expected = profile_state.get("expected_launch_date")
+            profile_note = "produto anunciado; publicação efetiva ainda não confirmada"
+            if expected:
+                profile_note += f" · previsão localizada: {expected}"
+        else:
+            profile_note = "confirmação documental do produto pendente; seguindo por busca temática"
 
     execution_profile, flags = execution_flags(project)
     stage(
@@ -3579,7 +3788,7 @@ def run_full_methodology(
         "DONE",
         (
             f"Tema: {project.project_type} · perfil de execução: {execution_profile}"
-            + (f" · {profile_warning}" if profile_warning else "")
+            + (f" · {profile_note}" if profile_note else "")
         ),
     )
 

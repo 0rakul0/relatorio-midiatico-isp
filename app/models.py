@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -207,3 +207,43 @@ class GeneratedReport(Base):
     qa_status: Mapped[str] = mapped_column(String(30), default="PENDING")
     qa_findings: Mapped[list] = mapped_column(JSON, default=list)
     generated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class LLMCall(Base):
+    """Registro de custo/consumo de uma chamada única à OpenAI.
+
+    Cada tentativa HTTP é registrada por linha (inclusive tentativas que
+    falharam antes de devolver conteúdo, com tokens zerados), para o monitor
+    refletir o custo real de retries e fallbacks.
+    """
+
+    __tablename__ = "llm_calls"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    run_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+
+    # Operação de negócio (ex.: "plan_queries", "classify", "draft_report") e,
+    # quando disponível, o nome do schema JSON usado pela chamada.
+    operation: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    schema_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+    # Função de origem (structured_response ou web_search_structured_response),
+    # nome exato do modelo chamado e se a chamada produziu conteúdo.
+    caller: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    model: Mapped[str] = mapped_column(String(120))
+    success: Mapped[bool] = mapped_column(Boolean, default=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Consumo reportado pela API.
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cached_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    search_calls: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Custo estimado em USD com base na tabela de preços local.
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
