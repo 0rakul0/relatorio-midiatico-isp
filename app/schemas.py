@@ -13,6 +13,21 @@ class ProjectCreate(BaseModel):
     event_start: date | None = None
     event_end: date | None = None
 
+    # AUTO decide o pipeline depois que o tema é classificado.
+    # Os demais perfis permitem forçar um comportamento específico.
+    execution_profile: Literal[
+        "AUTO",
+        "MIDIATICO_SIMPLES",
+        "MIDIATICO_COM_FATOS",
+        "COMPLETO_NOMINAL",
+    ] = "AUTO"
+
+    # Overrides opcionais. Quando ficam como None, o perfil decide.
+    enable_youtube: bool | None = None
+    enable_fact_layer: bool | None = None
+    enable_nominal_followup: bool | None = None
+    enable_cross_validation: bool | None = None
+
 
 class LLMSettingsUpdate(BaseModel):
     # provider permanece opcional apenas para compatibilidade com clientes antigos.

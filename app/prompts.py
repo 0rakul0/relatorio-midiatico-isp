@@ -11,7 +11,14 @@ Classifique-o em um dos tipos:
 Extraia somente elementos explícitos ou semanticamente inequívocos do pedido.
 Retorne:
 - project_type;
+- product_name: nome exato do produto institucional quando INSTITUTIONAL_PRODUCT; caso contrário null;
+- product_anchor: núcleo nominal distintivo do produto, sem reduzir a palavras genéricas isoladas;
+- product_search_variants: apenas variantes que preservem a identidade nominal do produto;
+- subject_terms: assuntos abordados pelo produto, úteis para análise, mas NÃO para buscas autônomas de repercussão;
 - event_type;
+- event_anchor: núcleo semântico da categoria factual quando EVENT_TOPIC;
+- event_search_variants: variantes que preservem a mesma categoria factual para busca de repercussão;
+- fact_discovery_variants: formas jornalísticas equivalentes, ainda materialmente ligadas ao evento, para descoberta de casos;
 - actors;
 - actions;
 - locations;
@@ -20,6 +27,20 @@ Retorne:
 - requested_fact_fields;
 - inclusion_rules;
 - exclusion_rules.
+
+Regras para INSTITUTIONAL_PRODUCT:
+- product_name deve preservar o nome do objeto pesquisado;
+- product_anchor deve manter o núcleo nominal distintivo. Ex.: "Dossiê Mulher 2026" -> "Dossiê Mulher";
+- product_search_variants pode conter "Dossiê Mulher 2026" e "Dossiê Mulher", mas nunca "dossiê" ou "mulher" isoladamente;
+- subject_terms pode conter termos amplos como "violência contra a mulher", "redpill" etc., porém eles não devem virar consultas autônomas de repercussão;
+- search_synonyms, por compatibilidade, deve preservar apenas variantes ancoradas do produto quando o projeto for institucional.
+
+Regras para EVENT_TOPIC:
+- preserve a categoria factual completa em event_anchor; não a reduza a palavras genéricas isoladas;
+- para "morte por intervenção de agente do Estado", preserve essa categoria e aceite como variantes próximas expressões como "morte decorrente de intervenção policial";
+- event_search_variants servem para repercussão e devem manter o significado do evento;
+- fact_discovery_variants podem usar formulações jornalísticas equivalentes, como "morto durante intervenção policial", mas nunca "morte", "polícia" ou "Rio" isoladamente;
+- ano e local explícitos no pedido devem ser preservados como contexto de busca.
 
 Não invente fatos concretos. Não identifique pessoas que ainda não estejam nas fontes.
 Não transforme ausência de informação em fato.
@@ -46,6 +67,16 @@ Separe explicitamente o propósito de cada consulta:
 - NOMINAL_FOLLOWUP: reservado a nomes já descobertos, não invente nomes.
 
 Não dependa apenas da frase exata do tema. Use sinônimos, cargos, formas jornalísticas e variantes territoriais.
+Para INSTITUTIONAL_PRODUCT, toda consulta MEDIA_REPERCUSSION deve preservar product_anchor ou uma product_search_variant.
+subject_terms servem para análise do conteúdo e NÃO podem virar consultas genéricas independentes de repercussão.
+Nunca gere buscas como "dossiê", "mulher", "violência contra mulher" ou equivalentes amplos quando o objeto for um produto institucional específico.
+
+Para EVENT_TOPIC com event_anchor preenchido:
+- MEDIA_REPERCUSSION deve preservar event_anchor ou uma event_search_variant;
+- OFFICIAL_FACT deve preservar event_anchor ou uma event_search_variant;
+- FACT_DISCOVERY pode usar event_search_variants ou fact_discovery_variants, mas não atores/ações genéricos isolados;
+- preserve local e ano explícitos quando disponíveis;
+- não transforme "morte por intervenção de agente do Estado" em buscas vagas como "morte Rio", "polícia 2026" ou "agente do Estado".
 Não invente indicadores, pessoas ou ocorrências.
 Para cada consulta retorne query, kind, purpose, rationale e priority de 1 a 3.
 """
@@ -71,11 +102,17 @@ Retorne apenas eventos sustentados pelo texto fornecido.
 
 MEDIA_RELEVANCE_PROMPT = """
 Você faz triagem de aderência temática de um único item de mídia.
-Decida se o item trata materialmente do tema e do território/recorte pedidos.
-Não exija que o texto repita literalmente a frase do usuário.
-Aceite sinônimos, cargos, abreviações e descrições jornalísticas equivalentes.
-A data de publicação é validada por código; aqui avalie apenas relação temática.
-Se não houver evidência textual suficiente, marque related=false e explique.
+Decida se o item trata materialmente do objeto monitorado, e não apenas de um assunto parecido.
+A data de publicação é validada por código; aqui avalie apenas a relação documental/temática.
+
+Regras:
+- preserve diferença entre repercussão do objeto e cobertura genérica do mesmo tema;
+- não valide por coincidência de palavras isoladas, território ou categoria ampla;
+- quando o projeto for um produto institucional, exija menção ao produto/edição OU atribuição clara de dado/conclusão à instituição/produto;
+- matéria sobre assunto semelhante sem essa âncora é THEMATIC_ONLY e deve ser related=false;
+- para temas factuais, aceite descrições jornalísticas equivalentes quando o evento/ator/local corresponder materialmente ao perfil;
+- a evidência deve mostrar a âncora concreta que justifica a decisão;
+- se não houver evidência textual suficiente, marque related=false.
 """
 
 ANALYST_PROMPT = """
@@ -103,6 +140,19 @@ Nunca converta:
 
 Use as expressões 'na amostra auditável' e 'na janela observada' quando aplicável.
 Diferencie dado oficial, fatos verificados, repercussão observada, análise e recomendação.
+Métrica de menção institucional significa apenas que a instituição foi mencionada no texto; não a converta em protagonismo, liderança ou destaque sem evidência específica.
+
+REGRAS DE REDAÇÃO SOBRE COBERTURA:
+- Nunca transforme "nenhum item validado na amostra" em "não houve cobertura", "ausência de cobertura", "o veículo não cobriu" ou formulação equivalente.
+- Quando um portal não possuir item validado, escreva: "nenhum item validado desse veículo foi localizado na amostra".
+- A ausência de item no corpus não demonstra inexistência de publicação.
+
+REGRAS SOBRE MENÇÃO INSTITUCIONAL:
+- isp_mention_percent mede somente presença textual do ISP.
+- Mesmo que 100% dos itens mencionem o ISP, isso NÃO comprova, por si só, protagonismo, centralidade editorial, liderança, legitimação ou posição dominante da instituição.
+- Não use expressões como "confirma sua posição como fonte legitimadora", "demonstra protagonismo" ou "comprova centralidade" apenas a partir da porcentagem de menções.
+- Qualquer conclusão sobre papel institucional deve possuir evidência independente da métrica de menção.
+
 Se o corpus validado for zero, descreva exclusivamente a ausência de itens validados na amostra coletada.
 """
 
@@ -116,7 +166,10 @@ Verifique obrigatoriamente:
 - zero itens validados não foi transformado em afirmação de ausência de cobertura;
 - fato não localizado não foi transformado em afirmação de inexistência;
 - itens publicados fora da janela midiática usados para confirmar fatos não foram contados como repercussão;
-- conflitos entre fontes permanecem explicitamente marcados.
+- conflitos entre fontes permanecem explicitamente marcados;
+- a porcentagem de menções à instituição não foi apresentada como protagonismo/destaque sem evidência adicional;
+- em produto institucional, itens do corpus têm vínculo documental com o produto e não apenas afinidade temática;
+- a janela exibida no relatório não contém datas fictícias, vazias ou placeholders técnicos.
 
 Classifique cada achado em CRITICAL, HIGH, MEDIUM ou LOW.
 Reprove o relatório se houver algum achado CRITICAL ou HIGH.

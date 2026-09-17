@@ -335,12 +335,16 @@ def extract_project_facts(
 
     purpose_by_query = _query_purpose_map(db, project.id)
     items = db.scalars(select(MediaItem).where(MediaItem.project_id == project.id)).all()
+    settings = get_settings()
+    extraction_cap = max(1, settings.max_fact_extractions)
     processed = events_extracted = errors = 0
 
     eligible_items = [item for item in items if _item_should_feed_fact_layer(item, purpose_by_query, project)]
     total_eligible = len(eligible_items)
 
     for item_index, item in enumerate(eligible_items, start=1):
+        if processed >= extraction_cap:
+            break
         if cancel_check:
             cancel_check()
         if progress_detail:

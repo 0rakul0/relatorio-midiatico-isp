@@ -1,0 +1,91 @@
+from datetime import date
+
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+
+from app.database import Base
+from app.models import MediaItem, Project
+from app.services import canonicalize, is_youtube_url
+
+
+def test_youtube_url_validation_accepts_only_youtube_hosts():
+    assert is_youtube_url("https://www.youtube.com/watch?v=abc123")
+    assert is_youtube_url("https://youtu.be/abc123")
+    assert not is_youtube_url("https://youtube.com.evil.example/watch?v=abc123")
+    assert not is_youtube_url("https://example.com/watch?v=abc123")
+    assert canonicalize("https://youtu.be/abc123") == canonicalize("https://www.youtube.com/watch?v=abc123")
+
+
+def test_collect_youtube_uses_openai_web_search_and_rejects_external_urls(monkeypatch):
+    from app import services
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    project = Project(
+        topic="tema de teste",
+        launch_date=date(2026, 1, 1),
+        collection_start=date(2026, 8, 1),
+        collection_end=date(2026, 8, 31),
+        topic_profile={"actors": [], "actions": [], "locations": []},
+    )
+    session.add(project)
+    session.commit()
+
+    def fake_web_search(**_kwargs):
+        return {
+            "videos": [
+                {
+                    "title": "Vídeo encontrado",
+                    "url": "https://www.youtube.com/watch?v=abc123&utm_source=test",
+                    "channel": "Canal teste",
+                    "published_at": "2026-08-12",
+                    "description": "Descrição do vídeo",
+                    "view_count": 1_868,
+                },
+                {
+                    "title": "Resultado externo",
+                    "url": "https://example.com/video",
+                    "channel": None,
+                    "published_at": None,
+                    "description": None,
+                    "view_count": None,
+                },
+            ]
+    }
+
+    monkeypatch.setattr(services, "web_search_structured_response", fake_web_search)
+    assert services.collect_youtube_web_search(session, project) == 1
+
+    item = session.scalar(select(MediaItem))
+    assert item.canonical_url == canonicalize("https://www.youtube.com/watch?v=abc123")
+    assert item.search_source == "openai_web_search"
+    assert item.source_name == "Canal teste"
+    assert item.view_count == 1_868
+    assert item.source_provenance[0]["view_count"] == 1_868
+    assert item.source_provenance[0]["source"] == "openai_web_search"
+
+    services._record_source_provenance(
+        item,
+        source="tavily",
+        title="Vídeo encontrado",
+        url=item.url,
+        published_at="2026-08-12",
+        snippet="Descrição do vídeo",
+    )
+    session.commit()
+    monkeypatch.setattr(
+        services,
+        "structured_response",
+        lambda **_kwargs: {
+            "status": "PARTIALLY_CONFIRMED",
+            "matching_fields": ["url", "title", "published_at"],
+            "conflicting_fields": [],
+            "detail": "URL, título e data coincidem; Tavily não informou o canal.",
+        },
+    )
+    result = services.validate_tavily_youtube_metadata(session, project)
+    assert result["validated"] == 1
+    assert result["skipped"] is False
+    assert item.cross_validation_status == "PARTIALLY_CONFIRMED"
+    session.close()

@@ -21,6 +21,8 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "event_end": "DATE",
         "project_type": "VARCHAR(40) DEFAULT 'AUTO'",
         "topic_profile": "JSON",
+        "execution_profile": "VARCHAR(40) DEFAULT 'AUTO'",
+        "execution_options": "JSON",
         "fact_grace_days": "INTEGER DEFAULT 10",
         "youtube_collection_status": "VARCHAR(40) DEFAULT 'NOT_ATTEMPTED'",
         "youtube_collection_error": "TEXT",
@@ -38,6 +40,9 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     "media_items": {
         "source_name": "VARCHAR(300)",
         "view_count": "INTEGER",
+        "source_provenance": "JSON",
+        "cross_validation_status": "VARCHAR(40) DEFAULT 'NOT_APPLICABLE'",
+        "cross_validation_detail": "TEXT",
         "discovery_purposes": "JSON",
         "fact_status": "VARCHAR(40) DEFAULT 'PENDING'",
         "fact_discard_reason": "TEXT",
@@ -133,6 +138,20 @@ def ensure_schema() -> None:
             connection.execute(
                 text(
                     "UPDATE projects "
+                    "SET execution_profile = 'AUTO' "
+                    "WHERE execution_profile IS NULL"
+                )
+            )
+            connection.execute(
+                text(
+                    "UPDATE projects "
+                    "SET execution_options = '{}' "
+                    "WHERE execution_options IS NULL"
+                )
+            )
+            connection.execute(
+                text(
+                    "UPDATE projects "
                     "SET fact_grace_days = 10"
                 )
             )
@@ -159,6 +178,13 @@ def ensure_schema() -> None:
                     "UPDATE media_items "
                     "SET fact_status = 'PENDING' "
                     "WHERE fact_status IS NULL"
+                )
+            )
+            connection.execute(
+                text(
+                    "UPDATE media_items "
+                    "SET cross_validation_status = 'NOT_APPLICABLE' "
+                    "WHERE cross_validation_status IS NULL"
                 )
             )
             connection.execute(

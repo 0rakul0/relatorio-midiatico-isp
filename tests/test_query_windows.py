@@ -11,6 +11,7 @@ def project():
         event_start=date(2026, 8, 1),
         event_end=date(2026, 8, 31),
         fact_grace_days=10,
+        has_custom_date_window=True,
     )
 
 

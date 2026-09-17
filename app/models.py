@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -27,6 +27,12 @@ class Project(Base):
 
     project_type: Mapped[str] = mapped_column(String(40), default="AUTO")
     topic_profile: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    # Perfil escolhido pelo usuário. AUTO é resolvido depois que o tema é classificado.
+    execution_profile: Mapped[str] = mapped_column(String(40), default="AUTO")
+    # Overrides pontuais de agentes, por exemplo {"enable_youtube": False}.
+    execution_options: Mapped[dict] = mapped_column(JSON, default=dict)
+
     fact_grace_days: Mapped[int] = mapped_column(Integer, default=10)
 
     has_custom_date_window: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -88,6 +94,10 @@ class MediaItem(Base):
     source_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
     view_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     search_source: Mapped[str] = mapped_column(String(50), default="manual")
+    # Metadados mínimos preservados por coletor para validação cruzada.
+    source_provenance: Mapped[list] = mapped_column(JSON, default=list)
+    cross_validation_status: Mapped[str] = mapped_column(String(40), default="NOT_APPLICABLE")
+    cross_validation_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Finalidade(s) pelas quais o item foi descoberto. Um mesmo URL pode ser
     # recuperado por busca factual e por busca de repercussão.
@@ -104,7 +114,7 @@ class MediaItem(Base):
 
     duplicate_of_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    retrieved_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, server_default=func.now())
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), server_default=func.now())
 
 
 class FactEvent(Base):

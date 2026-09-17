@@ -51,10 +51,10 @@ from app.services import (
     run_full_methodology,
     validate_and_classify,
 )
-from app.topic_profile import requested_month_window
+from app.topic_profile import requested_topic_window
 
 
-app = FastAPI(title="ISP Repercussão Midiática", version="0.2.2")
+app = FastAPI(title="ISP Repercussão Midiática", version="0.2.5")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
@@ -72,7 +72,33 @@ def project_or_404(db: Session, project_id: int) -> Project:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "0.2.2"}
+    settings = get_settings()
+    return {
+        "status": "ok",
+        "version": "0.2.5",
+        "search_limits": {
+            "max_search_results": settings.max_search_results,
+            "max_results_per_query": settings.max_results_per_query,
+            "max_search_queries": settings.max_search_queries,
+            "max_llm_search_queries": settings.max_llm_search_queries,
+            "max_web_search_fallback_queries": settings.max_web_search_fallback_queries,
+            "max_youtube_tasks": settings.max_youtube_tasks,
+            "max_youtube_results_total": settings.max_youtube_results_total,
+            "max_youtube_results_per_task": settings.max_youtube_results_per_task,
+            "web_search_model": settings.web_search_model,
+            "youtube_search_model": settings.youtube_search_model,
+        },
+        "ai_limits": {
+            "max_semantic_reviews": settings.max_semantic_reviews,
+            "validation_batch_size": settings.validation_batch_size,
+            "max_classifications": settings.max_classifications,
+            "classification_batch_size": settings.classification_batch_size,
+            "max_fact_extractions": settings.max_fact_extractions,
+            "max_cross_validations": settings.max_cross_validations,
+            "validation_item_max_chars": settings.validation_item_max_chars,
+            "classification_item_max_chars": settings.classification_item_max_chars,
+        },
+    }
 
 
 @app.get("/settings/llm")
@@ -184,7 +210,7 @@ def dashboard():
 @app.post("/projects", status_code=201)
 def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     today = date.today()
-    inferred_window = requested_month_window(payload.topic)
+    inferred_window = requested_topic_window(payload.topic)
 
     if payload.collection_start or payload.collection_end:
         collection_start = payload.collection_start or payload.collection_end
@@ -197,13 +223,38 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
         collection_start = collection_end = today
         has_custom_window = False
 
-    event_start = payload.event_start or (inferred_window[0] if inferred_window else collection_start)
-    event_end = payload.event_end or (inferred_window[1] if inferred_window else collection_end)
+    if payload.event_start or payload.event_end:
+        event_start = payload.event_start or payload.event_end
+        event_end = payload.event_end or payload.event_start
+    elif inferred_window:
+        event_start, event_end = inferred_window
+    elif has_custom_window:
+        event_start, event_end = collection_start, collection_end
+    else:
+        # Sem datas explícitas, não inventamos uma janela factual de um único dia.
+        # O pipeline pesquisará pelo tema e pelas entidades descobertas no perfil.
+        event_start = event_end = None
 
     if collection_end < collection_start:
         raise HTTPException(422, "collection_end deve ser posterior ao início")
-    if event_end < event_start:
+    if event_start and event_end and event_end < event_start:
         raise HTTPException(422, "event_end deve ser posterior ao início")
+
+    execution_options = {
+        key: value
+        for key, value in {
+            "enable_youtube": payload.enable_youtube,
+            "enable_fact_layer": payload.enable_fact_layer,
+            "enable_nominal_followup": payload.enable_nominal_followup,
+            "enable_cross_validation": payload.enable_cross_validation,
+        }.items()
+        if value is not None
+    }
+    # O campo launch_date do banco continua preenchido por compatibilidade com
+    # instalações antigas, mas só deve ser exibido como dado editorial quando
+    # o usuário o informou ou quando o agente documentalista o confirmou.
+    if payload.launch_date is not None:
+        execution_options["launch_date_user_supplied"] = True
 
     row = Project(
         topic=payload.topic,
@@ -213,6 +264,8 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
         collection_end=collection_end,
         event_start=event_start,
         event_end=event_end,
+        execution_profile=payload.execution_profile,
+        execution_options=execution_options,
         fact_grace_days=10,
         has_custom_date_window=has_custom_window,
         project_type="AUTO",
@@ -457,6 +510,17 @@ def report(project_id: int, db: Session = Depends(get_db)):
     project = project_or_404(db, project_id)
     data = metrics(db, project_id)
     dominant = data["themes"][0]["theme"] if data["themes"] else "não identificado"
+    profile = project.topic_profile or {}
+    if project.has_custom_date_window:
+        period_intro = f"Na janela de {project.collection_start} a {project.collection_end}"
+    elif profile.get("observed_collection_start") and profile.get("observed_collection_end"):
+        period_intro = (
+            f"No período observado de {profile['observed_collection_start']} "
+            f"a {profile['observed_collection_end']}"
+        )
+    else:
+        period_intro = "Na amostra temática coletada"
+
     return {
         "title": f"Relatório de Repercussão Midiática — {project.topic}",
         "methodological_note": (
@@ -464,7 +528,7 @@ def report(project_id: int, db: Session = Depends(get_db)):
             "e a camada factual é separada da janela de publicação."
         ),
         "executive_summary": (
-            f"Na janela de {project.collection_start} a {project.collection_end}, foram localizados {data['items_found']} itens, "
+            f"{period_intro}, foram localizados {data['items_found']} itens, "
             f"dos quais {data['valid_items']} foram validados em {data['unique_vehicles']} veículos. "
             f"O tema mais frequente foi {dominant}. A camada factual estruturou {data['facts']['events']} evento(s)."
         ),

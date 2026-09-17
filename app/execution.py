@@ -11,6 +11,7 @@ RUN_STAGES = [
     ("search_plan", "Planejamento de buscas"),
     ("collection", "Coleta em sites"),
     ("youtube", "Coleta no YouTube"),
+    ("cross_validation", "Validação cruzada Tavily × YouTube"),
     ("facts_pass_1", "Extração factual - 1ª passagem"),
     ("fact_resolution_1", "Consolidação factual - 1ª passagem"),
     ("nominal_plan", "Planejamento de buscas nominais"),

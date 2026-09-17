@@ -102,6 +102,34 @@ def deterministic_report_qa(payload: dict) -> list[dict]:
             )
 
     project = payload.get("project") or {}
+
+    if project.get("project_type") == "AUTO":
+        findings.append(
+            {
+                "severity": "HIGH",
+                "code": "UNRESOLVED_PROJECT_TYPE",
+                "message": "O relatório final ainda expõe o tipo AUTO; o perfil temático deve estar resolvido antes da redação.",
+            }
+        )
+
+    if metrics.get("valid_items", 0) > 0 and (not project.get("collection_start") or not project.get("collection_end")):
+        findings.append(
+            {
+                "severity": "HIGH",
+                "code": "MISSING_OBSERVED_MEDIA_WINDOW",
+                "message": "Há itens validados, mas o período observado da repercussão não foi materializado no relatório.",
+            }
+        )
+
+    if metrics.get("isp_mention_percent") is not None and "protagon" in text:
+        findings.append(
+            {
+                "severity": "MEDIUM",
+                "code": "MENTION_VS_PROTAGONISM",
+                "message": "O texto usa linguagem de protagonismo; confirme que isso não foi inferido apenas da métrica de menção institucional.",
+            }
+        )
+
     if project.get("event_start") and project.get("event_end") and project.get("collection_start") and project.get("collection_end"):
         # Apenas sinaliza inconsistências estruturais óbvias; janelas diferentes são permitidas.
         if project["event_start"] > project["event_end"]:
@@ -148,11 +176,22 @@ def _llm_qa(payload: dict) -> list[dict]:
         },
         "required": ["findings"],
     }
+    corpus = payload.get("corpus") or []
     compact = {
         "project": payload.get("project"),
         "metrics": payload.get("metrics"),
         "fact_events": payload.get("fact_events"),
         "report": payload.get("report"),
+        "corpus": [
+            {
+                "title": item.get("title"),
+                "source": item.get("source") or item.get("domain"),
+                "theme": item.get("theme"),
+                "evidence": item.get("evidence"),
+                "published_at": item.get("published_at"),
+            }
+            for item in corpus[:60]
+        ],
     }
     try:
         result = structured_response(

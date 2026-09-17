@@ -29,3 +29,23 @@ PRIORITY_YOUTUBE_CHANNELS = [
     ("SBT News", "SBT News"),
     ("Band Jornalismo", "Band Jornalismo"),
 ]
+
+
+# Aliases aceitos para normalização dos nomes retornados por diferentes coletores.
+# Mantemos PRIORITY_YOUTUBE_CHANNELS no formato antigo para compatibilidade com o MediaScout.
+PRIORITY_YOUTUBE_CHANNEL_ALIASES = {
+    "ISP RJ": [
+        "Instituto de Segurança Pública ISP RJ",
+        "Instituto de Segurança Pública - ISP RJ",
+        "Instituto de Segurança Pública",
+        "ISP RJ",
+    ],
+    "G1/Globo": ["g1", "G1", "G1 Rio", "Globo"],
+    "O Globo": ["Jornal O Globo", "O Globo"],
+    "Extra": ["Extra", "Jornal Extra"],
+    "O Dia": ["O Dia", "Jornal O Dia"],
+    "CNN Brasil": ["CNN Brasil"],
+    "UOL": ["UOL"],
+    "SBT News": ["SBT News"],
+    "Band Jornalismo": ["Band Jornalismo", "BandNews", "Band News"],
+}
