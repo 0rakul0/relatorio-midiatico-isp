@@ -129,17 +129,18 @@ As variáveis opcionais mais comuns estão no `.env.example`:
 - `MAX_WEB_SEARCH_FALLBACK_QUERIES` — orçamento de consultas OpenAI Web Search quando o Tavily falha (padrão 12);
 - `MAX_SEMANTIC_REVIEWS`, `MAX_FACT_EXTRACTIONS`, `MAX_CLASSIFICATIONS`, `MAX_CROSS_VALIDATIONS` — orçamento de **itens** de IA por execução;
 - `VALIDATION_BATCH_SIZE`, `CLASSIFICATION_BATCH_SIZE` — tamanho dos lotes enviados à OpenAI (padrão 10). Ex.: 40 itens com lote 10 geram no máximo 4 chamadas na validação e 4 na classificação;
-- `MAX_YOUTUBE_TASKS`, `MAX_YOUTUBE_RESULTS_TOTAL`, `MAX_YOUTUBE_RESULTS_PER_TASK` — limites globais do YouTube.
+- `MAX_YOUTUBE_TASKS`, `MAX_YOUTUBE_RESULTS_TOTAL`, `MAX_YOUTUBE_RESULTS_PER_TASK` — limites globais do YouTube. Os canais prioritários são sempre preservados na checagem; o primeiro controla apenas quantas buscas temáticas adicionais entram.
 
 ## Coleta no YouTube
 
-A coleta no YouTube usa **YouTube Data API v3 quando `YOUTUBE_API_KEY` está configurada**; se a chave estiver ausente, sem quota ou com falha, o sistema recai automaticamente na ferramenta `web_search` da Responses API, restrita a `youtube.com` e `youtu.be`. Portanto, `YOUTUBE_API_KEY` é opcional. O agente pesquisa cada consulta planejada, devolve metadados estruturados dos vídeos e o sistema rejeita localmente qualquer URL que não pertença ao YouTube.
+A coleta no YouTube usa exclusivamente a ferramenta `web_search` da Responses API, restrita a `youtube.com` e `youtu.be`; não depende de `YOUTUBE_API_KEY`. O agente pesquisa cada consulta planejada, devolve metadados estruturados dos vídeos, confirma localmente a identidade dos canais prioritários e rejeita URLs que não pertençam ao YouTube.
 
 Quando Tavily e o agente encontrarem o mesmo vídeo, um agente de validação
 cruzada compara URL, título, canal, data e descrição que cada coletor forneceu.
 O resultado (`CONFIRMED`, `PARTIALLY_CONFIRMED`, `CONFLICT` ou
-`INSUFFICIENT_EVIDENCE`) fica registrado no item, com a justificativa. Ausência
-de metadado no Tavily não é tratada como conflito.
+`INSUFFICIENT_EVIDENCE`) fica registrado no item, com a justificativa e é
+resumido no PDF. Itens com `CONFLICT` são excluídos das tabelas de cobertura e
+dos rankings até revisão. Ausência de metadado no Tavily não é tratada como conflito.
 
 `YOUTUBE_SEARCH_MODEL` é separado de `OPENAI_MODEL` porque a busca web requer
 um modelo com suporte à ferramenta; o padrão é `gpt-5.5`. A mesma separação vale

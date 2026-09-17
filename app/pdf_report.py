@@ -332,6 +332,24 @@ def build_pdf(data: dict) -> bytes:
             )
         )
 
+    cross_validation = metrics.get("youtube_cross_validation", {})
+    compared = sum(int(cross_validation.get(key, 0) or 0) for key in ("confirmed", "partial", "insufficient", "conflicts"))
+    if compared or metrics.get("youtube_conflicts_excluded", 0):
+        story.append(Paragraph("VALIDAÇÃO CRUZADA TAVILY × YOUTUBE", heading))
+        story.append(
+            Paragraph(
+                "<b>{confirmed}</b> confirmado(s), <b>{partial}</b> parcialmente confirmado(s), "
+                "<b>{insufficient}</b> com evidência insuficiente e <b>{conflicts}</b> conflito(s). "
+                "Itens com conflito material foram excluídos das tabelas de cobertura e ranking.".format(
+                    confirmed=cross_validation.get("confirmed", 0),
+                    partial=cross_validation.get("partial", 0),
+                    insufficient=cross_validation.get("insufficient", 0),
+                    conflicts=cross_validation.get("conflicts", 0),
+                ),
+                small,
+            )
+        )
+
     top_channels = metrics.get("top_youtube_channels", [])
     if top_channels:
         story.append(

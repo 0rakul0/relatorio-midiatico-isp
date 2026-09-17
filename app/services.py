@@ -42,19 +42,19 @@ EXECUTION_PROFILE_DEFAULTS = {
         "enable_youtube": True,
         "enable_fact_layer": False,
         "enable_nominal_followup": False,
-        "enable_cross_validation": False,
+        "enable_cross_validation": True,
     },
     "MIDIATICO_COM_FATOS": {
         "enable_youtube": True,
         "enable_fact_layer": True,
         "enable_nominal_followup": False,
-        "enable_cross_validation": False,
+        "enable_cross_validation": True,
     },
     "COMPLETO_NOMINAL": {
         "enable_youtube": True,
         "enable_fact_layer": True,
         "enable_nominal_followup": True,
-        "enable_cross_validation": False,
+        "enable_cross_validation": True,
     },
 }
 
@@ -106,6 +106,43 @@ def is_youtube_host(host: str) -> bool:
 def is_youtube_url(url: str) -> bool:
     parsed = urlparse(url)
     return parsed.scheme in {"http", "https"} and is_youtube_host(parsed.netloc)
+
+
+def normalized_channel_name(value: str | None) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", normalized_text(value or "")))
+
+
+def matches_priority_youtube_channel(channel: str | None, label: str) -> bool:
+    """Exige correspondência conservadora para uma checagem de canal-alvo."""
+    source = normalized_channel_name(channel)
+    if not source:
+        return False
+    canonical_name = next(
+        (name for candidate, name in PRIORITY_YOUTUBE_CHANNELS if candidate == label),
+        "",
+    )
+    aliases = [canonical_name, *(PRIORITY_YOUTUBE_CHANNEL_ALIASES.get(label) or [])]
+    normalized_aliases = {normalized_channel_name(alias) for alias in aliases if alias}
+    if source in normalized_aliases:
+        return True
+    return any(
+        len(alias) >= 8 and (alias in source or source in alias)
+        for alias in normalized_aliases
+    )
+
+
+def youtube_tasks_for_execution(project: Project) -> list:
+    """Prioriza a auditoria de todos os canais antes das buscas temáticas.
+
+    O teto configurável controla as buscas temáticas adicionais, mas nunca pode
+    eliminar um canal prioritário da matriz de checagem.
+    """
+    settings = get_settings()
+    tasks = MediaScout(project.topic, project.topic_profile).youtube_tasks()
+    priority = [task for task in tasks if task.target != "Busca temática"]
+    thematic = [task for task in tasks if task.target == "Busca temática"]
+    task_budget = max(settings.max_youtube_tasks, len(priority))
+    return [*priority, *thematic[: max(0, task_budget - len(priority))]]
 
 
 def canonicalize(url: str) -> str:
@@ -1153,8 +1190,10 @@ def _record_source_provenance(
     snippet: str | None = None,
     channel: str | None = None,
     view_count: int | None = None,
+    query: str | None = None,
+    target: str | None = None,
 ) -> None:
-    """Guarda a evidência mínima de cada coletor sem duplicar o item canônico."""
+    """Acrescenta evidência por coleta, sem apagar o histórico auditável."""
     snapshots = list(item.source_provenance or [])
     snapshot = {
         "source": source,
@@ -1164,8 +1203,11 @@ def _record_source_provenance(
         "snippet": snippet,
         "channel": channel,
         "view_count": view_count,
+        "query": query,
+        "target": target,
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
     }
-    item.source_provenance = [row for row in snapshots if row.get("source") != source] + [snapshot]
+    item.source_provenance = [*snapshots, snapshot]
 
 
 def _site_domain_from_query(query_text: str) -> str | None:
@@ -1318,6 +1360,7 @@ invente datas. Uma lista vazia e preferivel a resultados duvidosos. Retorne apen
                 published_at=item_data.get("published_at"),
                 snippet=guard_content or snippet,
                 channel=source_name,
+                query=query.query,
             )
             if not existing.snippet and snippet:
                 existing.snippet = snippet
@@ -1351,6 +1394,8 @@ invente datas. Uma lista vazia e preferivel a resultados duvidosos. Retorne apen
                     "channel": source_name,
                     "view_count": None,
                     "evidence": evidence,
+                    "query": query.query,
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
                 }
             ],
             discovery_purposes=[query.purpose],
@@ -1636,6 +1681,7 @@ def collect_tavily(
                         published_at=result.get("published_date"),
                         snippet=result.get("content"),
                         channel=None if is_youtube_query else result.get("source"),
+                        query=query.query,
                     )
                     if not existing.content and result.get("raw_content"):
                         existing.content = result.get("raw_content")
@@ -1665,6 +1711,8 @@ def collect_tavily(
                             "published_at": str(result.get("published_date")) if result.get("published_date") else None,
                             "snippet": result.get("content"),
                             "channel": None if is_youtube_query else result.get("source"),
+                            "query": query.query,
+                            "retrieved_at": datetime.now(timezone.utc).isoformat(),
                         }
                     ],
                     discovery_purposes=[query.purpose],
@@ -1776,9 +1824,7 @@ def collect_youtube_api(
     from urllib.parse import urlencode
     from urllib.request import Request, urlopen
 
-    tasks = MediaScout(project.topic, project.topic_profile).youtube_tasks()[
-        : max(1, get_settings().max_youtube_tasks)
-    ]
+    tasks = youtube_tasks_for_execution(project)
     start, end = media_window(project)
     has_window = _valid_search_window(start, end)
     existing_items = {
@@ -1918,9 +1964,7 @@ def collect_youtube_web_search(
     progress_detail: Callable[[str], None] | None = None,
 ) -> int:
     settings = get_settings()
-    tasks = MediaScout(project.topic, project.topic_profile).youtube_tasks()[
-        : max(1, settings.max_youtube_tasks)
-    ]
+    tasks = youtube_tasks_for_execution(project)
     total_limit = max(1, settings.max_youtube_results_total)
     per_task_cap = max(1, settings.max_youtube_results_per_task)
     start, end = media_window(project)
@@ -1970,7 +2014,8 @@ preferível a um resultado duvidoso."""
     }
     added = 0
     for task_index, task in enumerate(tasks, start=1):
-        if added >= total_limit:
+        is_priority_task = task.target != "Busca temática"
+        if added >= total_limit and not is_priority_task:
             if progress_detail:
                 progress_detail(f"Limite global do YouTube ({total_limit}) atingido")
             break
@@ -1995,14 +2040,18 @@ preferível a um resultado duvidoso."""
         )
         task_limit = min(
             settings.youtube_web_search_max_results,
-            per_task_cap,
-            max(0, total_limit - added),
+            1 if is_priority_task else per_task_cap,
+            max(1 if is_priority_task else 0, total_limit - added),
         )
         for video in result["videos"][:task_limit]:
             if added >= total_limit:
                 break
             url = video["url"].strip()
             if not is_youtube_url(url):
+                continue
+            if is_priority_task and not matches_priority_youtube_channel(video.get("channel"), task.target):
+                # Mencionar o canal no título/descrição não prova que o vídeo
+                # foi publicado por ele; sem a identidade do canal, descarta.
                 continue
             if not _collection_guard(
                 project,
@@ -2029,6 +2078,8 @@ preferível a um resultado duvidoso."""
                     snippet=video["description"],
                     channel=video["channel"],
                     view_count=view_count,
+                    query=task.query,
+                    target=task.target,
                 )
                 existing.title = video["title"] or existing.title
                 existing.published_at = result_publication_date(video["published_at"]) or existing.published_at
@@ -2062,6 +2113,9 @@ preferível a um resultado duvidoso."""
                         "snippet": description,
                         "channel": video["channel"],
                         "view_count": view_count,
+                        "query": task.query,
+                        "target": task.target,
+                        "retrieved_at": datetime.now(timezone.utc).isoformat(),
                     }
                 ],
                 discovery_purposes=["MEDIA_REPERCUSSION"],
@@ -2136,20 +2190,6 @@ def collect_media_agents(
             if not local_project:
                 raise RuntimeError("Projeto não encontrado")
 
-            api_error = None
-            if get_settings().youtube_api_key:
-                try:
-                    collected = collect_youtube_api(
-                        session, local_project, cancel_check=cancel_check,
-                        progress_detail=youtube_progress,
-                    )
-                    return {"status": "COMPLETED", "collected": collected, "error": None, "provider": "youtube_api"}
-                except RuntimeError as exc:
-                    session.rollback()
-                    api_error = str(exc)[:1000]
-                    if youtube_progress:
-                        youtube_progress("YouTube API indisponível; usando fallback OpenAI Web Search")
-
             if llm_is_configured():
                 try:
                     collected = collect_youtube_web_search(
@@ -2157,18 +2197,14 @@ def collect_media_agents(
                         progress_detail=youtube_progress,
                     )
                     return {
-                        "status": "FALLBACK_WEB_SEARCH" if api_error or not get_settings().youtube_api_key else "COMPLETED",
-                        "collected": collected, "error": api_error, "provider": "openai_web_search",
+                        "status": "COMPLETED",
+                        "collected": collected, "error": None, "provider": "openai_web_search",
                     }
                 except RuntimeError as exc:
                     session.rollback()
-                    web_error = str(exc)[:1000]
-                    detail = web_error if not api_error else f"YouTube API: {api_error} | Web Search: {web_error}"
-                    return {"status": "UNAVAILABLE", "collected": 0, "error": detail[:1000], "provider": "openai_web_search"}
+                    return {"status": "UNAVAILABLE", "collected": 0, "error": str(exc)[:1000], "provider": "openai_web_search"}
 
-            if api_error:
-                return {"status": "UNAVAILABLE", "collected": 0, "error": f"{api_error}. OPENAI_API_KEY não configurada para fallback.", "provider": None}
-            return {"status": "NOT_CONFIGURED", "collected": 0, "error": "Nem YOUTUBE_API_KEY nem OPENAI_API_KEY estão configuradas.", "provider": None}
+            return {"status": "NOT_CONFIGURED", "collected": 0, "error": "OPENAI_API_KEY não configurada para a pesquisa no YouTube.", "provider": None}
         finally:
             session.close()
 
@@ -3062,46 +3098,30 @@ def metrics(db: Session, project_id: int) -> dict:
             if project else 0
         ),
         "youtube_tasks": (
-            min(len(MediaScout(project.topic, project.topic_profile).youtube_tasks()), settings.max_youtube_tasks)
+            len(youtube_tasks_for_execution(project))
             if project else 0
         ),
         "platforms": platforms,
     }
 
-    # Considera todo item validado cujo domínio seja YouTube, independentemente
-    # do coletor que o encontrou (API oficial, OpenAI Web Search ou Tavily).
+    # Conflitos materiais da validação cruzada não entram nos rankings nem são
+    # apresentados como cobertura auditável até que alguém os revise.
     youtube_candidates = db.scalars(
         select(MediaItem).where(
             MediaItem.project_id == project_id,
             MediaItem.status == "VALID",
         )
     ).all()
-    youtube_items = [item for item in youtube_candidates if is_youtube_host(item.domain or "")]
-
-    def normalize_channel(value: str | None) -> str:
-        return " ".join(re.findall(r"[a-z0-9]+", normalized_text(value or "")))
-
-    def channel_matches(source_name: str | None, label: str, canonical_name: str) -> bool:
-        source = normalize_channel(source_name)
-        if not source:
-            return False
-        aliases = [canonical_name, *(PRIORITY_YOUTUBE_CHANNEL_ALIASES.get(label) or [])]
-        normalized_aliases = {normalize_channel(alias) for alias in aliases if alias}
-        if source in normalized_aliases:
-            return True
-        # Aceita variantes como "Instituto de Segurança Pública - ISP RJ" sem
-        # transformar nomes curtos (ex.: g1, UOL) em correspondências permissivas.
-        for alias in normalized_aliases:
-            if len(alias) >= 8 and (alias in source or source in alias):
-                return True
-        return False
+    raw_youtube_items = [item for item in youtube_candidates if is_youtube_host(item.domain or "")]
+    youtube_conflicts = [item for item in raw_youtube_items if item.cross_validation_status == "CONFLICT"]
+    youtube_items = [item for item in raw_youtube_items if item.cross_validation_status != "CONFLICT"]
 
     channels: dict[str, dict] = {}
     priority_channel_checks = []
-    for label, channel_name in PRIORITY_YOUTUBE_CHANNELS:
+    for label, _channel_name in PRIORITY_YOUTUBE_CHANNELS:
         matching = [
             item for item in youtube_items
-            if channel_matches(item.source_name, label, channel_name)
+            if matches_priority_youtube_channel(item.source_name, label)
         ]
         if matching:
             available_views = [item.view_count for item in matching if item.view_count is not None]
@@ -3116,6 +3136,18 @@ def metrics(db: Session, project_id: int) -> dict:
                     "lead_title": lead.title,
                     "lead_url": lead.url,
                 }
+            )
+        elif youtube_disabled:
+            priority_channel_checks.append(
+                {"channel": label, "videos": 0, "views": None, "result": "coleta desativada para este perfil", "lead_url": ""}
+            )
+        elif youtube_unavailable or youtube_status == "NOT_CONFIGURED":
+            priority_channel_checks.append(
+                {"channel": label, "videos": 0, "views": None, "result": "coleta indisponível nesta execução", "lead_url": ""}
+            )
+        else:
+            priority_channel_checks.append(
+                {"channel": label, "videos": 0, "views": None, "result": "sem item validado na amostra", "lead_url": ""}
             )
 
     for item in youtube_items:
@@ -3229,12 +3261,19 @@ def metrics(db: Session, project_id: int) -> dict:
         "portal_checks": portal_checks,
         "media_scout": scout_status,
         "youtube_videos": len(youtube_items),
+        "youtube_conflicts_excluded": len(youtube_conflicts),
         "youtube_collection_status": youtube_status,
         "youtube_collection_note": youtube_note,
         "youtube_collection_error": youtube_error,
         "youtube_priority_channel_checks": priority_channel_checks,
         "top_youtube_channels": top_youtube_channels,
         "top_youtube_videos": top_youtube_videos,
+        "youtube_cross_validation": {
+            "confirmed": sum(item.cross_validation_status == "CONFIRMED" for item in raw_youtube_items),
+            "partial": sum(item.cross_validation_status == "PARTIALLY_CONFIRMED" for item in raw_youtube_items),
+            "insufficient": sum(item.cross_validation_status == "INSUFFICIENT_EVIDENCE" for item in raw_youtube_items),
+            "conflicts": len(youtube_conflicts),
+        },
         "top_reach_contents": top_reach_contents,
         "top_reach_methodology": (
             "Ranking considera apenas itens validados com métrica numérica de alcance disponível no corpus; "
@@ -3805,4 +3844,3 @@ def run_full_methodology(
         "qa": qa,
         **drafted,
     }
-

@@ -10,12 +10,12 @@ class Settings(BaseSettings):
     # A v2.2 usa somente OpenAI. Mantemos um único modelo configurável.
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
-    # Modelo usado pelo agente de pesquisa no YouTube via Responses API.
-    # Opcional: YouTube Data API v3. Se ausente/indisponível, o agente usa OpenAI Web Search.
+    # Legado de instalações anteriores; a execução atual não consome a API do
+    # YouTube e sempre usa OpenAI Web Search.
     youtube_api_key: str | None = None
-    youtube_search_model: str = "gpt-5-mini"
+    youtube_search_model: str = "gpt-5.5"
     # Modelo usado pelo fallback geral de pesquisa web (sites/portais).
-    web_search_model: str = "gpt-5-mini"
+    web_search_model: str = "gpt-5.5"
     # Compatibilidade: limite bruto que o provedor pode devolver por tarefa.
     youtube_web_search_max_results: int = 15
 
@@ -62,7 +62,9 @@ class Settings(BaseSettings):
 
     # Limites globais do YouTube. Evitam que N tarefas x M resultados
     # criem centenas de itens antes da validacao.
-    max_youtube_tasks: int = 8
+    # Canais prioritários são sempre verificados; o padrão deixa espaço para
+    # os nove canais e algumas buscas temáticas.
+    max_youtube_tasks: int = 12
     max_youtube_results_total: int = 20
     max_youtube_results_per_task: int = 5
 

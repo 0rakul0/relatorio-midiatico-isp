@@ -1,4 +1,7 @@
 from app.media_scout import MediaScout
+from app.source_registry import PRIORITY_YOUTUBE_CHANNELS
+from app.services import youtube_tasks_for_execution
+from types import SimpleNamespace
 from app.topic_profile import heuristic_topic_profile
 
 
@@ -38,3 +41,15 @@ def test_product_topic_youtube_channel_queries_keep_product_name():
     channel_tasks = [task for task in tasks if task.target != "Busca temática"]
     assert channel_tasks
     assert all("Dossiê Mulher" in task.query for task in channel_tasks)
+
+
+def test_youtube_execution_preserves_every_priority_channel_when_budget_is_lower(monkeypatch):
+    from app import services
+
+    monkeypatch.setattr(services, "get_settings", lambda: SimpleNamespace(max_youtube_tasks=1))
+    project = SimpleNamespace(
+        topic="Dossiê Mulher",
+        topic_profile=heuristic_topic_profile("Dossiê Mulher"),
+    )
+    tasks = youtube_tasks_for_execution(project)
+    assert [task.target for task in tasks] == [label for label, _ in PRIORITY_YOUTUBE_CHANNELS]
