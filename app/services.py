@@ -383,9 +383,9 @@ def discover_project_profile(db: Session, project: Project) -> dict:
     sources: list[dict] = []
     seen: set[str] = set()
 
-    # O primeiro request real funciona como teste do Tavily. Se houver erro
-    # duro de plano/quota/autenticacao, o restante da descoberta vai direto
-    # para DuckDuckGo, sem consumir OpenAI Web Search.
+    # Cadeia de descoberta de produto: DuckDuckGo -> Tavily.
+    # Cada consulta é uma intenção; só avançamos ao próximo provedor quando o
+    # anterior não retorna nenhuma fonte nova e materialmente utilizável.
     tavily_client = None
     if tavily_key:
         try:
@@ -403,17 +403,65 @@ def discover_project_profile(db: Session, project: Project) -> dict:
         "search_budget": search_budget,
         "external_search_calls": 0,
         "profile_analysis_calls": 0,
+        "duckduckgo_attempts": 0,
+        "duckduckgo_successes": 0,
+        "duckduckgo_results": 0,
         "tavily_attempts": 0,
         "tavily_successes": 0,
         "tavily_circuit_open": bool(tavily_circuit_open),
-        "duckduckgo_queries": 0,
-        "duckduckgo_results": 0,
     }
 
     for query in searches:
-        if discovery_stats["external_search_calls"] >= search_budget:
-            break
+        before_query = len(sources)
+        site_domain = _site_domain_from_query(query)
 
+        # 1) DuckDuckGo
+        if duckduckgo_available():
+            try:
+                discovery_stats["external_search_calls"] += 1
+                discovery_stats["duckduckgo_attempts"] += 1
+                ddg_rows = duckduckgo_text(
+                    query,
+                    max_results=5,
+                    region=settings.duckduckgo_region,
+                    safesearch=settings.duckduckgo_safesearch,
+                    retries=settings.duckduckgo_max_retries,
+                    retry_base_seconds=settings.duckduckgo_retry_base_seconds,
+                )
+                for result in ddg_rows:
+                    url = (result.get("url") or "").strip()
+                    if not url or url in seen:
+                        continue
+                    host = urlparse(url).netloc.lower().split(":")[0]
+                    if site_domain and not (host == site_domain or host.endswith("." + site_domain)):
+                        continue
+                    seen.add(url)
+                    content = None
+                    if settings.duckduckgo_fetch_pages:
+                        content = fetch_url_text(
+                            url,
+                            max_chars=min(settings.duckduckgo_fetch_max_chars, 12000),
+                            timeout=settings.duckduckgo_fetch_timeout_seconds,
+                        )
+                    sources.append(
+                        {
+                            "title": result.get("title") or "Sem titulo",
+                            "url": url,
+                            "content": (content or result.get("snippet") or "")[:3500],
+                            "search_provider": result.get("provider") or "duckduckgo_text",
+                            "search_query": query,
+                        }
+                    )
+                    discovery_stats["duckduckgo_results"] += 1
+                if len(sources) > before_query:
+                    discovery_stats["duckduckgo_successes"] += 1
+                    if len(sources) >= 10:
+                        break
+                    continue
+            except DuckDuckGoUnavailable:
+                pass
+
+        # 2) Tavily
         if not tavily_circuit_open and tavily_client is not None:
             discovery_stats["external_search_calls"] += 1
             discovery_stats["tavily_attempts"] += 1
@@ -425,7 +473,6 @@ def discover_project_profile(db: Session, project: Project) -> dict:
                     search_depth="advanced",
                     timeout=15,
                 )
-                discovery_stats["tavily_successes"] += 1
                 for result in response.get("results", []):
                     url = (result.get("url") or "").strip()
                     if not url or url in seen:
@@ -440,60 +487,16 @@ def discover_project_profile(db: Session, project: Project) -> dict:
                             "search_query": query,
                         }
                     )
+                if len(sources) > before_query:
+                    discovery_stats["tavily_successes"] += 1
+                    if len(sources) >= 10:
+                        break
+                    continue
             except Exception as exc:
                 if _is_tavily_hard_failure(exc):
                     tavily_circuit_open = True
                     tavily_disable_reason = str(exc)[:1000]
                     discovery_stats["tavily_circuit_open"] = True
-                else:
-                    # Falha transitoria: esta intencao ainda pode ser tentada no DDG.
-                    tavily_circuit_open = False
-
-            # Tavily respondeu com itens; nao duplicamos a mesma consulta no DDG.
-            if any(source.get("search_query") == query for source in sources):
-                if len(sources) >= 10:
-                    break
-                continue
-
-        try:
-            discovery_stats["external_search_calls"] += 1
-            discovery_stats["duckduckgo_queries"] += 1
-            ddg_rows = duckduckgo_text(
-                query,
-                max_results=5,
-                region=settings.duckduckgo_region,
-                safesearch=settings.duckduckgo_safesearch,
-                retries=settings.duckduckgo_max_retries,
-                retry_base_seconds=settings.duckduckgo_retry_base_seconds,
-            )
-            site_domain = _site_domain_from_query(query)
-            for result in ddg_rows:
-                url = (result.get("url") or "").strip()
-                if not url or url in seen:
-                    continue
-                host = urlparse(url).netloc.lower().split(":")[0]
-                if site_domain and not (host == site_domain or host.endswith("." + site_domain)):
-                    continue
-                seen.add(url)
-                content = None
-                if settings.duckduckgo_fetch_pages:
-                    content = fetch_url_text(
-                        url,
-                        max_chars=min(settings.duckduckgo_fetch_max_chars, 12000),
-                        timeout=settings.duckduckgo_fetch_timeout_seconds,
-                    )
-                sources.append(
-                    {
-                        "title": result.get("title") or "Sem titulo",
-                        "url": url,
-                        "content": (content or result.get("snippet") or "")[:3500],
-                        "search_provider": result.get("provider") or "duckduckgo_text",
-                        "search_query": query,
-                    }
-                )
-                discovery_stats["duckduckgo_results"] += 1
-        except DuckDuckGoUnavailable:
-            pass
 
         if len(sources) >= 10:
             break
@@ -1391,7 +1394,7 @@ def _record_source_provenance(
 
 
 def _site_domain_from_query(query_text: str) -> str | None:
-    """Extrai ``site:dominio`` para reaproveitar a intenção no Web Search."""
+    """Extrai ``site:dominio`` para reaproveitar a intenção no DuckDuckGo."""
     match = re.search(r"(?:^|\s)site:([^\s]+)", query_text or "", flags=re.IGNORECASE)
     if not match:
         return None
@@ -1565,6 +1568,157 @@ def _collect_duckduckgo_query(
     }
 
 
+def _collect_tavily_query(
+    db: Session,
+    project: Project,
+    query: SearchQuery,
+    existing_items: dict[str, MediaItem],
+    client,
+    *,
+    max_results: int,
+    cancel_check: Callable[[], None] | None = None,
+    progress_detail: Callable[[str], None] | None = None,
+) -> dict[str, int]:
+    """Executa uma única consulta Tavily como segundo provedor da cadeia."""
+    if client is None:
+        raise RuntimeError("TAVILY_API_KEY não configurada")
+    if cancel_check:
+        cancel_check()
+
+    start_date, end_date = query_window(project, query)
+    has_window = _valid_search_window(start_date, end_date)
+    is_youtube_query = query.kind == "youtube"
+
+    params: dict = {
+        "query": query.query,
+        "max_results": max_results,
+        "include_raw_content": "text",
+        "topic": "general" if is_youtube_query else (
+            "news" if query.purpose == "MEDIA_REPERCUSSION" else "general"
+        ),
+        "search_depth": "advanced" if is_youtube_query or query.purpose != "MEDIA_REPERCUSSION" else "basic",
+    }
+    if is_youtube_query:
+        params["include_domains"] = ["youtube.com", "youtu.be"]
+    if has_window:
+        params["start_date"] = start_date.isoformat()
+        params["end_date"] = end_date.isoformat()
+
+    if progress_detail:
+        progress_detail(f"Tavily: {query.query[:100]}")
+
+    try:
+        response = client.search(**params)
+    except Exception as exc:
+        message = str(exc).casefold()
+        date_error = has_window and any(
+            token in message
+            for token in ("start_date", "end_date", "date cannot", "date must", "same")
+        )
+        if not date_error:
+            raise
+        retry_params = dict(params)
+        retry_params.pop("start_date", None)
+        retry_params.pop("end_date", None)
+        if progress_detail:
+            progress_detail("Tavily rejeitou a janela; repetindo sem filtro temporal")
+        response = client.search(**retry_params)
+
+    if isinstance(response, dict) and response.get("error"):
+        raise RuntimeError(str(response.get("error")))
+
+    returned = 0
+    added = 0
+    rejected = 0
+    duplicate_hits = 0
+
+    for result in (response or {}).get("results", [])[:max_results]:
+        returned += 1
+        url = (result.get("url") or "").strip()
+        if not url:
+            rejected += 1
+            continue
+        if is_youtube_query and not is_youtube_url(url):
+            rejected += 1
+            continue
+
+        if query.purpose == "MEDIA_REPERCUSSION" and not _collection_guard(
+            project,
+            title=result.get("title"),
+            snippet=result.get("content"),
+            content=result.get("raw_content"),
+        ):
+            rejected += 1
+            continue
+
+        canonical = canonicalize(url)
+        existing = existing_items.get(canonical)
+        if existing:
+            duplicate_hits += 1
+            _append_purpose(existing, query.purpose)
+            _record_source_provenance(
+                existing,
+                source="tavily",
+                title=result.get("title"),
+                url=url,
+                published_at=result.get("published_date"),
+                snippet=result.get("content"),
+                channel=None if is_youtube_query else result.get("source"),
+                query=query.query,
+            )
+            if not existing.content and result.get("raw_content"):
+                existing.content = result.get("raw_content")
+            if not existing.snippet and result.get("content"):
+                existing.snippet = result.get("content")
+            if not existing.published_at:
+                existing.published_at = result_publication_date(result.get("published_date"))
+            continue
+
+        row = MediaItem(
+            project_id=project.id,
+            query_id=query.id,
+            title=result.get("title") or "Sem titulo",
+            url=url,
+            canonical_url=canonical,
+            domain=urlparse(url).netloc.lower(),
+            published_at=result_publication_date(result.get("published_date")),
+            snippet=result.get("content"),
+            content=result.get("raw_content"),
+            source_name=None if is_youtube_query else result.get("source"),
+            search_source="tavily",
+            source_provenance=[
+                {
+                    "source": "tavily",
+                    "title": result.get("title"),
+                    "url": url,
+                    "published_at": str(result.get("published_date")) if result.get("published_date") else None,
+                    "snippet": result.get("content"),
+                    "channel": None if is_youtube_query else result.get("source"),
+                    "query": query.query,
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ],
+            discovery_purposes=[query.purpose],
+        )
+        db.add(row)
+        existing_items[canonical] = row
+        added += 1
+
+    if progress_detail:
+        progress_detail(
+            "Tavily concluido: "
+            f"{returned} retornado(s), {added} novo(s), {duplicate_hits} duplicado(s), "
+            f"{rejected} rejeitado(s)"
+        )
+
+    return {
+        "added": added,
+        "returned": returned,
+        "rejected": rejected,
+        "duplicates": duplicate_hits,
+    }
+
+
 def _is_tavily_hard_failure(exc: Exception | str) -> bool:
     """Falhas que tornam inutil insistir no Tavily durante a mesma execucao."""
     status_code = getattr(exc, "status_code", None) or getattr(exc, "status", None)
@@ -1606,29 +1760,27 @@ def collect_tavily(
     progress_detail: Callable[[str], None] | None = None,
     stats: dict[str, int] | None = None,
 ) -> int:
-    """Coleta web com Tavily primario e DuckDuckGo como fallback independente.
+    """Coleta web com prioridade DuckDuckGo -> Tavily.
 
-    O Tavily continua sendo usado enquanto responde normalmente. Uma falha dura
-    de plano/quota/autenticacao abre o circuit breaker e envia as consultas
-    restantes diretamente ao DuckDuckGo. Falhas transitorias usam DuckDuckGo
-    apenas naquela consulta e permitem nova tentativa do Tavily na seguinte.
+    Cada consulta tenta primeiro o DuckDuckGo. Se ele não produzir nenhum
+    resultado utilizável (novo ou duplicado válido), tenta o Tavily. O Web
+    Search do modelo é usado somente quando os dois provedores anteriores não
+    conseguem produzir um resultado utilizável para aquela consulta.
     """
     settings = get_settings()
-    tavily_key = settings.tavily_api_key
 
-    client = None
-    if tavily_key:
+    tavily_client = None
+    if settings.tavily_api_key:
         try:
             from tavily import TavilyClient
-
-            client = TavilyClient(api_key=tavily_key)
+            tavily_client = TavilyClient(api_key=settings.tavily_api_key)
         except Exception:
-            client = None
+            tavily_client = None
 
-    if client is None and not duckduckgo_available():
+    if not duckduckgo_available() and tavily_client is None:
         raise RuntimeError(
-            "Tavily nao esta configurado e DuckDuckGo nao esta instalado. "
-            "Execute `uv add ddgs`."
+            "Nenhum provedor de pesquisa está disponível. Instale `ddgs` ou configure "
+            "TAVILY_API_KEY."
         )
 
     project = db.get(Project, project_id)
@@ -1644,70 +1796,45 @@ def collect_tavily(
         .where(SearchQuery.project_id == project_id, SearchQuery.executed_at.is_(None))
         .order_by(SearchQuery.priority.asc(), SearchQuery.id.asc())
     ).all()
-
     queries = queries[: max(1, settings.max_search_queries)]
+
     global_limit = max(1, settings.max_search_results)
     per_query_cap = max(1, settings.max_results_per_query)
 
     counters = {
         "queries_total": len(queries),
         "queries_successful": 0,
+        "duckduckgo_queries": 0,
+        "duckduckgo_results": 0,
+        "duckduckgo_added": 0,
+        "duckduckgo_rejected": 0,
+        "duckduckgo_zero_usable": 0,
         "tavily_attempts": 0,
         "tavily_queries": 0,
+        "tavily_results": 0,
+        "tavily_added": 0,
+        "tavily_rejected": 0,
         "tavily_hard_failures": 0,
         "tavily_circuit_breaker_trips": 0,
-        "tavily_switched_at_query": 0,
-        "duckduckgo_fallback_queries": 0,
-        "duckduckgo_fallback_results": 0,
-        "duckduckgo_fallback_added": 0,
-        "duckduckgo_fallback_rejected": 0,
-        "duckduckgo_fallback_zero_accept": 0,
         "failed_queries": 0,
         "global_result_limit": global_limit,
         "global_limit_reached": 0,
-        "topic_guard_rejected": 0,
     }
+
     added = 0
     errors: list[str] = []
     total_queries = len(queries)
+    tavily_circuit_open = tavily_client is None
+    tavily_disable_reason = "TAVILY_API_KEY nao configurada" if tavily_client is None else None
 
-    tavily_circuit_open = client is None
-    tavily_disable_reason = "TAVILY_API_KEY nao configurada" if client is None else None
-
-    configured_budget = int(settings.max_duckduckgo_fallback_queries)
-    fallback_budget = (
-        max(1, settings.max_search_queries)
-        if configured_budget <= 0
-        else max(1, min(configured_budget, settings.max_search_queries))
-    )
-
-    def open_tavily_circuit(reason: str, query_index: int) -> None:
-        nonlocal tavily_circuit_open, tavily_disable_reason, fallback_budget
-        if tavily_circuit_open and tavily_disable_reason:
-            return
-        tavily_circuit_open = True
-        tavily_disable_reason = reason[:1000]
-        counters["tavily_hard_failures"] += 1
-        counters["tavily_circuit_breaker_trips"] += 1
-        counters["tavily_switched_at_query"] = query_index
-        fallback_budget = max(fallback_budget, settings.max_search_queries)
-        if progress_detail:
-            progress_detail(
-                "Tavily respondeu com bloqueio de plano/quota/autenticacao. "
-                "Circuit breaker aberto: as proximas consultas irao direto para DuckDuckGo."
-            )
+    def mark_query_done(query: SearchQuery) -> None:
+        query.executed_at = datetime.now(timezone.utc)
+        counters["queries_successful"] += 1
+        db.commit()
 
     for query_index, query in enumerate(queries, start=1):
         if cancel_check:
             cancel_check()
-
-        start_date, end_date = query_window(project, query)
-        has_window = _valid_search_window(start_date, end_date)
-        mode = (
-            f"janela {start_date.isoformat()} a {end_date.isoformat()}"
-            if has_window
-            else "busca tematica sem filtro temporal"
-        )
 
         remaining_global = global_limit - added
         if remaining_global <= 0:
@@ -1721,157 +1848,16 @@ def collect_tavily(
         queries_left = max(1, total_queries - query_index + 1)
         fair_share = max(1, math.ceil(remaining_global / queries_left))
         query_result_limit = min(per_query_cap, fair_share, remaining_global)
+        provider_errors: list[str] = []
 
-        response = None
-        tavily_error: str | None = None
-
-        if not tavily_circuit_open and client is not None:
-            if progress_detail:
-                progress_detail(
-                    f"Consulta {query_index}/{total_queries} via Tavily ({mode}): {query.query[:100]}"
-                )
-
-            is_youtube_query = query.kind == "youtube"
-            params: dict = {
-                "query": query.query,
-                "max_results": query_result_limit,
-                "include_raw_content": "text",
-                "topic": "general" if is_youtube_query else (
-                    "news" if query.purpose == "MEDIA_REPERCUSSION" else "general"
-                ),
-                "search_depth": "advanced" if is_youtube_query or query.purpose != "MEDIA_REPERCUSSION" else "basic",
-            }
-            if is_youtube_query:
-                params["include_domains"] = ["youtube.com", "youtu.be"]
-            if has_window:
-                params["start_date"] = start_date.isoformat()
-                params["end_date"] = end_date.isoformat()
-
-            counters["tavily_attempts"] += 1
-            try:
-                response = client.search(**params)
-                counters["tavily_queries"] += 1
-            except Exception as exc:
-                tavily_error = str(exc)
-                if _is_tavily_hard_failure(exc):
-                    open_tavily_circuit(tavily_error, query_index)
-                else:
-                    message = tavily_error.casefold()
-                    date_error = has_window and any(
-                        token in message
-                        for token in ("start_date", "end_date", "date cannot", "date must", "same")
-                    )
-                    if date_error:
-                        retry_params = dict(params)
-                        retry_params.pop("start_date", None)
-                        retry_params.pop("end_date", None)
-                        if progress_detail:
-                            progress_detail(
-                                f"Consulta {query_index}/{total_queries}: Tavily rejeitou a janela; "
-                                "repetindo sem filtro temporal"
-                            )
-                        counters["tavily_attempts"] += 1
-                        try:
-                            response = client.search(**retry_params)
-                            counters["tavily_queries"] += 1
-                        except Exception as retry_exc:
-                            tavily_error = str(retry_exc)
-                            if _is_tavily_hard_failure(retry_exc):
-                                open_tavily_circuit(tavily_error, query_index)
-        else:
-            tavily_error = tavily_disable_reason or "Tavily desativado nesta execucao"
+        # 1) DuckDuckGo - provedor principal.
+        if duckduckgo_available():
             if progress_detail:
                 progress_detail(
                     f"Consulta {query_index}/{total_queries} via DuckDuckGo: {query.query[:100]}"
                 )
-
-        if isinstance(response, dict) and response.get("error"):
-            tavily_error = str(response.get("error"))
-            if _is_tavily_hard_failure(tavily_error):
-                open_tavily_circuit(tavily_error, query_index)
-            response = None
-
-        if response is not None:
-            is_youtube_query = query.kind == "youtube"
-            for result in response.get("results", [])[:query_result_limit]:
-                url = result.get("url")
-                if not url:
-                    continue
-                if query.purpose == "MEDIA_REPERCUSSION" and not _collection_guard(
-                    project,
-                    title=result.get("title"),
-                    snippet=result.get("content"),
-                    content=result.get("raw_content"),
-                ):
-                    counters["topic_guard_rejected"] += 1
-                    continue
-
-                canonical = canonicalize(url)
-                existing = existing_items.get(canonical)
-                if existing:
-                    _append_purpose(existing, query.purpose)
-                    _record_source_provenance(
-                        existing,
-                        source="tavily",
-                        title=result.get("title"),
-                        url=url,
-                        published_at=result.get("published_date"),
-                        snippet=result.get("content"),
-                        channel=None if is_youtube_query else result.get("source"),
-                        query=query.query,
-                    )
-                    if not existing.content and result.get("raw_content"):
-                        existing.content = result.get("raw_content")
-                    if not existing.snippet and result.get("content"):
-                        existing.snippet = result.get("content")
-                    if not existing.published_at:
-                        existing.published_at = result_publication_date(result.get("published_date"))
-                    continue
-
-                row = MediaItem(
-                    project_id=project_id,
-                    query_id=query.id,
-                    title=result.get("title") or "Sem titulo",
-                    url=url,
-                    canonical_url=canonical,
-                    domain=urlparse(url).netloc.lower(),
-                    published_at=result_publication_date(result.get("published_date")),
-                    snippet=result.get("content"),
-                    content=result.get("raw_content"),
-                    source_name=None if is_youtube_query else result.get("source"),
-                    search_source="tavily",
-                    source_provenance=[
-                        {
-                            "source": "tavily",
-                            "title": result.get("title"),
-                            "url": url,
-                            "published_at": str(result.get("published_date")) if result.get("published_date") else None,
-                            "snippet": result.get("content"),
-                            "channel": None if is_youtube_query else result.get("source"),
-                            "query": query.query,
-                            "retrieved_at": datetime.now(timezone.utc).isoformat(),
-                        }
-                    ],
-                    discovery_purposes=[query.purpose],
-                )
-                db.add(row)
-                existing_items[canonical] = row
-                added += 1
-
-            query.executed_at = datetime.now(timezone.utc)
-            counters["queries_successful"] += 1
-            db.commit()
-            continue
-
-        if counters["duckduckgo_fallback_queries"] < fallback_budget:
-            if progress_detail and not tavily_circuit_open:
-                reason = (tavily_error or "falha nao especificada")[:160]
-                progress_detail(
-                    f"Consulta {query_index}/{total_queries}: Tavily falhou ({reason}); "
-                    "DuckDuckGo assumindo esta consulta"
-                )
             try:
-                fallback_result = _collect_duckduckgo_query(
+                ddg_result = _collect_duckduckgo_query(
                     db,
                     project,
                     query,
@@ -1880,39 +1866,82 @@ def collect_tavily(
                     cancel_check=cancel_check,
                     progress_detail=progress_detail,
                 )
-                fallback_added = int(fallback_result.get("added", 0))
-                added += fallback_added
-                counters["duckduckgo_fallback_queries"] += 1
-                counters["duckduckgo_fallback_results"] += int(fallback_result.get("returned", 0))
-                counters["duckduckgo_fallback_added"] += fallback_added
-                counters["duckduckgo_fallback_rejected"] += int(fallback_result.get("rejected", 0))
-                if fallback_added == 0:
-                    counters["duckduckgo_fallback_zero_accept"] += 1
-                query.executed_at = datetime.now(timezone.utc)
-                counters["queries_successful"] += 1
-                db.commit()
-                continue
-            except DuckDuckGoUnavailable as ddg_exc:
-                db.rollback()
-                counters["duckduckgo_fallback_queries"] += 1
-                counters["failed_queries"] += 1
-                errors.append(
-                    f"{query.query}: DuckDuckGo={ddg_exc}"
-                    + (f" | Tavily={tavily_error}" if tavily_error else "")
-                )
+                counters["duckduckgo_queries"] += 1
+                counters["duckduckgo_results"] += int(ddg_result.get("returned", 0))
+                counters["duckduckgo_added"] += int(ddg_result.get("added", 0))
+                counters["duckduckgo_rejected"] += int(ddg_result.get("rejected", 0))
+                ddg_added = int(ddg_result.get("added", 0))
+                added += ddg_added
+                ddg_usable = ddg_added + int(ddg_result.get("duplicates", 0))
+                if ddg_usable > 0:
+                    mark_query_done(query)
+                    continue
+                counters["duckduckgo_zero_usable"] += 1
                 if progress_detail:
-                    progress_detail(
-                        f"Consulta {query_index}/{total_queries}: DuckDuckGo falhou; seguindo para a proxima"
-                    )
-                continue
+                    progress_detail("DuckDuckGo não trouxe resultado utilizável; tentando Tavily")
+            except Exception as exc:
+                # DDGS pode lançar tipos variados conforme backend/proxy.
+                db.rollback()
+                existing_items = {
+                    item.canonical_url: item
+                    for item in db.scalars(select(MediaItem).where(MediaItem.project_id == project_id)).all()
+                }
+                counters["duckduckgo_queries"] += 1
+                provider_errors.append(f"DuckDuckGo={exc}")
+                if progress_detail:
+                    progress_detail(f"DuckDuckGo falhou ({str(exc)[:140]}); tentando Tavily")
+        else:
+            provider_errors.append("DuckDuckGo=ddgs não instalado")
+
+        # 2) Tavily - primeiro fallback.
+        tavily_usable = 0
+        if not tavily_circuit_open and tavily_client is not None:
+            counters["tavily_attempts"] += 1
+            try:
+                tavily_result = _collect_tavily_query(
+                    db,
+                    project,
+                    query,
+                    existing_items,
+                    tavily_client,
+                    max_results=query_result_limit,
+                    cancel_check=cancel_check,
+                    progress_detail=progress_detail,
+                )
+                counters["tavily_queries"] += 1
+                counters["tavily_results"] += int(tavily_result.get("returned", 0))
+                counters["tavily_added"] += int(tavily_result.get("added", 0))
+                counters["tavily_rejected"] += int(tavily_result.get("rejected", 0))
+                tavily_added = int(tavily_result.get("added", 0))
+                added += tavily_added
+                tavily_usable = tavily_added + int(tavily_result.get("duplicates", 0))
+                if tavily_usable > 0:
+                    mark_query_done(query)
+                    continue
+                if progress_detail:
+                    progress_detail("Tavily também não trouxe resultado utilizável")
+            except Exception as exc:
+                db.rollback()
+                existing_items = {
+                    item.canonical_url: item
+                    for item in db.scalars(select(MediaItem).where(MediaItem.project_id == project_id)).all()
+                }
+                provider_errors.append(f"Tavily={exc}")
+                if _is_tavily_hard_failure(exc):
+                    tavily_circuit_open = True
+                    tavily_disable_reason = str(exc)[:1000]
+                    counters["tavily_hard_failures"] += 1
+                    counters["tavily_circuit_breaker_trips"] += 1
+                if progress_detail:
+                    progress_detail(f"Tavily falhou ({str(exc)[:140]})")
+        else:
+            provider_errors.append(f"Tavily={tavily_disable_reason or 'indisponível'}")
 
         counters["failed_queries"] += 1
-        errors.append(
-            f"{query.query}: orcamento de fallback DuckDuckGo ({fallback_budget}) atingido"
-        )
+        errors.append(f"{query.query}: " + " | ".join(provider_errors)[:1500])
         if progress_detail:
             progress_detail(
-                f"Consulta {query_index}/{total_queries}: orcamento de DuckDuckGo atingido"
+                f"Consulta {query_index}/{total_queries}: todos os provedores falharam"
             )
 
     if stats is not None:
@@ -1920,13 +1949,7 @@ def collect_tavily(
         stats.update(counters)
 
     if total_queries and counters["queries_successful"] == 0 and errors:
-        summary = " | ".join(errors[:3])
-        if tavily_circuit_open:
-            raise RuntimeError(
-                "Tavily foi desativado nesta execucao e o DuckDuckGo tambem nao conseguiu "
-                f"concluir nenhuma consulta. {summary}"[:2000]
-            )
-        raise RuntimeError(f"Coleta web indisponivel. {summary}"[:2000])
+        raise RuntimeError("Coleta web indisponivel. " + " | ".join(errors[:3])[:1800])
 
     return added
 
@@ -1937,6 +1960,9 @@ def collect_youtube_api(
     *,
     cancel_check: Callable[[], None] | None = None,
     progress_detail: Callable[[str], None] | None = None,
+    tasks_override: list | None = None,
+    max_total_override: int | None = None,
+    stats: dict[str, int] | None = None,
 ) -> int:
     """Coleta preferencial pela YouTube Data API v3.
 
@@ -1952,7 +1978,7 @@ def collect_youtube_api(
     from urllib.parse import urlencode
     from urllib.request import Request, urlopen
 
-    tasks = youtube_tasks_for_execution(project)
+    tasks = tasks_override or youtube_tasks_for_execution(project)
     start, end = media_window(project)
     has_window = _valid_search_window(start, end)
     existing_items = {
@@ -1979,10 +2005,14 @@ def collect_youtube_api(
             raise RuntimeError("YouTube Data API indisponível: timeout") from exc
 
     added = 0
-    total_limit = max(1, settings.max_youtube_results_total)
+    duplicate_hits = 0
+    returned = 0
+    rejected = 0
+    total_limit = max(1, max_total_override or settings.max_youtube_results_total)
     per_task_cap = max(1, settings.max_youtube_results_per_task)
     total_tasks = len(tasks)
     for task_index, task in enumerate(tasks, start=1):
+        is_priority_task = task.target != "Busca temática"
         if added >= total_limit:
             if progress_detail:
                 progress_detail(f"Limite global do YouTube ({total_limit}) atingido")
@@ -1999,7 +2029,7 @@ def collect_youtube_api(
             "maxResults": min(
                 50,
                 settings.youtube_web_search_max_results,
-                per_task_cap,
+                1 if is_priority_task else per_task_cap,
                 max(1, total_limit - added),
             ),
             "order": "relevance",
@@ -2015,6 +2045,7 @@ def collect_youtube_api(
         ]
         if not ids:
             continue
+        returned += len(ids)
 
         details = api_get(
             "videos",
@@ -2032,6 +2063,7 @@ def collect_youtube_api(
             stats = raw.get("statistics") or {}
             published_at = result_publication_date(snippet.get("publishedAt"))
             if has_window and published_at and not (start <= published_at <= end):
+                rejected += 1
                 continue
             try:
                 view_count = int(stats["viewCount"]) if stats.get("viewCount") is not None else None
@@ -2042,13 +2074,18 @@ def collect_youtube_api(
             title = str(snippet.get("title") or "Vídeo sem título")
             description = snippet.get("description") or None
             channel = snippet.get("channelTitle") or "YouTube"
+            if is_priority_task and not matches_priority_youtube_channel(channel, task.target):
+                rejected += 1
+                continue
             if not _collection_guard(
                 project, title=title, snippet=description, content=description
             ):
+                rejected += 1
                 continue
             canonical = canonicalize(url)
             existing = existing_items.get(canonical)
             if existing:
+                duplicate_hits += 1
                 _record_source_provenance(
                     existing, source="youtube_api", title=title, url=url,
                     published_at=snippet.get("publishedAt"), snippet=description,
@@ -2081,6 +2118,14 @@ def collect_youtube_api(
             added += 1
 
     db.commit()
+    if stats is not None:
+        stats.clear()
+        stats.update({
+            "returned": returned,
+            "added": added,
+            "duplicates": duplicate_hits,
+            "rejected": rejected,
+        })
     return added
 
 
@@ -2090,11 +2135,14 @@ def collect_youtube_duckduckgo(
     *,
     cancel_check: Callable[[], None] | None = None,
     progress_detail: Callable[[str], None] | None = None,
+    tasks_override: list | None = None,
+    max_total_override: int | None = None,
+    stats: dict[str, int] | None = None,
 ) -> int:
-    """Pesquisa videos via DDGS sem usar OpenAI Web Search."""
+    """Pesquisa videos via DDGS."""
     settings = get_settings()
-    tasks = youtube_tasks_for_execution(project)
-    total_limit = max(1, settings.max_youtube_results_total)
+    tasks = tasks_override or youtube_tasks_for_execution(project)
+    total_limit = max(1, max_total_override or settings.max_youtube_results_total)
     per_task_cap = max(1, settings.max_youtube_results_per_task)
     start_date, end_date = media_window(project)
     has_window = _valid_search_window(start_date, end_date)
@@ -2105,6 +2153,9 @@ def collect_youtube_duckduckgo(
         for item in db.scalars(select(MediaItem).where(MediaItem.project_id == project.id)).all()
     }
     added = 0
+    duplicate_hits = 0
+    returned = 0
+    rejected = 0
 
     for task_index, task in enumerate(tasks, start=1):
         is_priority_task = task.target != "Busca temática"
@@ -2133,6 +2184,7 @@ def collect_youtube_duckduckgo(
             retries=settings.duckduckgo_max_retries,
             retry_base_seconds=settings.duckduckgo_retry_base_seconds,
         )
+        returned += len(rows)
 
         accepted_for_task = 0
         for video in rows:
@@ -2143,14 +2195,17 @@ def collect_youtube_duckduckgo(
 
             url = str(video.get("url") or "").strip()
             if not is_youtube_url(url):
+                rejected += 1
                 continue
 
             channel = video.get("channel")
             if is_priority_task and not matches_priority_youtube_channel(channel, task.target):
+                rejected += 1
                 continue
 
             published_at = result_publication_date(video.get("published_at"))
             if has_window and published_at and not (start_date <= published_at <= end_date):
+                rejected += 1
                 continue
 
             description = video.get("description") or None
@@ -2161,6 +2216,7 @@ def collect_youtube_duckduckgo(
                 snippet=description,
                 content=description,
             ):
+                rejected += 1
                 continue
 
             raw_view_count = video.get("view_count")
@@ -2175,6 +2231,7 @@ def collect_youtube_duckduckgo(
             canonical = canonicalize(url)
             existing = existing_items.get(canonical)
             if existing:
+                duplicate_hits += 1
                 _record_source_provenance(
                     existing,
                     source="duckduckgo_video",
@@ -2232,11 +2289,229 @@ def collect_youtube_duckduckgo(
             accepted_for_task += 1
 
     db.commit()
+    if stats is not None:
+        stats.clear()
+        stats.update({
+            "returned": returned,
+            "added": added,
+            "duplicates": duplicate_hits,
+            "rejected": rejected,
+        })
     return added
 
 
+def _youtube_task_query(project: Project, task) -> SearchQuery:
+    """Cria uma consulta transitória para reutilizar os coletores Tavily."""
+    return SearchQuery(
+        project_id=project.id,
+        query=task.query,
+        kind="youtube",
+        purpose="MEDIA_REPERCUSSION",
+        rationale=task.rationale,
+        priority=1,
+    )
+
+
+def collect_youtube_tavily(
+    db: Session,
+    project: Project,
+    *,
+    cancel_check: Callable[[], None] | None = None,
+    progress_detail: Callable[[str], None] | None = None,
+    tasks_override: list | None = None,
+    max_total_override: int | None = None,
+    stats: dict[str, int] | None = None,
+) -> int:
+    """Pesquisa vídeos no YouTube via Tavily, restrito a youtube.com/youtu.be."""
+    settings = get_settings()
+    if not settings.tavily_api_key:
+        raise RuntimeError("TAVILY_API_KEY não configurada")
+
+    try:
+        from tavily import TavilyClient
+        client = TavilyClient(api_key=settings.tavily_api_key)
+    except Exception as exc:
+        raise RuntimeError(f"Tavily indisponível: {exc}") from exc
+
+    tasks = tasks_override or youtube_tasks_for_execution(project)
+    total_limit = max(1, max_total_override or settings.max_youtube_results_total)
+    per_task_cap = max(1, settings.max_youtube_results_per_task)
+    existing_items = {
+        item.canonical_url: item
+        for item in db.scalars(select(MediaItem).where(MediaItem.project_id == project.id)).all()
+    }
+
+    counters = {"returned": 0, "added": 0, "duplicates": 0, "rejected": 0}
+    for task_index, task in enumerate(tasks, start=1):
+        if counters["added"] >= total_limit:
+            break
+        if cancel_check:
+            cancel_check()
+        is_priority_task = task.target != "Busca temática"
+        task_limit = min(
+            1 if is_priority_task else per_task_cap,
+            max(1, total_limit - counters["added"]),
+        )
+        if progress_detail:
+            progress_detail(f"Tavily Video {task_index}/{len(tasks)}: {task.target}")
+        result = _collect_tavily_query(
+            db,
+            project,
+            _youtube_task_query(project, task),
+            existing_items,
+            client,
+            max_results=task_limit,
+            cancel_check=cancel_check,
+            progress_detail=progress_detail,
+        )
+        for key in counters:
+            counters[key] += int(result.get(key, 0))
+
+    db.commit()
+    if stats is not None:
+        stats.clear()
+        stats.update(counters)
+    return counters["added"]
+
+
+def collect_youtube_priority_chain(
+    db: Session,
+    project: Project,
+    *,
+    cancel_check: Callable[[], None] | None = None,
+    progress_detail: Callable[[str], None] | None = None,
+    stats: dict[str, int] | None = None,
+) -> int:
+    """Cadeia de vídeo: DuckDuckGo -> Tavily -> YouTube API.
+
+    A decisão é feita por tarefa de busca. Um provedor só é abandonado quando
+    não produz nenhum resultado utilizável (novo ou duplicado válido) para a
+    tarefa corrente.
+    """
+    settings = get_settings()
+    tasks = youtube_tasks_for_execution(project)
+    total_limit = max(1, settings.max_youtube_results_total)
+    per_task_cap = max(1, settings.max_youtube_results_per_task)
+
+    counters: dict[str, int] = {
+        "tasks_total": len(tasks),
+        "tasks_resolved": 0,
+        "tasks_failed": 0,
+        "duckduckgo_attempts": 0,
+        "duckduckgo_added": 0,
+        "tavily_attempts": 0,
+        "tavily_added": 0,
+        "youtube_api_attempts": 0,
+        "youtube_api_added": 0,
+    }
+    total_added = 0
+
+    for task_index, task in enumerate(tasks, start=1):
+        if total_added >= total_limit:
+            break
+        if cancel_check:
+            cancel_check()
+
+        is_priority_task = task.target != "Busca temática"
+        task_limit = min(
+            1 if is_priority_task else per_task_cap,
+            max(1, total_limit - total_added),
+        )
+        errors: list[str] = []
+
+        # 1) DuckDuckGo Videos
+        try:
+            local_stats: dict[str, int] = {}
+            counters["duckduckgo_attempts"] += 1
+            added = collect_youtube_duckduckgo(
+                db,
+                project,
+                cancel_check=cancel_check,
+                progress_detail=progress_detail,
+                tasks_override=[task],
+                max_total_override=task_limit,
+                stats=local_stats,
+            )
+            total_added += added
+            counters["duckduckgo_added"] += added
+            if int(local_stats.get("added", 0)) + int(local_stats.get("duplicates", 0)) > 0:
+                counters["tasks_resolved"] += 1
+                continue
+            if progress_detail:
+                progress_detail("DuckDuckGo Videos sem resultado utilizável; tentando Tavily")
+        except Exception as exc:
+            db.rollback()
+            errors.append(f"DuckDuckGo={exc}")
+            if progress_detail:
+                progress_detail(f"DuckDuckGo Videos falhou ({str(exc)[:140]}); tentando Tavily")
+
+        # 2) Tavily
+        try:
+            local_stats = {}
+            counters["tavily_attempts"] += 1
+            added = collect_youtube_tavily(
+                db,
+                project,
+                cancel_check=cancel_check,
+                progress_detail=progress_detail,
+                tasks_override=[task],
+                max_total_override=task_limit,
+                stats=local_stats,
+            )
+            total_added += added
+            counters["tavily_added"] += added
+            if int(local_stats.get("added", 0)) + int(local_stats.get("duplicates", 0)) > 0:
+                counters["tasks_resolved"] += 1
+                continue
+            if progress_detail:
+                progress_detail("Tavily sem resultado de vídeo utilizável; tentando YouTube Data API")
+        except Exception as exc:
+            db.rollback()
+            errors.append(f"Tavily={exc}")
+            if progress_detail:
+                progress_detail(f"Tavily falhou ({str(exc)[:140]}); tentando YouTube Data API")
+
+        # 3) YouTube Data API
+        try:
+            local_stats = {}
+            counters["youtube_api_attempts"] += 1
+            added = collect_youtube_api(
+                db,
+                project,
+                cancel_check=cancel_check,
+                progress_detail=progress_detail,
+                tasks_override=[task],
+                max_total_override=task_limit,
+                stats=local_stats,
+            )
+            total_added += added
+            counters["youtube_api_added"] += added
+            if int(local_stats.get("added", 0)) + int(local_stats.get("duplicates", 0)) > 0:
+                counters["tasks_resolved"] += 1
+                continue
+            if progress_detail:
+                progress_detail("YouTube Data API sem resultado utilizável")
+        except Exception as exc:
+            db.rollback()
+            errors.append(f"YouTube API={exc}")
+            if progress_detail:
+                progress_detail(f"YouTube Data API falhou ({str(exc)[:140]})")
+
+        counters["tasks_failed"] += 1
+        if progress_detail:
+            progress_detail(
+                f"Vídeo {task_index}/{len(tasks)} sem resultado após toda a cadeia: "
+                + " | ".join(errors)[:500]
+            )
+
+    if stats is not None:
+        stats.clear()
+        stats.update(counters)
+    return total_added
+
+
 # Alias temporario para instalacoes que importavam o nome antigo.
-collect_youtube_web_search = collect_youtube_duckduckgo
+collect_youtube_web_search = collect_youtube_priority_chain
 
 
 def collect_media_agents(
@@ -2248,10 +2523,10 @@ def collect_media_agents(
     web_progress: Callable[[str], None] | None = None,
     youtube_progress: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
-    """Executa coletores independentes sem depender de OpenAI Web Search.
+    """Executa coletores independentes.
 
-    Web: Tavily primario, DuckDuckGo fallback.
-    YouTube: YouTube Data API quando configurada, DuckDuckGo Videos fallback.
+    Web: DuckDuckGo -> Tavily.
+    YouTube: DuckDuckGo Videos -> Tavily -> YouTube Data API.
     """
 
     def web_agent() -> dict[str, object]:
@@ -2265,18 +2540,17 @@ def collect_media_agents(
                 progress_detail=web_progress,
                 stats=web_stats,
             )
-            fallback_queries = int(web_stats.get("duckduckgo_fallback_queries", 0))
             failed_queries = int(web_stats.get("failed_queries", 0))
-            status = "COMPLETED"
-            if failed_queries:
-                status = "PARTIAL"
-            elif fallback_queries:
-                status = "FALLBACK_DUCKDUCKGO"
+            tavily_used = int(web_stats.get("tavily_queries", 0)) > 0
+            status = "PARTIAL" if failed_queries else "COMPLETED"
+            providers = ["duckduckgo"]
+            if tavily_used:
+                providers.append("tavily")
             return {
                 "status": status,
                 "collected": collected,
                 "error": None,
-                "provider": "tavily+duckduckgo" if fallback_queries else "tavily",
+                "provider": "+".join(providers),
                 "stats": web_stats,
             }
         except RuntimeError as exc:
@@ -2293,7 +2567,7 @@ def collect_media_agents(
 
     def youtube_agent() -> dict[str, object]:
         if not enable_youtube:
-            return {"status": "DISABLED", "collected": 0, "error": None, "provider": None}
+            return {"status": "DISABLED", "collected": 0, "error": None, "provider": None, "stats": {}}
 
         session = SessionLocal()
         try:
@@ -2301,54 +2575,38 @@ def collect_media_agents(
             if not local_project:
                 raise RuntimeError("Projeto nao encontrado")
 
-            settings = get_settings()
-            api_error: str | None = None
-            if settings.youtube_api_key:
-                try:
-                    collected = collect_youtube_api(
-                        session,
-                        local_project,
-                        cancel_check=cancel_check,
-                        progress_detail=youtube_progress,
-                    )
-                    return {
-                        "status": "COMPLETED",
-                        "collected": collected,
-                        "error": None,
-                        "provider": "youtube_api",
-                    }
-                except RuntimeError as exc:
-                    session.rollback()
-                    api_error = str(exc)[:1000]
-                    if youtube_progress:
-                        youtube_progress(
-                            "YouTube Data API indisponivel; usando DuckDuckGo Videos como fallback"
-                        )
-
-            try:
-                collected = collect_youtube_duckduckgo(
-                    session,
-                    local_project,
-                    cancel_check=cancel_check,
-                    progress_detail=youtube_progress,
-                )
-                return {
-                    "status": "FALLBACK_DUCKDUCKGO" if api_error else "COMPLETED",
-                    "collected": collected,
-                    "error": api_error,
-                    "provider": "duckduckgo_video",
-                }
-            except (RuntimeError, DuckDuckGoUnavailable) as exc:
-                session.rollback()
-                detail = str(exc)[:1000]
-                if api_error:
-                    detail = f"YouTube API: {api_error} | DuckDuckGo: {detail}"[:1000]
-                return {
-                    "status": "UNAVAILABLE",
-                    "collected": 0,
-                    "error": detail,
-                    "provider": "duckduckgo_video",
-                }
+            video_stats: dict[str, int] = {}
+            collected = collect_youtube_priority_chain(
+                session,
+                local_project,
+                cancel_check=cancel_check,
+                progress_detail=youtube_progress,
+                stats=video_stats,
+            )
+            failed = int(video_stats.get("tasks_failed", 0))
+            providers: list[str] = []
+            if int(video_stats.get("duckduckgo_attempts", 0)):
+                providers.append("duckduckgo_video")
+            if int(video_stats.get("tavily_attempts", 0)):
+                providers.append("tavily")
+            if int(video_stats.get("youtube_api_attempts", 0)):
+                providers.append("youtube_api")
+            return {
+                "status": "PARTIAL" if failed else "COMPLETED",
+                "collected": collected,
+                "error": None,
+                "provider": "+".join(providers) if providers else None,
+                "stats": video_stats,
+            }
+        except RuntimeError as exc:
+            session.rollback()
+            return {
+                "status": "UNAVAILABLE",
+                "collected": 0,
+                "error": str(exc)[:1000],
+                "provider": None,
+                "stats": {},
+            }
         finally:
             session.close()
 
@@ -3761,7 +4019,7 @@ def run_full_methodology(
 
     # 3. Coleta web + YouTube opcional.
     check()
-    stage("collection", "RUNNING", "Consultando fontes web: Tavily primário com fallback automático para DuckDuckGo")
+    stage("collection", "RUNNING", "Consultando fontes web: DuckDuckGo → Tavily")
     if flags["enable_youtube"]:
         stage("youtube", "RUNNING", "Pesquisando vídeos no YouTube: API oficial com fallback para DuckDuckGo Videos")
     else:
@@ -3779,31 +4037,24 @@ def run_full_methodology(
     collected = int(web["collected"])
     web_stats = web.get("stats") or {}
     if web["status"] == "COMPLETED":
-        stage("collection", "DONE", f"{collected} novo(s) item(ns) coletado(s) via Tavily")
-    elif web["status"] == "FALLBACK_DUCKDUCKGO":
-        switch_note = ""
-        if int(web_stats.get("tavily_circuit_breaker_trips", 0)):
-            switch_note = (
-                f" Tavily desativado após {int(web_stats.get('tavily_attempts', 0))} tentativa(s); "
-                f"circuit breaker aberto na consulta {int(web_stats.get('tavily_switched_at_query', 0))}."
-            )
+        provider_label = str(web.get("provider") or "duckduckgo")
         stage(
             "collection",
             "DONE",
-            f"{collected} novo(s) item(ns); DuckDuckGo: "
-            f"{int(web_stats.get('duckduckgo_fallback_queries', 0))} consulta(s), "
-            f"{int(web_stats.get('duckduckgo_fallback_results', 0))} resultado(s) retornado(s), "
-            f"{int(web_stats.get('duckduckgo_fallback_added', 0))} aceito(s) e "
-            f"{int(web_stats.get('duckduckgo_fallback_rejected', 0))} rejeitado(s) pelo filtro temático."
-            f"{switch_note}",
+            f"{collected} novo(s) item(ns). Provedores usados: {provider_label}. "
+            f"DuckDuckGo: {int(web_stats.get('duckduckgo_queries', 0))} consulta(s), "
+            f"{int(web_stats.get('duckduckgo_added', 0))} novo(s); "
+            f"Tavily: {int(web_stats.get('tavily_queries', 0))} consulta(s), "
+            f"{int(web_stats.get('tavily_added', 0))} novo(s).",
         )
     elif web["status"] == "PARTIAL":
         stage(
             "collection",
             "DONE",
-            f"Coleta parcial: {collected} novo(s) item(ns); "
-            f"fallback DuckDuckGo aceitou {int(web_stats.get('duckduckgo_fallback_added', 0))} item(ns); "
-            f"{int(web_stats.get('failed_queries', 0))} consulta(s) não puderam ser concluídas",
+            f"Coleta parcial: {collected} novo(s) item(ns). "
+            f"DuckDuckGo {int(web_stats.get('duckduckgo_queries', 0))} consulta(s); "
+            f"Tavily {int(web_stats.get('tavily_queries', 0))}; "
+            f"{int(web_stats.get('failed_queries', 0))} consulta(s) não puderam ser concluídas.",
         )
     else:
         stage(

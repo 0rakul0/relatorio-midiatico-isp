@@ -46,6 +46,8 @@ def test_profile_discovery_never_exceeds_four_external_searches(monkeypatch):
         lambda: SimpleNamespace(tavily_api_key="test-key", max_profile_discovery_calls=4),
     )
     monkeypatch.setattr(services, "llm_is_configured", lambda: True)
+    # Este teste isola a cadeia Tavily; o DuckDuckGo é exercitado em outro lugar.
+    monkeypatch.setattr(services, "duckduckgo_available", lambda: False)
     monkeypatch.setattr(
         services,
         "structured_response",

@@ -6,7 +6,7 @@ Esta versão separa três objetos que antes estavam misturados:
 2. **fonte que comprova o fato**;
 3. **item de repercussão midiática**.
 
-A v2.3 adiciona **acompanhamento visual da execução**, **cancelamento do relatório em andamento**, **perfis de execução**, **orçamentos de busca e de IA**, **fallback Tavily → OpenAI Web Search** e **validação cruzada Tavily × YouTube**.
+A v2.3 adiciona **acompanhamento visual da execução**, **cancelamento do relatório em andamento**, **perfis de execução**, **orçamentos de busca e de IA**, **fallback DuckDuckGo → Tavily** e **validação cruzada Tavily × YouTube**.
 
 ## Principais mudanças
 
@@ -27,8 +27,8 @@ A v2.3 adiciona **acompanhamento visual da execução**, **cancelamento do relat
 - os quatro campos de data aparecem em uma única linha em telas de desktop;
 - **perfis de execução** com dependências lógicas e overrides individuais;
 - **orçamentos** globais de busca, YouTube e chamadas de IA (com lotes);
-- **fallback automático** para OpenAI Web Search quando o Tavily falha ou atinge quota;
-- **circuit breaker** do Tavily: após erro de quota/rate limit, as consultas seguintes vão direto ao Web Search;
+- **fallback automático** DuckDuckGo → Tavily;
+- **circuit breaker** do Tavily: após erro de quota/rate limit, as consultas seguintes ficam só com o DuckDuckGo;
 - **validação cruzada** entre Tavily e YouTube para vídeos encontrados pelos dois coletores;
 - **busca focada no objeto monitorado**: produtos institucionais geram consultas com âncora nominal mínima, sem termos genéricos isolados ("dossie", "relatorio", "instituto").
 
@@ -81,8 +81,6 @@ Copy-Item .env.example .env
 TAVILY_API_KEY=...
 OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-4.1-mini
-WEB_SEARCH_MODEL=gpt-5.5
-YOUTUBE_SEARCH_MODEL=gpt-5.5
 ```
 
 6. Fora do Docker, se estiver usando PostgreSQL local, ajuste `DATABASE_URL`. Se estiver usando seu SQLite atual, preserve a URL já configurada no `.env`.
@@ -126,39 +124,34 @@ As variáveis opcionais mais comuns estão no `.env.example`:
 - `MAX_SEARCH_RESULTS` — limite **global** de novos itens coletados pela etapa web (padrão 30; não é por consulta);
 - `MAX_RESULTS_PER_QUERY` — teto de resultados por consulta (padrão 5);
 - `MAX_SEARCH_QUERIES` — consultas executadas na primeira coleta (padrão 12), com `MAX_LLM_SEARCH_QUERIES` reservado às complementares da IA;
-- `MAX_WEB_SEARCH_FALLBACK_QUERIES` — orçamento de consultas OpenAI Web Search quando o Tavily falha (padrão 12);
 - `MAX_SEMANTIC_REVIEWS`, `MAX_FACT_EXTRACTIONS`, `MAX_CLASSIFICATIONS`, `MAX_CROSS_VALIDATIONS` — orçamento de **itens** de IA por execução;
 - `VALIDATION_BATCH_SIZE`, `CLASSIFICATION_BATCH_SIZE` — tamanho dos lotes enviados à OpenAI (padrão 10). Ex.: 40 itens com lote 10 geram no máximo 4 chamadas na validação e 4 na classificação;
 - `MAX_YOUTUBE_TASKS`, `MAX_YOUTUBE_RESULTS_TOTAL`, `MAX_YOUTUBE_RESULTS_PER_TASK` — limites globais do YouTube. Os canais prioritários são sempre preservados na checagem; o primeiro controla apenas quantas buscas temáticas adicionais entram.
 
 ## Coleta no YouTube
 
-A coleta no YouTube usa exclusivamente a ferramenta `web_search` da Responses API, restrita a `youtube.com` e `youtu.be`; não depende de `YOUTUBE_API_KEY`. O agente pesquisa cada consulta planejada, devolve metadados estruturados dos vídeos, confirma localmente a identidade dos canais prioritários e rejeita URLs que não pertençam ao YouTube.
+A coleta no YouTube segue uma cadeia por tarefa de busca: **DuckDuckGo Videos → Tavily (restrito a `youtube.com`/`youtu.be`) → YouTube Data API**. Um provedor só é abandonado quando não devolve nenhum resultado utilizável (novo ou duplicado válido) para a tarefa corrente, e a identidade dos canais prioritários é confirmada localmente.
 
-Quando Tavily e o agente encontrarem o mesmo vídeo, um agente de validação
+Quando Tavily e outro coletor encontrarem o mesmo vídeo, um agente de validação
 cruzada compara URL, título, canal, data e descrição que cada coletor forneceu.
 O resultado (`CONFIRMED`, `PARTIALLY_CONFIRMED`, `CONFLICT` ou
 `INSUFFICIENT_EVIDENCE`) fica registrado no item, com a justificativa e é
 resumido no PDF. Itens com `CONFLICT` são excluídos das tabelas de cobertura e
 dos rankings até revisão. Ausência de metadado no Tavily não é tratada como conflito.
 
-`YOUTUBE_SEARCH_MODEL` é separado de `OPENAI_MODEL` porque a busca web requer
-um modelo com suporte à ferramenta; o padrão é `gpt-5.5`. A mesma separação vale
-para `WEB_SEARCH_MODEL`, usado no fallback geral de sites/portais. Quando a
-página ou o resultado da busca expõe uma contagem explícita, a Web Search a
-registra como fotografia da coleta; caso contrário, o campo permanece ausente. O
-ranking é portanto o dos canais na amostra validada, não um ranking exaustivo do
-YouTube.
+Quando a página ou o resultado da busca expõe uma contagem explícita, ela é
+registrada como fotografia da coleta; caso contrário, o campo permanece ausente.
+O ranking é portanto o dos canais na amostra validada, não um ranking exaustivo
+do YouTube.
 
-## Coleta em sites: fallback e circuit breaker
+## Coleta em sites
 
-A coleta web tenta o **Tavily primeiro** quando `TAVILY_API_KEY` está
-configurada. Regras:
+A coleta web usa duas fontes, sempre nesta ordem:
 
-- se o Tavily rejeitar apenas a janela temporal, a mesma consulta é repetida uma vez sem `start_date`/`end_date`;
-- se o Tavily falhar, a consulta atual é resolvida pelo **OpenAI Web Search** (preservando tema, finalidade e filtro `site:domínio`), respeitando o orçamento `MAX_WEB_SEARCH_FALLBACK_QUERIES`;
-- erros de quota/rate limit abrem um **circuit breaker** e o restante da execução vai direto ao Web Search;
-- todos os filtros temáticos (âncora nominal do produto) valem também para os resultados do fallback.
+- **DuckDuckGo** como provedor primário (índice de notícias para repercussão e busca textual para o restante);
+- **Tavily** como fallback quando o DuckDuckGo não devolve resultado utilizável ou falha.
+
+Se o Tavily rejeitar apenas a janela temporal, a mesma consulta é repetida uma vez sem `start_date`/`end_date`. Erros de quota/rate limit abrem um **circuit breaker** e o restante da execução segue apenas com o DuckDuckGo. Todos os filtros temáticos (âncora nominal do produto) valem também para os resultados do fallback.
 
 ## Perfis de execução
 
@@ -190,8 +183,8 @@ Tema
   -> consultas de repercussão
   -> consultas factuais
   -> consultas oficiais
-  -> coleta (Tavily com fallback OpenAI Web Search)
-  -> coleta no YouTube (API com fallback Web Search)
+  -> coleta (DuckDuckGo → Tavily)
+  -> coleta no YouTube (DuckDuckGo Videos → Tavily → API)
   -> validação cruzada Tavily × YouTube
   -> extração factual com evidência por campo
   -> resolução determinística

@@ -230,8 +230,8 @@ class LLMCall(Base):
     operation: Mapped[str | None] = mapped_column(String(80), nullable=True)
     schema_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
-    # Função de origem (structured_response ou web_search_structured_response),
-    # nome exato do modelo chamado e se a chamada produziu conteúdo.
+    # Função de origem (structured_response), nome exato do modelo chamado e
+    # se a chamada produziu conteúdo.
     caller: Mapped[str | None] = mapped_column(String(80), nullable=True)
     model: Mapped[str] = mapped_column(String(120))
     success: Mapped[bool] = mapped_column(Boolean, default=False)

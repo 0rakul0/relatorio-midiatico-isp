@@ -10,13 +10,10 @@ class Settings(BaseSettings):
     # A v2.2 usa somente OpenAI. Mantemos um único modelo configurável.
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
-    # YouTube Data API e opcional. Sem chave, a coleta usa DuckDuckGo Videos.
+    # YouTube Data API e o terceiro nivel da cadeia de video:
+    # DuckDuckGo -> Tavily -> YouTube Data API.
     youtube_api_key: str | None = None
 
-    # Legado de .env anteriores. Mantidos para compatibilidade; a versao atual
-    # nao usa modelos OpenAI para pesquisar a web.
-    youtube_search_model: str = "gpt-5-mini"
-    web_search_model: str = "gpt-5.5"
     # Compatibilidade: limite bruto que o provedor pode devolver por tarefa.
     youtube_web_search_max_results: int = 15
 
@@ -36,8 +33,8 @@ class Settings(BaseSettings):
     # Quantas consultas complementares a IA pode sugerir dentro do limite acima.
     max_llm_search_queries: int = 4
 
-    # DuckDuckGo e o fallback de pesquisa quando o Tavily nao puder responder.
-    # 0 = herdar MAX_SEARCH_QUERIES. Nao exige chave de API.
+    # Compatibilidade com .env anterior. O DuckDuckGo agora é o provedor
+    # PRIMÁRIO; a coleta usa MAX_SEARCH_QUERIES como teto de intenções.
     max_duckduckgo_fallback_queries: int = 0
     duckduckgo_region: str = "br-pt"
     duckduckgo_safesearch: str = "moderate"
@@ -46,10 +43,6 @@ class Settings(BaseSettings):
     duckduckgo_fetch_pages: bool = True
     duckduckgo_fetch_max_chars: int = 12000
     duckduckgo_fetch_timeout_seconds: float = 10.0
-
-    # Legado de configuracoes anteriores. Mantido para nao quebrar .env antigos,
-    # mas a coleta atual nao usa OpenAI Web Search.
-    max_web_search_fallback_queries: int = 0
 
     # Orçamento total da descoberta inicial: buscas e análise estruturada do
     # perfil somadas. Com OpenAI configurada, uma chamada fica reservada para

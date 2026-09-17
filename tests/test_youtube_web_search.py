@@ -92,6 +92,62 @@ def test_collect_youtube_uses_duckduckgo_and_rejects_external_urls(monkeypatch):
     session.close()
 
 
+def test_collect_youtube_tavily_accepts_only_youtube_urls(monkeypatch):
+    from app import services
+    from app.config import Settings
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    project = Project(
+        topic="tema de teste",
+        launch_date=date(2026, 1, 1),
+        collection_start=date(2026, 8, 1),
+        collection_end=date(2026, 8, 31),
+        topic_profile={"actors": [], "actions": [], "locations": []},
+    )
+    session.add(project)
+    session.commit()
+
+    class FakeTavilyClient:
+        def __init__(self, api_key=None):
+            self.api_key = api_key
+
+        def search(self, **_kwargs):
+            return {
+                "results": [
+                    {
+                        "title": "Vídeo Tavily",
+                        "url": "https://www.youtube.com/watch?v=tav123",
+                        "content": "Descrição do vídeo",
+                        "published_date": "2026-08-20",
+                        "source": "YouTube",
+                    },
+                    {
+                        "title": "Resultado externo",
+                        "url": "https://example.com/video",
+                        "content": "externo",
+                        "published_date": "2026-08-20",
+                        "source": "Blog",
+                    },
+                ]
+            }
+
+    import tavily
+
+    monkeypatch.setattr(tavily, "TavilyClient", FakeTavilyClient)
+    monkeypatch.setattr(
+        services, "get_settings", lambda: Settings(tavily_api_key="teste")
+    )
+    assert services.collect_youtube_tavily(session, project) == 1
+
+    item = session.scalar(select(MediaItem))
+    assert item.canonical_url == canonicalize("https://www.youtube.com/watch?v=tav123")
+    assert item.search_source == "tavily"
+    assert item.source_provenance[0]["source"] == "tavily"
+    session.close()
+
+
 def test_youtube_metrics_list_all_priority_channels_and_exclude_conflicts():
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
