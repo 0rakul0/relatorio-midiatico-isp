@@ -3,11 +3,51 @@ from types import SimpleNamespace
 
 from app.fact_layer import (
     _identity_conflicts,
+    _reject_unanchored_relative_dates,
+    event_identity_key,
+    normalize_fact_value,
+    normalize_person_name,
     resolve_assertions,
     fact_event_exclusion_reason,
-    normalize_person_name,
 )
 from app.report_qa import deterministic_report_qa
+
+
+def test_unit_normalization_ignores_zero_padding_and_ordinal():
+    assert normalize_fact_value("unit", "03º BPM") == normalize_fact_value("unit", "3 BPM")
+
+
+def test_rank_abbreviation_matches_full_word():
+    assert normalize_fact_value("rank_or_role", "Cel.") == normalize_fact_value(
+        "rank_or_role", "Coronel"
+    )
+
+
+def test_institution_alias_matches_full_name():
+    assert normalize_fact_value("institution", "PMERJ") == normalize_fact_value(
+        "institution", "Polícia Militar do Estado do Rio de Janeiro"
+    )
+
+
+def test_identity_key_requires_sufficient_information():
+    assert event_identity_key(_extracted(subject_name="João da Silva")) is None
+    key = event_identity_key(_extracted(subject_name="João da Silva", institution="PMERJ"))
+    assert key is not None and "name=" in key
+
+
+def test_relative_date_without_publication_is_discarded():
+    item = SimpleNamespace(published_at=None)
+    events = [{"event_date": {"value": "2026-08-10", "evidence": "há dois dias", "basis": "RELATIVE_TO_PUBLICATION"}}]
+    cleaned = _reject_unanchored_relative_dates(events, item)
+    assert cleaned[0]["event_date"]["value"] is None
+    assert cleaned[0]["event_date"]["basis"] == "NOT_PRESENT"
+
+
+def test_relative_date_with_publication_is_kept():
+    item = SimpleNamespace(published_at=date(2026, 8, 12))
+    events = [{"death_date": {"value": "2026-08-10", "evidence": "há dois dias", "basis": "RELATIVE_TO_PUBLICATION"}}]
+    cleaned = _reject_unanchored_relative_dates(events, item)
+    assert cleaned[0]["death_date"]["value"] == "2026-08-10"
 
 
 def assertion(value, url, source_type="MEDIA"):
