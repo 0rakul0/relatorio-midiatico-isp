@@ -123,116 +123,139 @@ function runStatusClass(status){
   })[status] || 'pending';
 }
 
+const STAGE_GROUPS = [
+  { number: 1, label: 'Perfil do tema', keys: ['profile'] },
+  { number: 2, label: 'Planejamento de buscas', keys: ['search_plan'] },
+  {
+    number: 3,
+    label: 'Coleta',
+    keys: ['collection', 'youtube', 'cross_validation'],
+    vertical: true
+  },
+  { number: 4, label: 'Extração factual - 1ª passagem', keys: ['facts_pass_1'] },
+  { number: 5, label: 'Consolidação factual - 1ª passagem', keys: ['fact_resolution_1'] },
+  { number: 6, label: 'Planejamento de buscas nominais', keys: ['nominal_plan'] },
+  { number: 7, label: 'Coleta nominal', keys: ['nominal_collection'] },
+  { number: 8, label: 'Extração factual - 2ª passagem', keys: ['facts_pass_2'] },
+  { number: 9, label: 'Consolidação factual - 2ª passagem', keys: ['fact_resolution_2'] },
+  { number: 10, label: 'Validação do corpus', keys: ['validation'] },
+  { number: 11, label: 'Análise e classificação', keys: ['classification'] },
+  { number: 12, label: 'Redação do relatório', keys: ['report'] },
+  { number: 13, label: 'Auditoria QA final', keys: ['qa'] }
+];
 
-function renderRun(run){
-  $('#run-tracker').classList.remove('hidden');
+function normalizeGroupStatus(children){
+  if(!children.length) return 'PENDING';
 
-  const stages = run.stages || [];
-  const costs = run.costs || {};
+  const statuses = children.map(x => x.status);
 
-  const completedStages = stages.filter(stage => stage.status === 'DONE').length;
-  const processedStages = stages.filter(stage => ['DONE','SKIPPED'].includes(stage.status)).length;
-  const totalStages = stages.length;
-  const percent = totalStages ? Math.round((processedStages / totalStages) * 100) : 0;
+  if(statuses.includes('FAILED')) return 'FAILED';
+  if(statuses.includes('CANCELLED')) return 'CANCELLED';
+  if(statuses.includes('RUNNING')) return 'RUNNING';
 
-  const currentStage =
-    stages.find(stage => stage.status === 'RUNNING') ||
-    stages.find(stage => stage.status === 'FAILED') ||
-    stages.find(stage => stage.status === 'CANCELLED') ||
-    (run.status === 'COMPLETED' ? stages[stages.length - 1] : null);
+  const allSkipped = statuses.every(s => s === 'SKIPPED');
+  if(allSkipped) return 'SKIPPED';
 
-  $('#run-summary').textContent = currentStage?.status === 'RUNNING'
-    ? `Executando: ${currentStage.label}`
-    : (run.message || `Status: ${run.status}`);
+  const allFinished = statuses.every(s => ['DONE', 'SKIPPED'].includes(s));
+  if(allFinished) return 'DONE';
 
-  $('#run-status-badge').innerHTML = `
-    <span class="run-badge ${runStatusClass(run.status)}">
-      ${esc(runStatusLabel(run.status))}
-    </span>
-  `;
+  return 'PENDING';
+}
 
-  $('#run-progress-label').textContent =
-    `${completedStages} concluída(s) · ${processedStages}/${totalStages} processadas`;
-  $('#run-progress-percent').textContent = `${percent}%`;
-  $('#run-progress-bar').style.width = `${percent}%`;
+function buildGroupedStages(stages){
+  const stageMap = new Map((stages || []).map(stage => [stage.key, stage]));
 
-  const inputTokens = Number(costs.total_input_tokens || 0);
-  const outputTokens = Number(costs.total_output_tokens || 0);
-  const cachedTokens = Number(costs.total_cached_input_tokens || 0);
-  const totalTokens = inputTokens + outputTokens;
+  return STAGE_GROUPS.map(group => {
+    const children = group.keys
+      .map(key => stageMap.get(key))
+      .filter(Boolean);
 
-  const modelEntries = Object.values(costs.by_model || {});
-  const models = modelEntries.length
-    ? modelEntries.map(x => x.model).filter(Boolean).join(', ')
-    : '—';
+    const status = normalizeGroupStatus(children);
 
-  $('#run-metrics').innerHTML = `
-    <div class="run-metric">
-      <span class="run-metric-label">Etapa atual</span>
-      <strong>${esc(currentStage?.label || runStatusLabel(run.status))}</strong>
-      <small>${currentStage?.detail ? esc(currentStage.detail) : 'Nenhuma operação em andamento'}</small>
-    </div>
+    const runningChild =
+      children.find(x => x.status === 'RUNNING') ||
+      children.find(x => x.status === 'FAILED') ||
+      children.find(x => x.status === 'CANCELLED') ||
+      children.find(x => x.status === 'PENDING') ||
+      children[0] ||
+      null;
 
-    <div class="run-metric cost">
-      <span class="run-metric-label">Custo LLM</span>
-      <strong>${formatUSD(costs.total_cost_usd)}</strong>
-      <small>${formatNumber(costs.calls)} chamada(s) à LLM</small>
-    </div>
+    const startedAt = children
+      .map(x => x.started_at)
+      .filter(Boolean)
+      .sort()[0] || null;
 
-    <div class="run-metric">
-      <span class="run-metric-label">Tokens</span>
-      <strong>${formatNumber(totalTokens)}</strong>
-      <small>${formatNumber(inputTokens)} entrada · ${formatNumber(outputTokens)} saída${cachedTokens ? ` · ${formatNumber(cachedTokens)} cache` : ''}</small>
-    </div>
+    const finishedAt = children.every(x => !x.started_at || x.finished_at || x.status === 'SKIPPED')
+      ? (
+          children
+            .map(x => x.finished_at)
+            .filter(Boolean)
+            .sort()
+            .slice(-1)[0] || null
+        )
+      : null;
 
-    <div class="run-metric">
-      <span class="run-metric-label">Tempo</span>
-      <strong>${durationBetween(run.started_at, run.finished_at)}</strong>
-      <small>${esc(models)}</small>
-    </div>
-  `;
+    return {
+      ...group,
+      children,
+      status,
+      currentChild: runningChild,
+      detail: runningChild?.detail || null,
+      started_at: startedAt,
+      finished_at: finishedAt
+    };
+  });
+}
 
-  $('#run-steps').innerHTML = stages.map((stage, index) => {
-    const statusClass = stageClass(stage.status);
-    const circleContent = stage.status === 'DONE' ? '✓' : String(index + 1);
-
-    return `
-      <div class="run-step ${statusClass}" title="${esc(stage.detail || stageLabel(stage.status))}">
-        <div class="run-step-circle">${circleContent}</div>
-        <div class="run-step-label">${esc(stage.label)}</div>
-        <div class="run-step-status">${esc(stageLabel(stage.status))}</div>
-      </div>
-    `;
-  }).join('');
-
-  const detailStage = currentStage || stages.find(stage => stage.status === 'PENDING') || null;
-  const detailClass = detailStage ? stageClass(detailStage.status) : 'pending';
+function renderGroupDetail(group){
   const detailBox = $('#run-stage-detail');
+  const detailClass = stageClass(group?.status || 'PENDING');
   detailBox.className = `run-stage-detail ${detailClass}`;
-  detailBox.innerHTML = detailStage
-    ? `
-        <strong>${esc(detailStage.label)}</strong>
-        <div>${esc(stageLabel(detailStage.status))}${detailStage.detail ? ` · ${esc(detailStage.detail)}` : ''}</div>
-        <small>${detailStage.started_at ? `Tempo: ${esc(durationBetween(detailStage.started_at, detailStage.finished_at))}` : 'Aguardando início'}</small>
-      `
-    : `
-        <strong>Execução</strong>
-        <div>Nenhuma etapa disponível.</div>
-      `;
 
-  if(currentStage?.status === 'RUNNING'){
-    requestAnimationFrame(() => {
-      const active = document.querySelector('.run-step.running');
-      active?.scrollIntoView({behavior:'smooth', inline:'center', block:'nearest'});
-    });
+  if(!group){
+    detailBox.innerHTML = `
+      <strong>Execução</strong>
+      <div>Nenhuma etapa disponível.</div>
+    `;
+    return;
   }
 
-  const running = ['PENDING','RUNNING'].includes(run.status);
-  $('#submit').disabled = running;
-  $('#stop-report').classList.toggle('hidden', !running);
-  $('#stop-report').disabled = !!run.cancel_requested;
-  $('#stop-report').textContent = run.cancel_requested ? 'Parando…' : 'Parar relatório';
+  if(group.vertical){
+    detailBox.innerHTML = `
+      <strong>Etapa ${group.number} · ${esc(group.label)}</strong>
+      <div class="parallel-stage-list">
+        ${group.children.map(child => `
+          <div class="parallel-stage ${stageClass(child.status)}">
+            <div class="parallel-stage-badge">${group.number}</div>
+            <div class="parallel-stage-content">
+              <div class="parallel-stage-title">${esc(child.label)}</div>
+              <div class="parallel-stage-meta">
+                ${esc(stageLabel(child.status))}
+                ${child.detail ? ` · ${esc(child.detail)}` : ''}
+              </div>
+              <small>
+                ${child.started_at ? `Tempo: ${esc(durationBetween(child.started_at, child.finished_at))}` : 'Aguardando início'}
+              </small>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+    return;
+  }
+
+  detailBox.innerHTML = `
+    <strong>Etapa ${group.number} · ${esc(group.label)}</strong>
+    <div>
+      ${esc(stageLabel(group.status))}
+      ${group.detail ? ` · ${esc(group.detail)}` : ''}
+    </div>
+    <small>
+      ${group.started_at ? `Tempo: ${esc(durationBetween(group.started_at, group.finished_at))}` : 'Aguardando início'}
+    </small>
+  `;
 }
+
 
 async function finishRun(run){
   clearInterval(pollTimer);pollTimer=null;
