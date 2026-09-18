@@ -57,16 +57,183 @@ function render(result){
 function buildToc(){const nav=$('#toc-links');nav.innerHTML='';document.querySelectorAll('#report h2').forEach((h,i)=>{h.id=`sec-${i}`;const a=document.createElement('a');a.href=`#${h.id}`;a.textContent=h.textContent;nav.appendChild(a)})}
 function stageClass(status){return ({PENDING:'pending',RUNNING:'running',DONE:'done',SKIPPED:'skipped',FAILED:'failed',CANCELLED:'cancelled'})[status]||'pending'}
 function stageLabel(status){return ({PENDING:'Aguardando',RUNNING:'Executando',DONE:'Concluído',SKIPPED:'Não necessário',FAILED:'Erro',CANCELLED:'Interrompido'})[status]||status}
+function formatNumber(value){
+  return new Intl.NumberFormat('pt-BR').format(Number(value || 0));
+}
+
+function formatUSD(value){
+  const number = Number(value || 0);
+
+  if(number === 0){
+    return 'US$ 0,00';
+  }
+
+  if(number < 0.01){
+    return `US$ ${number.toFixed(6).replace('.', ',')}`;
+  }
+
+  return `US$ ${number.toFixed(4).replace('.', ',')}`;
+}
+
+function durationBetween(start, end){
+  if(!start) return '—';
+
+  const a = new Date(start);
+  const b = end ? new Date(end) : new Date();
+
+  let seconds = Math.max(
+    0,
+    Math.floor((b.getTime() - a.getTime()) / 1000)
+  );
+
+  if(seconds < 60){
+    return `${seconds}s`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  seconds %= 60;
+
+  if(minutes < 60){
+    return `${minutes}min ${seconds}s`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+
+  return `${hours}h ${remainingMinutes}min`;
+}
+
+function runStatusLabel(status){
+  return ({
+    PENDING: 'Aguardando',
+    RUNNING: 'Em execução',
+    COMPLETED: 'Concluído',
+    FAILED: 'Erro',
+    CANCELLED: 'Interrompido'
+  })[status] || status;
+}
+
+function runStatusClass(status){
+  return ({
+    PENDING: 'pending',
+    RUNNING: 'running',
+    COMPLETED: 'done',
+    FAILED: 'failed',
+    CANCELLED: 'cancelled'
+  })[status] || 'pending';
+}
+
+
 function renderRun(run){
   $('#run-tracker').classList.remove('hidden');
-  $('#run-summary').textContent=run.message||`Status: ${run.status}`;
-  $('#stage-grid').innerHTML=(run.stages||[]).map(stage=>`<div class="stage-card ${stageClass(stage.status)}"><div class="stage-head"><span class="stage-dot"></span><span>${esc(stage.label)}</span></div><div class="stage-detail"><b>${esc(stageLabel(stage.status))}</b>${stage.detail?` · ${esc(stage.detail)}`:''}</div></div>`).join('');
-  const running=['PENDING','RUNNING'].includes(run.status);
-  $('#submit').disabled=running;
-  $('#stop-report').classList.toggle('hidden',!running);
-  $('#stop-report').disabled=!!run.cancel_requested;
-  $('#stop-report').textContent=run.cancel_requested?'Parando…':'Parar relatório';
+
+  const stages = run.stages || [];
+  const costs = run.costs || {};
+
+  const completedStages = stages.filter(stage => stage.status === 'DONE').length;
+  const processedStages = stages.filter(stage => ['DONE','SKIPPED'].includes(stage.status)).length;
+  const totalStages = stages.length;
+  const percent = totalStages ? Math.round((processedStages / totalStages) * 100) : 0;
+
+  const currentStage =
+    stages.find(stage => stage.status === 'RUNNING') ||
+    stages.find(stage => stage.status === 'FAILED') ||
+    stages.find(stage => stage.status === 'CANCELLED') ||
+    (run.status === 'COMPLETED' ? stages[stages.length - 1] : null);
+
+  $('#run-summary').textContent = currentStage?.status === 'RUNNING'
+    ? `Executando: ${currentStage.label}`
+    : (run.message || `Status: ${run.status}`);
+
+  $('#run-status-badge').innerHTML = `
+    <span class="run-badge ${runStatusClass(run.status)}">
+      ${esc(runStatusLabel(run.status))}
+    </span>
+  `;
+
+  $('#run-progress-label').textContent =
+    `${completedStages} concluída(s) · ${processedStages}/${totalStages} processadas`;
+  $('#run-progress-percent').textContent = `${percent}%`;
+  $('#run-progress-bar').style.width = `${percent}%`;
+
+  const inputTokens = Number(costs.total_input_tokens || 0);
+  const outputTokens = Number(costs.total_output_tokens || 0);
+  const cachedTokens = Number(costs.total_cached_input_tokens || 0);
+  const totalTokens = inputTokens + outputTokens;
+
+  const modelEntries = Object.values(costs.by_model || {});
+  const models = modelEntries.length
+    ? modelEntries.map(x => x.model).filter(Boolean).join(', ')
+    : '—';
+
+  $('#run-metrics').innerHTML = `
+    <div class="run-metric">
+      <span class="run-metric-label">Etapa atual</span>
+      <strong>${esc(currentStage?.label || runStatusLabel(run.status))}</strong>
+      <small>${currentStage?.detail ? esc(currentStage.detail) : 'Nenhuma operação em andamento'}</small>
+    </div>
+
+    <div class="run-metric cost">
+      <span class="run-metric-label">Custo LLM</span>
+      <strong>${formatUSD(costs.total_cost_usd)}</strong>
+      <small>${formatNumber(costs.calls)} chamada(s) à LLM</small>
+    </div>
+
+    <div class="run-metric">
+      <span class="run-metric-label">Tokens</span>
+      <strong>${formatNumber(totalTokens)}</strong>
+      <small>${formatNumber(inputTokens)} entrada · ${formatNumber(outputTokens)} saída${cachedTokens ? ` · ${formatNumber(cachedTokens)} cache` : ''}</small>
+    </div>
+
+    <div class="run-metric">
+      <span class="run-metric-label">Tempo</span>
+      <strong>${durationBetween(run.started_at, run.finished_at)}</strong>
+      <small>${esc(models)}</small>
+    </div>
+  `;
+
+  $('#run-steps').innerHTML = stages.map((stage, index) => {
+    const statusClass = stageClass(stage.status);
+    const circleContent = stage.status === 'DONE' ? '✓' : String(index + 1);
+
+    return `
+      <div class="run-step ${statusClass}" title="${esc(stage.detail || stageLabel(stage.status))}">
+        <div class="run-step-circle">${circleContent}</div>
+        <div class="run-step-label">${esc(stage.label)}</div>
+        <div class="run-step-status">${esc(stageLabel(stage.status))}</div>
+      </div>
+    `;
+  }).join('');
+
+  const detailStage = currentStage || stages.find(stage => stage.status === 'PENDING') || null;
+  const detailClass = detailStage ? stageClass(detailStage.status) : 'pending';
+  const detailBox = $('#run-stage-detail');
+  detailBox.className = `run-stage-detail ${detailClass}`;
+  detailBox.innerHTML = detailStage
+    ? `
+        <strong>${esc(detailStage.label)}</strong>
+        <div>${esc(stageLabel(detailStage.status))}${detailStage.detail ? ` · ${esc(detailStage.detail)}` : ''}</div>
+        <small>${detailStage.started_at ? `Tempo: ${esc(durationBetween(detailStage.started_at, detailStage.finished_at))}` : 'Aguardando início'}</small>
+      `
+    : `
+        <strong>Execução</strong>
+        <div>Nenhuma etapa disponível.</div>
+      `;
+
+  if(currentStage?.status === 'RUNNING'){
+    requestAnimationFrame(() => {
+      const active = document.querySelector('.run-step.running');
+      active?.scrollIntoView({behavior:'smooth', inline:'center', block:'nearest'});
+    });
+  }
+
+  const running = ['PENDING','RUNNING'].includes(run.status);
+  $('#submit').disabled = running;
+  $('#stop-report').classList.toggle('hidden', !running);
+  $('#stop-report').disabled = !!run.cancel_requested;
+  $('#stop-report').textContent = run.cancel_requested ? 'Parando…' : 'Parar relatório';
 }
+
 async function finishRun(run){
   clearInterval(pollTimer);pollTimer=null;
   $('#submit').disabled=false;$('#stop-report').classList.add('hidden');
@@ -88,7 +255,7 @@ $('#report-form').addEventListener('submit',async e=>{e.preventDefault();const b
   const payload={topic:$('#topic').value.trim()};
   for(const [id,key] of [['collection-start','collection_start'],['collection-end','collection_end'],['event-start','event_start'],['event-end','event_end']]){if($(`#${id}`).value)payload[key]=$(`#${id}`).value}
   const created=await api('/projects',{method:'POST',body:JSON.stringify(payload)});currentProjectId=created.id;
-  const started=await api(`/projects/${created.id}/run-async`,{method:'POST'});currentRunId=started.run.run_id;renderRun(started.run);progress.textContent='Execução iniciada. Acompanhe cada etapa abaixo.';
+  const started=await api(`/projects/${created.id}/run-async`,{method:'POST'});currentRunId=started.run.run_id;renderRun(started.run);progress.textContent='Relatório em processamento.';
   if(pollTimer)clearInterval(pollTimer);pollTimer=setInterval(pollRun,1000);await pollRun();
 }catch(err){progress.textContent=`Erro: ${err.message}`;btn.disabled=false;$('#stop-report').classList.add('hidden')}});
 

@@ -10,3 +10,5 @@ __pycache__/
 postgres_data/
 output/
 tmp/
+/repercussao.db-shm
+/repercussao.db-wal

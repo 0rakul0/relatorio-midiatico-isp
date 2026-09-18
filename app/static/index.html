@@ -32,10 +32,31 @@
       </form>
       <div id="progress" class="progress hidden"></div>
       <section id="run-tracker" class="run-tracker hidden">
-        <h3>Acompanhamento da execução</h3>
-        <div id="run-summary" class="run-summary"></div>
-        <div id="stage-grid" class="stage-grid"></div>
-      </section>
+    <div class="run-title-row">
+        <div>
+            <h3>Acompanhamento da execução</h3>
+            <div id="run-summary" class="run-summary"></div>
+        </div>
+
+        <div id="run-status-badge"></div>
+    </div>
+
+    <div class="run-progress-box">
+        <div class="run-progress-header">
+            <span id="run-progress-label">0 de 0 etapas concluídas</span>
+            <strong id="run-progress-percent">0%</strong>
+        </div>
+
+        <div class="run-progress-track">
+            <div id="run-progress-bar" class="run-progress-bar"></div>
+        </div>
+    </div>
+
+    <div id="run-metrics" class="run-metrics"></div>
+
+    <div id="run-steps" class="run-steps" aria-label="Etapas da execução"></div>
+    <div id="run-stage-detail" class="run-stage-detail"></div>
+</section>
     </section>
     <aside class="panel history">
       <h2>Histórico</h2><p class="note">Últimas versões geradas.</p><div id="history-list" class="history-list">Carregando…</div>
