@@ -211,6 +211,53 @@ def build_pdf(data: dict) -> bytes:
 
     add_section("Resumo Executivo", report["executive_summary"])
 
+    relation_labels = {
+        "DIRECT_PRODUCT": "Direto ao produto",
+        "ATTRIBUTED_FINDING": "Achado atribuído",
+        "DERIVED_COVERAGE": "Cobertura derivada",
+        "DIRECT_EVENT": "Direto ao evento",
+        "THEMATIC_CONTEXT": "Contexto temático",
+        "THEMATIC_ONLY": "Apenas semelhante",
+        "UNRELATED": "Não relacionado",
+    }
+    related_preview = corpus[:10]
+    story.append(Paragraph("Itens relacionados encontrados", heading))
+    story.append(
+        Paragraph(
+            "Conteúdos da nova coleta ou do corpus histórico validados como materialmente relacionados ao tema.",
+            small,
+        )
+    )
+    if related_preview:
+        story.append(
+            _table(
+                [["#", "Data", "Fonte", "Título", "Relação", "Origem", "URL"]]
+                + [
+                    [
+                        index + 1,
+                        item.get("published_at") or item.get("published_year") or "N/D",
+                        item.get("source") or item.get("domain") or "Fonte aberta",
+                        item.get("title") or "Sem título",
+                        relation_labels.get(item.get("relation_type"), item.get("relation_type") or "Relacionado ao tema"),
+                        "Corpus reutilizado" if str(item.get("corpus_origin") or "").upper() == "REUSED" else "Nova coleta",
+                        item.get("url") or "",
+                    ]
+                    for index, item in enumerate(related_preview)
+                ],
+                [0.55 * cm, 1.4 * cm, 2.0 * cm, 3.8 * cm, 2.4 * cm, 2.0 * cm, 4.45 * cm],
+                small,
+            )
+        )
+        if len(corpus) > len(related_preview):
+            story.append(
+                Paragraph(
+                    f"Exibindo 10 de {len(corpus)} itens relacionados. O corpus auditável completo está nos anexos.",
+                    small,
+                )
+            )
+    else:
+        story.append(Paragraph("Nenhum item relacionado foi validado na amostra.", small))
+
     if fact_layer_enabled:
         story.append(Paragraph("Camada de Fatos Verificados", heading))
         story.append(Paragraph(escape(_text(report.get("fact_layer_intro", ""))), body))
@@ -473,18 +520,20 @@ def build_pdf(data: dict) -> bytes:
         if not rows:
             return Paragraph("Nenhum item validado nesta categoria para a janela observada.", small)
         return _table(
-            [["#", "Data", "Fonte", "Título", "URL"]]
+            [["#", "Data", "Fonte", "Título", "Relação", "Origem", "URL"]]
             + [
                 [
                     str(index + 1),
                     item.get("published_at") or item.get("published_year", "N/D"),
                     item.get("source") or item.get("domain") or "Fonte aberta",
                     item.get("title"),
+                    relation_labels.get(item.get("relation_type"), item.get("relation_type") or "Relacionado"),
+                    "Reutilizado" if str(item.get("corpus_origin") or "").upper() == "REUSED" else "Nova coleta",
                     item.get("url"),
                 ]
                 for index, item in enumerate(rows)
             ],
-            [0.75 * cm, 1.6 * cm, 2.3 * cm, 5.2 * cm, 6.75 * cm],
+            [0.55 * cm, 1.25 * cm, 1.7 * cm, 3.7 * cm, 2.1 * cm, 1.6 * cm, 5.7 * cm],
             small,
         )
 

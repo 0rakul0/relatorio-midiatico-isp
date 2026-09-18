@@ -140,7 +140,7 @@ def _institutional_anchor_score(project: Project, body: str) -> int:
     return score
 
 
-def _relevance_fallback_decision(project: Project, item: MediaItem) -> tuple[bool, str]:
+def _relevance_fallback_decision(project: Project, item: MediaItem) -> tuple[bool, str, str]:
     body = " ".join(filter(None, [item.title, item.snippet, item.content or ""]))
     fallback_score = _topic_overlap_score(project, body)
     institutional_score = (
@@ -150,25 +150,44 @@ def _relevance_fallback_decision(project: Project, item: MediaItem) -> tuple[boo
     )
     if project.project_type == "INSTITUTIONAL_PRODUCT":
         related = institutional_score >= 2 or fallback_score >= 2
+        if institutional_score >= 3:
+            relation_type = "DIRECT_PRODUCT"
+        elif institutional_score >= 2:
+            relation_type = "DERIVED_COVERAGE"
+        elif fallback_score >= 2:
+            relation_type = "THEMATIC_CONTEXT"
+        else:
+            relation_type = "UNRELATED"
         return (
             related,
+            relation_type,
             "Relação material com o produto/tema, seus achados ou contexto midiático"
             if related
             else "Sem relação temática suficiente com o objeto monitorado",
         )
+
+    related = fallback_score > 0
+    if related and project.project_type == "EVENT_TOPIC":
+        relation_type = "DIRECT_EVENT"
+    elif related:
+        relation_type = "THEMATIC_CONTEXT"
+    else:
+        relation_type = "UNRELATED"
     return (
-        fallback_score > 0,
-        "Aderência lexical" if fallback_score > 0 else "Sem aderência lexical suficiente",
+        related,
+        relation_type,
+        "Aderência temática suficiente" if related else "Sem aderência temática suficiente",
     )
 
 
 def _review_media_relevance_batch(
     project: Project,
     items: list[MediaItem],
-) -> tuple[dict[int, tuple[bool, str]], int]:
+) -> tuple[dict[int, tuple[bool, str, str]], int]:
     """Revisa vários itens em uma única chamada estruturada.
 
-    Retorna ``({media_item_id: (related, evidence)}, llm_calls)``. Se a OpenAI
+    Retorna ``({media_item_id: (related, relation_type, evidence)}, llm_calls)``.
+    Se a OpenAI
     estiver indisponível, a decisão cai para a heurística conservadora sem
     abrir uma chamada por item.
     """
@@ -255,20 +274,21 @@ O campo anchor deve mostrar a conexão concreta com o tema; não exija o nome do
         "THEMATIC_CONTEXT",
     }
 
-    decisions: dict[int, tuple[bool, str]] = {}
+    decisions: dict[int, tuple[bool, str, str]] = {}
     for item in items:
         row = by_id.get(item.id)
         if not row:
             decisions[item.id] = _relevance_fallback_decision(project, item)
             continue
-        related = bool(row.get("related")) and row.get("relation_type") in allowed_types
+        relation_type = str(row.get("relation_type") or "UNRELATED")
+        related = bool(row.get("related")) and relation_type in allowed_types
         evidence = (
             row.get("anchor")
             or row.get("evidence")
             or row.get("reason")
             or "Sem âncora temática"
         )
-        decisions[item.id] = (related, str(evidence))
+        decisions[item.id] = (related, relation_type, str(evidence))
     return decisions, 1
 
 
@@ -375,10 +395,12 @@ def validate_and_classify(
         semantic_reviews += len(batch)
 
         for item in batch:
-            related, evidence = decisions.get(
+            related, relation_type, evidence = decisions.get(
                 item.id,
                 _relevance_fallback_decision(project, item),
             )
+            item.relation_type = relation_type
+            item.relevance_evidence = evidence[:1000]
             if not related:
                 item.status = "NOT_RELATED"
                 item.discard_reason = evidence[:1000]

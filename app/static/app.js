@@ -10,6 +10,9 @@ api('/health').then(d=>$('#api-status').textContent=`API conectada · ${d.versio
 function qaBadge(qa){const status=qa?.status||'PENDING';const cls=status==='APPROVED'?'ok':status==='REJECTED'?'bad':'warn';return `<span class="badge ${cls}">${esc(status)}</span>`}
 function factStatus(v){const map={CONFIRMED:'Confirmado',PARTIALLY_CONFIRMED:'Confirmação parcial',SOURCE_CONFLICT:'Conflito entre fontes',NOT_FOUND_IN_SAMPLE:'Não localizado na amostra'};return map[v]||v||'N/D'}
 function scopeLabel(v){return v===true?'núcleo principal':v===false?'caso relacionado':'escopo pendente'}
+function relationLabel(v){const map={DIRECT_PRODUCT:'Direto ao produto',ATTRIBUTED_FINDING:'Achado atribuído',DERIVED_COVERAGE:'Cobertura derivada',DIRECT_EVENT:'Direto ao evento',THEMATIC_CONTEXT:'Contexto temático',THEMATIC_ONLY:'Apenas semelhante',UNRELATED:'Não relacionado'};return map[v]||v||'Relacionado ao tema'}
+function originLabel(v){return String(v||'SEARCH').toUpperCase()==='REUSED'?'Corpus reutilizado':'Nova coleta'}
+function originClass(v){return String(v||'SEARCH').toUpperCase()==='REUSED'?'reused':'new'}
 function render(result){
   const d=result.report,p=result.project,m=result.metrics,qa=result.qa||{};
   const facts=result.fact_events||[];
@@ -25,7 +28,31 @@ function render(result){
   const axes=(d.thematic_axes||[]).map(x=>[esc(x.axis),esc(x.anchor_data),esc(x.coverage)]);
   const risks=(d.risk_assessment||[]).map(x=>[esc(x.dimension),esc(x.assessment),esc(x.evidence)]);
   const kit=(d.press_kit||[]).map(x=>[esc(x.product),esc(x.purpose)]);
-  const corpus=(result.corpus||[]).map((x,i)=>[String(i+1),esc(x.published_at||x.published_year||'N/D'),esc(x.source||x.domain||'Fonte aberta'),esc(x.title),`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">${esc(x.url)}</a>`]);
+  const rawCorpus=result.corpus||[];
+  const corpus=rawCorpus.map((x,i)=>[String(i+1),esc(x.published_at||x.published_year||'N/D'),esc(x.source||x.domain||'Fonte aberta'),esc(x.title),esc(relationLabel(x.relation_type)),esc(originLabel(x.corpus_origin)),`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">Abrir</a>`]);
+  const relatedPreview=rawCorpus.slice(0,10);
+  const relatedCards=relatedPreview.length?`
+    <div class="related-items">
+      ${relatedPreview.map((x,i)=>`
+        <article class="related-item">
+          <div class="related-item-top">
+            <span class="related-index">${i+1}</span>
+            <div>
+              <div class="related-source">${esc(x.source||x.domain||'Fonte aberta')} · ${esc(x.published_at||x.published_year||'Data não localizada')}</div>
+              <a class="related-title" href="${esc(x.url)}" target="_blank" rel="noreferrer">${esc(x.title||'Sem título')}</a>
+            </div>
+          </div>
+          <div class="related-badges">
+            <span class="relation-badge">${esc(relationLabel(x.relation_type))}</span>
+            <span class="origin-badge ${originClass(x.corpus_origin)}">${esc(originLabel(x.corpus_origin))}</span>
+            ${x.isp_mentioned?'<span class="isp-badge">Menciona ISP</span>':''}
+          </div>
+          ${x.relation_evidence?`<p class="related-evidence">${esc(x.relation_evidence)}</p>`:''}
+        </article>
+      `).join('')}
+    </div>
+    ${rawCorpus.length>relatedPreview.length?`<p class="related-more">Exibindo 10 de ${rawCorpus.length} itens relacionados. O corpus auditável completo está ao final do relatório.</p>`:''}
+  `:'<p>Nenhum item relacionado foi validado na amostra.</p>';
   const windowLabel=(a,b,empty='Não delimitado')=>a&&b?`${esc(a)} a ${esc(b)}`:a?esc(a):b?esc(b):empty;
   const factLayerEnabled=!!p.execution_flags?.enable_fact_layer;
   const factSection=factLayerEnabled?`<h2>Camada de Fatos Verificados</h2><p>${esc(d.fact_layer_intro||'')}</p>${facts.length?table(['Pessoa','Vínculo','Data','Fato / causa','Local do fato','Local da morte','Situação'],factRows):'<p>Nenhum fato individual foi suficientemente estruturado na amostra factual.</p>'}`:'';
@@ -36,6 +63,9 @@ function render(result){
     <h1>${esc(d.title)}</h1><p class="interpretive">${esc(d.interpretive_title)}</p><p class="subtitle">${esc(d.subtitle)}</p>
     <div class="report-meta"><div><b>Instituição</b><br>${esc(p.institution)}</div>${contextMeta}<div><b>Janela de repercussão</b><br>${windowLabel(p.collection_start,p.collection_end,'Busca temática')}</div><div><b>QA</b><br>${qaBadge(qa)}</div></div>
     <h2>Resumo Executivo</h2><div class="summary"><p>${esc(d.executive_summary)}</p></div>
+    <h2>Itens relacionados encontrados</h2>
+    <p class="related-intro">Notícias e conteúdos encontrados pela coleta ou reaproveitados do corpus histórico que foram validados como materialmente relacionados ao tema.</p>
+    ${relatedCards}
     ${factSection}
     <h2>Abertura</h2><p>${esc(d.opening)}</p>
     <h2>I. Panorama da Repercussão</h2><p>${esc(d.panorama)}</p>
@@ -48,7 +78,7 @@ function render(result){
     <h2>VII. Recomendações e Kit de Imprensa</h2><ul>${(d.recommendations||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul>${table(['Produto','Finalidade'],kit)}
     <h2>VIII. Síntese</h2><p>${esc(d.synthesis)}</p>
     <h2>Anexo A - Nota Metodológica</h2><p>${esc(d.methodological_note)}</p>
-    <h2>Corpus Auditável</h2>${corpus.length?table(['#','Data','Fonte','Título','URL'],corpus):'<p>Nenhum item validado na amostra para a janela de repercussão.</p>'}
+    <h2>Corpus Auditável</h2>${corpus.length?table(['#','Data','Fonte','Título','Relação','Origem','URL'],corpus):'<p>Nenhum item validado na amostra para a janela de repercussão.</p>'}
     ${qa.findings?.length?`<h2>Achados de QA</h2>${table(['Severidade','Código','Mensagem'],qa.findings.map(x=>[esc(x.severity),esc(x.code),esc(x.message)]))}`:''}
     <div class="footer-note">Fato, fonte factual e item de repercussão são tratados como objetos distintos. Fontes posteriores podem confirmar um fato sem aumentar a repercussão do mês.</div>`;
   buildToc();
