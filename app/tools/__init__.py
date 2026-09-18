@@ -1,6 +1,7 @@
 """Tools opcionais disponíveis para o agente único."""
 from app.tools.registry import build_agent_tools
 from app.tools.search import (
+    SearchAttempt,
     SearchContextResolver,
     SearchSink,
     make_video_search_tool,
@@ -8,6 +9,7 @@ from app.tools.search import (
 )
 
 __all__ = [
+    "SearchAttempt",
     "SearchContextResolver",
     "SearchSink",
     "build_agent_tools",

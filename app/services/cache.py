@@ -13,18 +13,33 @@ from app.services.metrics import corpus_for_project, metrics, split_corpus
 
 
 def hydrate_cached_report(db: Session, project: Project, generated: GeneratedReport) -> dict:
-    payload = dict(generated.body)
-    payload["project"] = project_payload(project, for_report=True)
-    payload["metrics"] = metrics(db, project.id)
-    payload["corpus"] = corpus_for_project(db, project.id)
-    payload["traditional_corpus"], payload["social_corpus"] = split_corpus(payload["corpus"])
+    """Devolve o snapshot imutável do relatório salvo no momento da geração.
+
+    Métricas, corpus, fatos e dados do projeto NÃO são recalculados a partir do
+    banco atual: o histórico precisa permanecer idêntico ao que foi gerado.
+    Apenas chaves ausentes em relatórios legados são preenchidas.
+    """
+    payload = dict(generated.body or {})
+    payload.setdefault("project", project_payload(project, for_report=True))
+    if "metrics" not in payload:
+        payload["metrics"] = metrics(db, project.id)
+    if "corpus" not in payload:
+        corpus = corpus_for_project(db, project.id)
+        payload["corpus"] = corpus
+        payload["traditional_corpus"], payload["social_corpus"] = split_corpus(corpus)
+    payload.setdefault("traditional_corpus", [])
+    payload.setdefault("social_corpus", [])
     _, flags = execution_flags(project)
-    payload["fact_events"] = fact_events_for_main_report(db, project.id) if flags["enable_fact_layer"] else []
-    payload["fact_evidence"] = (
-        fact_assertions_for_report(db, project.id, main_report_only=True)
-        if flags["enable_fact_layer"]
-        else []
-    )
+    if "fact_events" not in payload:
+        payload["fact_events"] = (
+            fact_events_for_main_report(db, project.id) if flags["enable_fact_layer"] else []
+        )
+    if "fact_evidence" not in payload:
+        payload["fact_evidence"] = (
+            fact_assertions_for_report(db, project.id, main_report_only=True)
+            if flags["enable_fact_layer"]
+            else []
+        )
     payload["qa"] = {"status": generated.qa_status, "findings": generated.qa_findings or []}
     payload["cached_at"] = generated.generated_at.isoformat() if generated.generated_at else None
     return payload

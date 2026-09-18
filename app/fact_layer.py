@@ -129,16 +129,63 @@ def _event_window_contains(project: Project, event: dict) -> bool | None:
     return project.event_start <= candidate <= project.event_end
 
 
-def _find_event_by_name(db: Session, project: Project, name: str | None) -> FactEvent | None:
+def _extracted_value(extracted: dict, field_name: str) -> str | None:
+    return (extracted.get(field_name) or {}).get("value")
+
+
+def _identity_conflicts(event: FactEvent, extracted: dict) -> bool:
+    """Indica se algum atributo presente nos dois lados diverge.
+
+    Nome igual não basta: duas pessoas diferentes podem compartilhar o mesmo
+    nome. Só tratamos como o mesmo fato quando data, instituição, unidade,
+    local e cargo são compatíveis (ou ausentes de um dos lados).
+    """
+    for field_name in ("institution", "unit", "city", "state", "rank_or_role"):
+        extracted_value = normalize_fact_value(field_name, _extracted_value(extracted, field_name))
+        stored_value = normalize_fact_value(field_name, getattr(event, field_name, None))
+        if extracted_value and stored_value and extracted_value != stored_value:
+            return True
+    for field_name in ("event_date", "death_date"):
+        extracted_date = _parse_iso_date(_extracted_value(extracted, field_name))
+        stored_date = getattr(event, field_name, None)
+        if extracted_date and stored_date and extracted_date != stored_date:
+            return True
+    return False
+
+
+def _same_known_date(event: FactEvent, extracted: dict) -> bool:
+    for field_name in ("event_date", "death_date"):
+        extracted_date = _parse_iso_date(_extracted_value(extracted, field_name))
+        if extracted_date and extracted_date == getattr(event, field_name, None):
+            return True
+    return False
+
+
+def _find_event_by_name(db: Session, project: Project, name: str | None, extracted: dict) -> FactEvent | None:
     normalized = normalize_person_name(name)
     if not normalized:
         return None
-    return db.scalar(
-        select(FactEvent).where(
+    candidates = db.scalars(
+        select(FactEvent)
+        .where(
             FactEvent.project_id == project.id,
             FactEvent.normalized_subject_name == normalized,
         )
-    )
+        .order_by(FactEvent.id.asc())
+    ).all()
+    if not candidates:
+        return None
+
+    compatible = [candidate for candidate in candidates if not _identity_conflicts(candidate, extracted)]
+    if len(compatible) == 1:
+        return compatible[0]
+    if len(compatible) > 1:
+        # Tenta desambiguar pela data do fato; senão, mantém o candidato mais
+        # antigo para preservar estabilidade entre execuções.
+        same_date = [candidate for candidate in compatible if _same_known_date(candidate, extracted)]
+        return same_date[0] if len(same_date) == 1 else compatible[0]
+    # Há um homônimo, mas os atributos conflitam: não fundir; cria novo evento.
+    return None
 
 
 def _find_conservative_unnamed_event(db: Session, project: Project, event: dict) -> FactEvent | None:
@@ -166,7 +213,7 @@ def _find_conservative_unnamed_event(db: Session, project: Project, event: dict)
 
 def _get_or_create_event(db: Session, project: Project, extracted: dict) -> FactEvent:
     name = (extracted.get("subject_name") or {}).get("value")
-    event = _find_event_by_name(db, project, name)
+    event = _find_event_by_name(db, project, name, extracted)
     if not event:
         event = _find_conservative_unnamed_event(db, project, extracted)
     if event:

@@ -14,3 +14,17 @@ def test_event_topic_does_not_depend_on_product_launch():
     assert profile["project_type"] == "EVENT_TOPIC"
     assert profile["event_type"] == "DEATH"
     assert "policial" in profile["actors"]
+
+
+def test_known_event_prevails_over_generic_product_term():
+    # "relatório" é termo genérico de produto e não pode transformar um fato
+    # noticiado em produto institucional.
+    profile = heuristic_topic_profile("relatório sobre mortes por intervenção policial em 2026")
+    assert profile["project_type"] == "EVENT_TOPIC"
+    assert profile["event_type"] == "DEATH_BY_STATE_INTERVENTION"
+
+
+def test_generic_product_term_alone_stays_institutional_product():
+    profile = heuristic_topic_profile("Dossiê Mulher 2026")
+    assert profile["project_type"] == "INSTITUTIONAL_PRODUCT"
+    assert profile["product_anchor"] == "Dossiê Mulher"

@@ -14,6 +14,7 @@ persistência é responsabilidade do sink fornecido pelo chamador.
 from __future__ import annotations
 
 from collections.abc import Callable
+from threading import Lock
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -38,6 +39,47 @@ from app.schemas import (
 
 SearchSink = Callable[[list[dict[str, Any]], str, str], list[dict[str, Any]]]
 SearchContextResolver = Callable[[str], dict[str, Any] | None]
+SearchAttempt = Callable[[str], None]
+
+
+# Circuit breaker compartilhado do Tavily. Depois de uma falha dura
+# (cota/rate limit/chave inválida), as consultas seguintes da execução usam
+# apenas o DuckDuckGo. O estado é reiniciado no início de cada coleta.
+_tavily_lock = Lock()
+_tavily_disabled = False
+_tavily_hard_failures = 0
+_tavily_trips = 0
+
+
+def reset_tavily_circuit_breaker() -> None:
+    global _tavily_disabled, _tavily_hard_failures, _tavily_trips
+    with _tavily_lock:
+        _tavily_disabled = False
+        _tavily_hard_failures = 0
+        _tavily_trips = 0
+
+
+def tavily_circuit_breaker_snapshot() -> dict[str, int | bool]:
+    with _tavily_lock:
+        return {
+            "disabled": _tavily_disabled,
+            "hard_failures": _tavily_hard_failures,
+            "trips": _tavily_trips,
+        }
+
+
+def tavily_is_disabled() -> bool:
+    with _tavily_lock:
+        return _tavily_disabled
+
+
+def _trip_tavily_circuit_breaker() -> None:
+    global _tavily_disabled, _tavily_hard_failures, _tavily_trips
+    with _tavily_lock:
+        _tavily_hard_failures += 1
+        if not _tavily_disabled:
+            _tavily_disabled = True
+            _tavily_trips += 1
 
 
 def search_providers_available() -> bool:
@@ -114,14 +156,18 @@ def _search_web(
         except DuckDuckGoUnavailable:
             pass
 
-    if "tavily" in providers:
-        tavily = tavily_search(
-            query,
-            max_results=limit,
-            window_start=window_start,
-            window_end=window_end,
-            purpose=purpose,
-        )
+    if "tavily" in providers and not tavily_is_disabled():
+        try:
+            tavily = tavily_search(
+                query,
+                max_results=limit,
+                window_start=window_start,
+                window_end=window_end,
+                purpose=purpose,
+            )
+        except RuntimeError:
+            _trip_tavily_circuit_breaker()
+            tavily = []
         if tavily:
             return "tavily", tavily
     return "none", []
@@ -176,14 +222,18 @@ def _search_videos(
         except DuckDuckGoUnavailable:
             pass
 
-    if "tavily" in providers:
-        tavily = tavily_search(
-            query,
-            max_results=limit,
-            video_only=True,
-            window_start=window_start,
-            window_end=window_end,
-        )
+    if "tavily" in providers and not tavily_is_disabled():
+        try:
+            tavily = tavily_search(
+                query,
+                max_results=limit,
+                video_only=True,
+                window_start=window_start,
+                window_end=window_end,
+            )
+        except RuntimeError:
+            _trip_tavily_circuit_breaker()
+            tavily = []
         if tavily:
             return "tavily", tavily
     return "none", []
@@ -239,8 +289,14 @@ def make_web_search_tool(
     sink: SearchSink | None = None,
     context: SearchContextResolver | None = None,
     providers: tuple[str, ...] = ("duckduckgo", "tavily"),
+    on_attempt: SearchAttempt | None = None,
 ) -> StructuredTool:
     def pesquisar_internet(query: str, max_results: int = 5) -> dict[str, Any]:
+        # A tentativa é registrada ANTES de qualquer chamada ao provedor: uma
+        # consulta sem resultados ainda foi executada e não pode ser confundida
+        # com consulta não executada.
+        if on_attempt is not None:
+            on_attempt(query)
         options = (context(query) if context else None) or {}
         limit = int(options.get("max_results", max_results))
         window_start = options.get("window_start")
@@ -279,8 +335,11 @@ def make_video_search_tool(
     sink: SearchSink | None = None,
     context: SearchContextResolver | None = None,
     providers: tuple[str, ...] = ("duckduckgo", "tavily"),
+    on_attempt: SearchAttempt | None = None,
 ) -> StructuredTool:
     def pesquisar_videos(query: str, max_results: int = 5) -> dict[str, Any]:
+        if on_attempt is not None:
+            on_attempt(query)
         options = (context(query) if context else None) or {}
         limit = int(options.get("max_results", max_results))
         window_start = options.get("window_start")

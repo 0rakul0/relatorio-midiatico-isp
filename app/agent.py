@@ -378,13 +378,15 @@ class ReportAgent:
                 content=(
                     "Finalize a tarefa agora. Não chame novas ferramentas. "
                     f"Retorne somente os campos do contrato '{schema_name}'. "
-                    "Use o contexto e os resultados reais de ferramentas já presentes na conversa. "
-                    "Contexto original:\n"
-                    + json.dumps(payload, ensure_ascii=False, default=str)
+                    "Use o contexto e os resultados reais de ferramentas já presentes na conversa."
                 )
             ),
         ]
 
+        # A criação do output estruturado depende de suporte da versão/instalação
+        # do SDK e pode falhar com TypeError/ValueError. A execução de ``invoke``
+        # NÃO é incompatibilidade de configuração: qualquer erro dela é uma falha
+        # real de runtime e deve ser reportada como tal.
         try:
             structured_llm = llm.with_structured_output(
                 response_model,
@@ -392,12 +394,13 @@ class ReportAgent:
                 include_raw=True,
                 strict=True,
             )
-            raw_result = structured_llm.invoke(final_messages)
         except (TypeError, ValueError):
             structured_llm = llm.with_structured_output(
                 response_model,
                 include_raw=True,
             )
+
+        try:
             raw_result = structured_llm.invoke(final_messages)
         except Exception as exc:
             record_llm_usage(

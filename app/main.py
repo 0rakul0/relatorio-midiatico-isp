@@ -239,29 +239,21 @@ def delete_historical_report(project_id: int, db: Session = Depends(get_db)):
     if not target:
         raise HTTPException(404, "Versão do relatório não encontrada")
 
-    target_project, target_report = target
-    target_day = target_report.generated_at.date() if target_report.generated_at else None
-    matching_project_ids = [
-        project.id
-        for project, generated in db.execute(
-            select(Project, GeneratedReport).join(GeneratedReport, GeneratedReport.project_id == Project.id)
-        ).all()
-        if project.topic.strip().casefold() == target_project.topic.strip().casefold()
-        and (generated.generated_at.date() if generated.generated_at else None) == target_day
-    ]
-
-    event_ids = select(FactEvent.id).where(FactEvent.project_id.in_(matching_project_ids))
-    item_ids = select(MediaItem.id).where(MediaItem.project_id.in_(matching_project_ids))
+    # Exclui somente a versão solicitada. O histórico pode conter várias
+    # execuções do mesmo tópico no mesmo dia; apagá-las em cascata destruiria
+    # relatórios que o usuário não pediu para remover.
+    event_ids = select(FactEvent.id).where(FactEvent.project_id == project_id)
+    item_ids = select(MediaItem.id).where(MediaItem.project_id == project_id)
     db.execute(delete(FactAssertion).where(FactAssertion.event_id.in_(event_ids)))
-    db.execute(delete(FactEvent).where(FactEvent.project_id.in_(matching_project_ids)))
+    db.execute(delete(FactEvent).where(FactEvent.project_id == project_id))
     db.execute(delete(Classification).where(Classification.media_item_id.in_(item_ids)))
-    db.execute(delete(GeneratedReport).where(GeneratedReport.project_id.in_(matching_project_ids)))
-    db.execute(delete(OfficialFact).where(OfficialFact.project_id.in_(matching_project_ids)))
+    db.execute(delete(GeneratedReport).where(GeneratedReport.project_id == project_id))
+    db.execute(delete(OfficialFact).where(OfficialFact.project_id == project_id))
     # MediaItem referencia SearchQuery; remova os itens antes das consultas para
     # funcionar também quando o banco estiver com FKs estritas habilitadas.
-    db.execute(delete(MediaItem).where(MediaItem.project_id.in_(matching_project_ids)))
-    db.execute(delete(SearchQuery).where(SearchQuery.project_id.in_(matching_project_ids)))
-    db.execute(delete(Project).where(Project.id.in_(matching_project_ids)))
+    db.execute(delete(MediaItem).where(MediaItem.project_id == project_id))
+    db.execute(delete(SearchQuery).where(SearchQuery.project_id == project_id))
+    db.execute(delete(Project).where(Project.id == project_id))
     db.commit()
     return Response(status_code=204)
 

@@ -24,7 +24,6 @@ from app.services.collection.guards import (
     collection_guard,
     institutional_product_version_guard_text,
 )
-from app.services.collection.youtube_helpers import is_youtube_host
 
 
 def validate_video_metadata_cross_source(
@@ -332,15 +331,11 @@ def validate_and_classify(
             continue
 
         publication_date = inferred_publication_date(item)
-        is_social = (
-            item.search_source in {"youtube", "youtube_api", "duckduckgo_video"}
-            or is_youtube_host(item.domain or "")
-        )
 
-        if enforce_window and is_social and not publication_date:
+        if enforce_window and not publication_date:
             item.status = "DATE_UNVERIFIED"
             item.discard_reason = (
-                "Data de publicação do vídeo não verificável dentro de uma pauta com janela temporal"
+                "Data de publicação não verificável dentro de uma pauta com janela temporal"
             )
             discarded += 1
             continue

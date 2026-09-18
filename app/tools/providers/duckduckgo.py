@@ -7,12 +7,15 @@ exclusivamente por ``app.tools.search``.
 
 from __future__ import annotations
 
+import ipaddress
 import random
+import socket
 import time
 from html.parser import HTMLParser
 from typing import Any, Callable
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+from urllib.parse import urljoin, urlparse
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 class DuckDuckGoUnavailable(RuntimeError):
@@ -205,6 +208,75 @@ def search_videos(
     return _with_retries(run, retries=retries, base_delay=retry_base_seconds)
 
 
+_BLOCKED_HOSTNAMES = {
+    "localhost",
+    "localhost.localdomain",
+    "ip6-localhost",
+    "ip6-loopback",
+    "metadata",
+    "metadata.google.internal",
+}
+
+
+def _host_is_public(host: str | None) -> bool:
+    """True somente para hostnames cujos IPs resolvidos são globais.
+
+    Bloqueia localhost, loopback, faixas privadas, link-local, reservadas,
+    multicast e endereços não especificados (proteção SSRF).
+    """
+    if not host:
+        return False
+    candidate = host.strip().strip("[]").lower().rstrip(".")
+    if not candidate or candidate in _BLOCKED_HOSTNAMES:
+        return False
+
+    try:
+        return ipaddress.ip_address(candidate).is_global
+    except ValueError:
+        pass
+
+    try:
+        infos = socket.getaddrinfo(candidate, None)
+    except OSError:
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        address = info[4][0]
+        try:
+            if not ipaddress.ip_address(address).is_global:
+                return False
+        except ValueError:
+            return False
+    return True
+
+
+def _url_is_public(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    return _host_is_public(parsed.hostname)
+
+
+class _SafeRedirectHandler(HTTPRedirectHandler):
+    """Revalida cada salto de redirecionamento antes de segui-lo."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        target = urljoin(req.full_url, newurl)
+        if not _url_is_public(target):
+            raise HTTPError(
+                req.full_url,
+                code,
+                f"redirecionamento bloqueado para destino não público: {target}",
+                headers,
+                fp,
+            )
+        return super().redirect_request(req, fp, code, msg, headers, target)
+
+
 class _VisibleTextParser(HTMLParser):
     _skip_tags = {"script", "style", "noscript", "svg", "canvas", "template"}
 
@@ -236,7 +308,7 @@ def fetch_url_text(
     timeout: float = 10.0,
 ) -> str | None:
     """Baixa HTML simples para enriquecer o snippet; falhas nao interrompem a coleta."""
-    if not url.startswith(("http://", "https://")):
+    if not _url_is_public(url):
         return None
 
     request = Request(
@@ -252,7 +324,7 @@ def fetch_url_text(
         },
     )
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with build_opener(_SafeRedirectHandler()).open(request, timeout=timeout) as response:
             content_type = str(response.headers.get("Content-Type") or "").lower()
             if "text/html" not in content_type and "application/xhtml+xml" not in content_type:
                 return None

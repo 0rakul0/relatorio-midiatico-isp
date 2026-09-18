@@ -13,6 +13,7 @@ from app.tools.search import search_providers_available
 def new_web_counters(global_limit: int) -> dict[str, int]:
     return {
         "queries_total": 0,
+        "queries_attempted": 0,
         "queries_successful": 0,
         "duckduckgo_queries": 0,
         "duckduckgo_results": 0,

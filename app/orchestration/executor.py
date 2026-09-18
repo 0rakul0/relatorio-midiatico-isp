@@ -16,9 +16,8 @@ from app.database import SessionLocal
 from app.models import Project
 from app.orchestration.state import (
     RunCancelled,
-    active_run_for_project,
     check_cancelled,
-    create_run,
+    create_run_if_none,
     mark_run_cancelled,
     mark_run_completed,
     mark_run_failed,
@@ -76,14 +75,14 @@ def _run_project_worker(run_id: str, project_id: int) -> None:
 def start_run(project_id: int) -> dict:
     """Inicia uma execução assíncrona e devolve o snapshot do run.
 
-    Se já houver execução ativa para o projeto, devolve o snapshot dela sem
-    iniciar outra.
+    A checagem de execução ativa e a criação do run são atômicas. Se já houver
+    execução ativa (neste processo ou persistida por outro worker), devolve o
+    snapshot dela sem iniciar outra.
     """
-    active = active_run_for_project(project_id)
-    if active:
-        return active
+    state, created = create_run_if_none(project_id)
+    if not created:
+        return run_snapshot(state.run_id) or {}
 
-    state = create_run(project_id)
     thread = Thread(
         target=_run_project_worker,
         args=(state.run_id, project_id),
@@ -91,4 +90,4 @@ def start_run(project_id: int) -> dict:
         daemon=True,
     )
     thread.start()
-    return run_snapshot(state.run_id)
+    return run_snapshot(state.run_id) or {}

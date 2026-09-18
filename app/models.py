@@ -209,6 +209,32 @@ class GeneratedReport(Base):
     generated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class ReportRun(Base):
+    """Estado persistido de uma execução assíncrona de relatório.
+
+    Mantém progresso, estágios e pedido de cancelamento para sobreviver a
+    reinícios do processo e permitir coordenação entre workers. Os estágios são
+    serializados em JSON na ordem de ``RUN_STAGES``.
+    """
+
+    __tablename__ = "report_runs"
+
+    run_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    # Sem FK para não perder o histórico de runs se o projeto for removido.
+    project_id: Mapped[int] = mapped_column(Integer, index=True)
+    status: Mapped[str] = mapped_column(String(40), default="PENDING")
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    started_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    finished_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    stages: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class LLMCall(Base):
     """Registro de custo/consumo de uma chamada única à OpenAI.
 

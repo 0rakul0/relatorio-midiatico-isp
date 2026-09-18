@@ -106,10 +106,18 @@ def _heuristic_project_type(topic: str) -> str:
         "operacao", "apreensao", "prisao", "vitima", "ferido", "feminicidio", "homicidio",
         "intervencao de agente do estado", "intervencao policial", "letalidade policial",
     )
+    # Categorias factuais conhecidas e eventos explícitos prevalecem sobre termos
+    # genéricos de produto. Um título como "relatório sobre mortes ..." é um fato
+    # noticiado, não um produto institucional; caso contrário, a palavra
+    # "relatório" sozinha forçaria INSTITUTIONAL_PRODUCT.
+    if _is_state_intervention_death_topic(topic):
+        return "EVENT_TOPIC"
+    if any(term in text for term in event_terms):
+        return "EVENT_TOPIC"
+    if requested_month_window(topic):
+        return "EVENT_TOPIC"
     if any(term in text for term in product_terms):
         return "INSTITUTIONAL_PRODUCT"
-    if requested_month_window(topic) or any(term in text for term in event_terms):
-        return "EVENT_TOPIC"
     return "GENERAL_TOPIC"
 
 

@@ -32,7 +32,11 @@ from app.services.collection.common import (
 from app.services.collection.persist import persist_video_rows, persist_web_rows
 from app.services.collection.youtube_helpers import youtube_tasks_for_execution
 from app.tools import build_agent_tools
-from app.tools.search import search_providers_available
+from app.tools.search import (
+    reset_tavily_circuit_breaker,
+    search_providers_available,
+    tavily_circuit_breaker_snapshot,
+)
 
 
 class CollectionState:
@@ -143,6 +147,49 @@ def _make_video_context(project: Project):
         }
 
     return context
+
+
+def _make_web_attempt(
+    state: CollectionState,
+    session: Session,
+    plan: dict[str, SearchQuery],
+):
+    """Registra que a tool iniciou de fato a consulta planejada.
+
+    Marca ``SearchQuery.executed_at`` no primeiro início, mesmo quando a busca
+    não retorna resultado algum. Isso separa "tentada" de "com resultado
+    utilizável" e impede que uma consulta sem resultados seja reexecutada ou
+    contada como não executada.
+    """
+    counters = state.counters
+    progress = state.progress_detail
+
+    def attempt(query: str) -> None:
+        state.invoked = True
+        state.attempted.add(query)
+        counters["queries_attempted"] = counters.get("queries_attempted", 0) + 1
+        entry = plan.get(query)
+        if entry is not None and entry.executed_at is None:
+            entry.executed_at = datetime.now(timezone.utc)
+            try:
+                session.flush()
+            except Exception as exc:
+                state.errors.append(f"{query}: falha ao registrar execução ({exc})")
+        if progress:
+            progress(f"Executando consulta: {query[:90]}")
+
+    return attempt
+
+
+def _make_video_attempt(state: CollectionState):
+    counters = state.counters
+
+    def attempt(query: str) -> None:
+        state.invoked = True
+        state.attempted.add(query)
+        counters["tasks_attempted"] = counters.get("tasks_attempted", 0) + 1
+
+    return attempt
 
 
 def _make_web_sink(
@@ -303,6 +350,7 @@ def run_agent_collection(
     cancel_check: Callable[[], None] | None = None,
 ) -> tuple[CollectionState, CollectionState | None]:
     """Executa o plano de coleta pelo agente e devolve os estados consolidados."""
+    reset_tavily_circuit_breaker()
     web_state = CollectionState(
         project_id=project_id,
         counters=web_counters if web_counters is not None else {},
@@ -345,6 +393,7 @@ def run_agent_collection(
         web_plan: dict[str, SearchQuery] = {}
         web_context = None
         web_sink = None
+        web_attempt = None
         tools = []
         if web_queries:
             pending = session.scalars(
@@ -358,17 +407,20 @@ def run_agent_collection(
                 web_state.counters.get("queries_total", 0), len(web_queries)
             )
             web_context = _make_web_context(project, web_plan)
+            web_attempt = _make_web_attempt(web_state, session, web_plan)
             web_sink = _make_web_sink(web_state, session, project, web_plan, existing_items)
 
         video_plan: dict[str, Any] = {}
         video_context = None
         video_sink = None
+        video_attempt = None
         if video_state is not None and video_state.expect_queries:
             video_plan = {task.query: task for task in youtube_tasks_for_execution(project)}
             video_state.counters["tasks_total"] = max(
                 video_state.counters.get("tasks_total", 0), len(video_queries or [])
             )
             video_context = _make_video_context(project)
+            video_attempt = _make_video_attempt(video_state)
             video_sink = _make_video_sink(
                 video_state, session, project, video_plan, existing_items
             )
@@ -380,6 +432,8 @@ def run_agent_collection(
             video_sink=video_sink,
             web_context=web_context,
             video_context=video_context,
+            web_on_attempt=web_attempt,
+            video_on_attempt=video_attempt,
         )
 
         payload: dict[str, Any] = {
@@ -422,6 +476,13 @@ def run_agent_collection(
             resolved = len([query for query in planned_video if query in video_state.resolved])
             video_state.counters["tasks_resolved"] = resolved
             video_state.counters["tasks_failed"] = max(0, len(planned_video) - resolved)
+
+        breaker = tavily_circuit_breaker_snapshot()
+        for state in (web_state, video_state):
+            if state is None:
+                continue
+            state.counters["tavily_hard_failures"] = int(breaker["hard_failures"])
+            state.counters["tavily_circuit_breaker_trips"] = int(breaker["trips"])
 
         session.commit()
     finally:

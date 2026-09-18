@@ -1,7 +1,12 @@
 from datetime import date
 from types import SimpleNamespace
 
-from app.fact_layer import resolve_assertions, fact_event_exclusion_reason, normalize_person_name
+from app.fact_layer import (
+    _identity_conflicts,
+    resolve_assertions,
+    fact_event_exclusion_reason,
+    normalize_person_name,
+)
 from app.report_qa import deterministic_report_qa
 
 
@@ -17,6 +22,46 @@ def assertion(value, url, source_type="MEDIA"):
 
 def test_normalize_person_name():
     assert normalize_person_name("  João   da SILVA ") == "joao da silva"
+
+
+def _stored_event(**overrides):
+    base = {
+        "event_date": None,
+        "death_date": None,
+        "institution": None,
+        "unit": None,
+        "city": None,
+        "state": None,
+        "rank_or_role": None,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def _extracted(**fields):
+    return {name: {"value": value} for name, value in fields.items()}
+
+
+def test_same_name_with_different_location_does_not_merge():
+    event = _stored_event(city="Niterói")
+    assert _identity_conflicts(event, _extracted(city="Rio de Janeiro")) is True
+
+
+def test_missing_attributes_do_not_block_merge():
+    event = _stored_event(city="Niterói")
+    assert _identity_conflicts(event, _extracted(subject_name="João")) is False
+
+
+def test_matching_date_and_institution_confirm_same_identity():
+    event = _stored_event(event_date=date(2026, 8, 10), institution="PMERJ")
+    assert _identity_conflicts(
+        event, _extracted(event_date="2026-08-10", institution="PMERJ")
+    ) is False
+
+
+def test_same_name_different_date_does_not_merge():
+    event = _stored_event(event_date=date(2026, 8, 10))
+    assert _identity_conflicts(event, _extracted(event_date="2026-08-11")) is True
 
 
 def test_two_independent_sources_confirm_same_value():
