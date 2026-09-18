@@ -12,7 +12,7 @@ from app.llm import llm_is_configured
 from app.media_scout import MediaScout, ScoutTask
 from app.models import OfficialFact, Project, SearchQuery
 from app.schemas import ReportPlanResponse
-from app.source_registry import OFFICIAL_SECURITY_SOURCES
+from app.source_registry import OFFICIAL_SECURITY_SOURCES, PRIORITY_MEDIA_SOURCES
 from app.topic_profile import build_topic_profile, normalized_text
 from app.services.collection.guards import query_preserves_project_anchor
 from app.services.execution_profile import (
@@ -68,6 +68,44 @@ def _is_redundant(candidate: str, selected: list[str], threshold: float = 0.84) 
     return False
 
 
+def _media_profile_tokens(project: Project) -> set[str]:
+    profile = project.topic_profile or {}
+    values = [project.topic]
+    for key in (
+        "product_name", "product_anchor", "event_anchor",
+        "product_search_variants", "event_search_variants", "subject_terms",
+        "actors", "actions", "locations", "organizations", "search_synonyms",
+    ):
+        value = profile.get(key)
+        if isinstance(value, list):
+            values.extend(str(item) for item in value)
+        elif value:
+            values.append(str(value))
+    tokens: set[str] = set()
+    for value in values:
+        tokens.update(_query_tokens(value))
+    return tokens
+
+
+def _media_query_is_acceptable(project: Project, query: str) -> bool:
+    if query_preserves_project_anchor(project, query, purpose="MEDIA_REPERCUSSION"):
+        return True
+    query_tokens = _query_tokens(query)
+    profile_tokens = _media_profile_tokens(project)
+    if not query_tokens or not profile_tokens:
+        return False
+    overlap = query_tokens.intersection(profile_tokens)
+    return len(overlap) >= 2 or (
+        len(overlap) == 1 and len(query_tokens) <= 4 and len(profile_tokens) <= 6
+    )
+
+
+def _query_is_acceptable(project: Project, query: str, *, purpose: str) -> bool:
+    if purpose == "MEDIA_REPERCUSSION":
+        return _media_query_is_acceptable(project, query)
+    return query_preserves_project_anchor(project, query, purpose=purpose)
+
+
 def _add_query(
     db: Session,
     project: Project,
@@ -82,7 +120,7 @@ def _add_query(
     query = " ".join(query.split()).strip()
     if not query or query in existing:
         return None
-    if not query_preserves_project_anchor(project, query, purpose=purpose):
+    if not _query_is_acceptable(project, query, purpose=purpose):
         return None
     row = SearchQuery(
         project_id=project.id,
@@ -123,9 +161,7 @@ def _sanitize_strategy(
     raw = raw or {}
 
     primary = " ".join(str(raw.get("primary_query") or "").split()).strip()
-    if not primary or not query_preserves_project_anchor(
-        project, primary, purpose="MEDIA_REPERCUSSION"
-    ):
+    if not primary or not _media_query_is_acceptable(project, primary):
         primary = str(fallback["primary_query"])
 
     selected = [primary]
@@ -134,9 +170,7 @@ def _sanitize_strategy(
         candidate = " ".join(str(candidate or "").split()).strip()
         if not candidate:
             continue
-        if not query_preserves_project_anchor(
-            project, candidate, purpose="MEDIA_REPERCUSSION"
-        ):
+        if not _media_query_is_acceptable(project, candidate):
             continue
         if _is_redundant(candidate, selected):
             continue
@@ -154,9 +188,7 @@ def _sanitize_strategy(
             candidate = " ".join(str(candidate or "").split()).strip()
             if not candidate or _is_redundant(candidate, selected):
                 continue
-            if not query_preserves_project_anchor(
-                project, candidate, purpose="MEDIA_REPERCUSSION"
-            ):
+            if not _media_query_is_acceptable(project, candidate):
                 continue
             complementary.append(candidate)
             selected.append(candidate)
@@ -244,6 +276,27 @@ def _persist_strategy_queries(
     media_tasks = _media_task_order(
         scout.web_tasks(max_complementary=settings.max_complementary_queries)
     )
+
+    reuse = (project.topic_profile or {}).get("corpus_reuse") or {}
+    covered_domains = {str(value).lower() for value in (reuse.get("covered_domains") or [])}
+    portal_domains = {label: domain.lower() for label, domain in PRIORITY_MEDIA_SOURCES}
+    strong_exact_reuse = bool(
+        reuse.get("exact_topic_match")
+        and int(reuse.get("reused") or 0) >= settings.corpus_reuse_sufficient_items
+    )
+    filtered_tasks: list[ScoutTask] = []
+    for task in media_tasks:
+        if task.role == "PRIORITY_PORTAL":
+            domain = portal_domains.get(task.target, "")
+            if domain and any(
+                covered == domain or covered.endswith("." + domain)
+                for covered in covered_domains
+            ):
+                continue
+        if task.role == "COMPLEMENTARY" and strong_exact_reuse:
+            continue
+        filtered_tasks.append(task)
+    media_tasks = filtered_tasks
 
     media_added = 0
     for task in media_tasks:
@@ -359,6 +412,7 @@ def plan_report_with_llm(db: Session, project: Project) -> list[SearchQuery]:
         "topic_profile": project.topic_profile,
         "requested_execution_profile": project.execution_profile or "AUTO",
         "execution_overrides": project.execution_options or {},
+        "reusable_corpus": (project.topic_profile or {}).get("corpus_reuse") or {},
         "planning_constraints": {
             "target_valid_media_items_after_validation": settings.target_media_items,
             "collection_preserves_all_returned_hits": True,
@@ -368,6 +422,9 @@ def plan_report_with_llm(db: Session, project: Project) -> list[SearchQuery]:
             "max_complementary_queries": settings.max_complementary_queries,
             "priority_portal_queries_are_generated_by_code": True,
             "nominal_followup_is_optional": True,
+            "reuse_historical_corpus_before_new_search": True,
+            "isp_mention_is_not_required_for_media_relevance": True,
+            "new_search_should_fill_gaps_in_existing_corpus": True,
         },
         "official_facts": [
             {

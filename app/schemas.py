@@ -338,7 +338,9 @@ class MediaRelevanceDecision(StrictLLMOutput):
     relation_type: Literal[
         "DIRECT_PRODUCT",
         "ATTRIBUTED_FINDING",
+        "DERIVED_COVERAGE",
         "DIRECT_EVENT",
+        "THEMATIC_CONTEXT",
         "THEMATIC_ONLY",
         "UNRELATED",
     ]

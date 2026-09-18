@@ -12,6 +12,7 @@ from app.services.article_hydration import hydrate_media_items
 from app.services.classification import classify_with_llm
 from app.services.collection.web import collect_web
 from app.services.collection.youtube import collect_media_sources
+from app.services.corpus_reuse import reuse_prior_corpus
 from app.services.execution_profile import execution_flags
 from app.services.news_validation import validate_news_stage
 from app.services.project_profile import discover_project_profile, project_payload, trusted_launch_date
@@ -84,7 +85,12 @@ def run_full_methodology(
     stage(
         "search_plan",
         "RUNNING",
-        "Definindo quais processos serao usados e otimizando a estrategia de busca",
+        "Consultando o corpus historico e planejando apenas as lacunas da nova pauta",
+    )
+    reuse_summary = reuse_prior_corpus(
+        db,
+        project,
+        progress_detail=detail_for("search_plan"),
     )
     planned = plan_report_with_llm(db, project)
     execution_profile, flags = execution_flags(project)
@@ -108,8 +114,10 @@ def run_full_methodology(
     stage(
         "search_plan",
         "DONE",
-        f"Plano {execution_profile}: 1 consulta principal, {complementary_count} complementar(es), "
-        f"{media_count} midiaticas, {fact_count} factual(is), {official_count} oficial(is). "
+        f"Plano {execution_profile}: {reuse_summary.get('reused', 0)} documento(s) historico(s) reutilizado(s) "
+        f"de {reuse_summary.get('source_projects', 0)} projeto(s); 1 consulta principal, "
+        f"{complementary_count} complementar(es), {media_count} midiaticas, "
+        f"{fact_count} factual(is), {official_count} oficial(is). "
         f"Opcionais ativos: {', '.join(enabled_optional) if enabled_optional else 'nenhum'}.",
     )
 
@@ -344,6 +352,7 @@ def run_full_methodology(
         "execution_profile": execution_profile,
         "execution_plan": project.execution_plan,
         "execution_flags": flags,
+        "corpus_reuse": reuse_summary,
         "planned": len(planned),
         "collected": collected,
         "youtube_collected": youtube_collected,

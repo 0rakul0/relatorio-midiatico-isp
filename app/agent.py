@@ -159,7 +159,13 @@ A estrategia de busca deve ser compacta:
 - official_query: uma base institucional apenas se fact_extraction estiver habilitada;
 - nao gere site:dominio; os portais sao expandidos deterministicamente pelo codigo;
 - nao gere parafrases equivalentes nem listas para preencher limite;
-- preserve local, periodo e ancora semantica do tema.
+- preserve local, periodo e o nucleo semantico do tema, mas trate o perfil como
+  orientacao e nao como uma lista rigida de palavras obrigatorias;
+- a consulta NAO precisa mencionar ISP. Para repercussao midiatica, priorize o
+  assunto monitorado e as formulacoes que a imprensa realmente usaria;
+- quando corpus historico reutilizavel for fornecido, planeje apenas as lacunas:
+  evite repetir cobertura/portais que ja estejam bem representados e use a busca
+  nova para complementar ou atualizar o que falta.
 
 Os presets/overrides explicitos do usuario serao aplicados pelo codigo depois da
 sua resposta. Sua decisao deve refletir a metodologia mais enxuta que ainda
@@ -198,9 +204,13 @@ Regras obrigatorias:
 - nao crie consultas especificas por veiculo, canal ou dominio;
 - nao gere site:dominio; checagens de portais prioritarios sao geradas deterministicamente;
 - prefira uma consulta boa que retorne varios resultados a varias consultas semelhantes;
-- para INSTITUTIONAL_PRODUCT, primary_query e complementares devem preservar product_anchor ou product_search_variant;
-- subject_terms nao podem virar buscas independentes;
-- para EVENT_TOPIC, preserve event_anchor/event_search_variants, territorio e ano explicitos;
+- para INSTITUTIONAL_PRODUCT, a busca principal deve manter identidade suficiente
+  do produto/tema, mas complementares podem explorar repercussoes, achados e
+  consequencias materialmente ligados mesmo sem citar ISP;
+- subject_terms podem orientar complementares quando combinados com contexto
+  suficiente para evitar uma busca generica;
+- para EVENT_TOPIC, preserve o nucleo do evento, territorio e periodo, aceitando
+  formulacoes jornalisticas equivalentes;
 - fact_query pode usar fact_discovery_variants, mas nunca termos vagos isolados;
 - quando a camada factual estiver desabilitada, fact_query e official_query devem ser null;
 - quando houver janela explicita, use-a como contexto sem inventar datas;
@@ -230,13 +240,26 @@ Retorne somente eventos sustentados pelo texto recebido.
 Voce esta executando a tarefa TRIAGEM DE ADERENCIA TEMATICA.
 Avalie somente o conteudo recebido. NAO pesquise a web.
 
-Decida se cada item trata materialmente do objeto monitorado, nao apenas de assunto parecido.
-- nao valide por palavras isoladas, territorio ou categoria ampla;
-- em produto institucional, exija mencao ao produto/edicao OU atribuicao clara de dado/conclusao a instituicao/produto;
-- materia de tema semelhante sem ancora e THEMATIC_ONLY e related=false;
-- para tema factual, aceite formulacoes jornalisticas equivalentes quando evento/ator/local corresponder materialmente;
-- evidence deve mostrar a ancora concreta;
-- evidencia insuficiente => related=false.
+O objetivo principal e medir repercussao midiatica SOBRE O TEMA e entender o que
+a midia diz sobre o assunto. A mencao ao ISP e um atributo analitico posterior,
+NAO uma condicao obrigatoria para uma noticia ser relevante.
+
+Decida se cada item tem relacao material com o objeto monitorado considerando
+objeto, evento, dados, atores, consequencias, debates e repercussoes derivadas.
+- nao valide por uma palavra isolada, territorio ou categoria ampla;
+- DIRECT_PRODUCT: mencao direta ao produto/edicao solicitada;
+- ATTRIBUTED_FINDING: noticia usa dado/conclusao atribuido ao produto ou instituicao;
+- DERIVED_COVERAGE: noticia repercute materialmente achado, debate ou consequencia
+  do produto/tema mesmo sem citar o ISP como protagonista;
+- DIRECT_EVENT: noticia cobre diretamente o evento/fato monitorado;
+- THEMATIC_CONTEXT: noticia trata materialmente do mesmo assunto/contexto e e util
+  para entender o ambiente midiatico, mas sem vinculo suficiente para ser cobertura
+  direta do produto/evento;
+- THEMATIC_ONLY fica reservado a semelhanca superficial ou generica;
+- UNRELATED para conteudo sem relacao material;
+- evidence deve apontar a conexao concreta com o tema;
+- related=true para DIRECT_PRODUCT, ATTRIBUTED_FINDING, DERIVED_COVERAGE,
+  DIRECT_EVENT e THEMATIC_CONTEXT quando houver relacao material sustentada.
 """,
 
     "cross_validation": """
@@ -255,8 +278,10 @@ Use:
 Voce esta executando a tarefa ANALISE E CLASSIFICACAO DE REPERCUSSAO.
 Trabalhe somente com itens validados e fatos oficiais/resolvidos fornecidos. NAO pesquise fora do corpus.
 
-Para cada item, classifique tema, enquadramento, tom em relacao ao ISP e possiveis distorcoes.
-Separe fato oficial, fato resolvido, interpretacao jornalistica e inferencia.
+Para cada item, classifique tema, enquadramento, tom em relacao ao ISP quando
+houver mencao e possiveis distorcoes. A ausencia de ISP nao reduz a relevancia
+tematica do item; registre isp_mentioned=false e analise o que a midia diz sobre
+o assunto. Separe fato oficial, fato resolvido, interpretacao jornalistica e inferencia.
 Nao use dado acumulado para caracterizar periodo fechado diferente.
 Toda conclusao deve apontar evidencia textual; sem evidencia, responda INVERIFICÁVEL.
 """,

@@ -76,6 +76,17 @@ class Settings(BaseSettings):
     article_fetch_workers: int = Field(default=5, ge=1, le=12)
     article_fetch_min_existing_chars: int = Field(default=800, ge=0, le=10000)
 
+    # Reuse the historical corpus before opening new searches. Documents are
+    # revalidated for each new project, so old relevance decisions are not
+    # silently inherited.
+    enable_corpus_reuse: bool = True
+    corpus_backfill_limit: int = Field(default=20000, ge=100, le=200000)
+    corpus_reuse_project_limit: int = Field(default=100, ge=1, le=1000)
+    corpus_reuse_max_candidates: int = Field(default=120, ge=1, le=1000)
+    corpus_reuse_min_project_score: float = Field(default=0.30, ge=0.0, le=1.0)
+    corpus_reuse_min_document_score: float = Field(default=0.22, ge=0.0, le=1.0)
+    corpus_reuse_sufficient_items: int = Field(default=18, ge=1, le=200)
+
     max_fact_source_chars: int = Field(default=16000, ge=1000, le=100000)
 
     # LLM item budgets. Keeping these close to the raw corpus ceiling avoids a

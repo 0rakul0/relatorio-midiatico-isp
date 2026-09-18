@@ -20,6 +20,7 @@ from app.topic_profile import (
     product_anchor_from_name,
 )
 from app.services.collection.common import inferred_publication_date, media_window
+from app.services.corpus_reuse import sync_media_item_to_corpus
 from app.services.collection.guards import (
     collection_guard,
     institutional_product_version_guard_text,
@@ -86,7 +87,13 @@ def validate_video_metadata_cross_source(
 def _topic_overlap_score(project: Project, body: str) -> int:
     profile = project.topic_profile or {}
     haystack = normalized_text(body)
-    groups = [profile.get("actors") or [], profile.get("actions") or [], profile.get("locations") or []]
+    groups = [
+        profile.get("actors") or [],
+        profile.get("actions") or [],
+        profile.get("locations") or [],
+        profile.get("subject_terms") or [],
+        profile.get("organizations") or [],
+    ]
     score = 0
     for group in groups:
         if group and any(normalized_text(term) in haystack for term in group):
@@ -142,12 +149,12 @@ def _relevance_fallback_decision(project: Project, item: MediaItem) -> tuple[boo
         else 0
     )
     if project.project_type == "INSTITUTIONAL_PRODUCT":
-        related = institutional_score >= 2
+        related = institutional_score >= 2 or fallback_score >= 2
         return (
             related,
-            "Âncora documental/institucional suficiente"
+            "Relação material com o produto/tema, seus achados ou contexto midiático"
             if related
-            else "Tema semelhante, mas sem vínculo documental suficiente com o produto institucional",
+            else "Sem relação temática suficiente com o objeto monitorado",
         )
     return (
         fallback_score > 0,
@@ -183,28 +190,18 @@ media_item_id recebido e retorne uma decisão para cada item. Não invente conte
     if project.project_type == "INSTITUTIONAL_PRODUCT":
         extra_instructions += """
 
-REGRA OBRIGATÓRIA PARA PRODUTO INSTITUCIONAL:
-O objeto desta análise é um produto institucional específico e, quando houver ano/edição no nome, essa edição faz parte da identidade do produto.
+REGRA PARA PRODUTO INSTITUCIONAL:
+O relatório mede a repercussão midiática sobre o tema/produto e o ambiente editorial associado. A menção ao ISP NÃO é obrigatória.
 
-Um item só pode ter related=true quando houver vínculo documental verificável com O PRODUTO SOLICITADO.
+Classifique:
+1. DIRECT_PRODUCT quando o produto/edição aparece diretamente;
+2. ATTRIBUTED_FINDING quando dados/achados são atribuídos ao produto ou instituição;
+3. DERIVED_COVERAGE quando a matéria repercute materialmente achado, debate, consequência ou pauta gerada pelo produto/tema, ainda que não cite o ISP;
+4. THEMATIC_CONTEXT quando a matéria trata materialmente do mesmo assunto e ajuda a entender o ambiente midiático, mas sem vínculo suficiente para afirmar cobertura direta do produto.
 
-Aceite somente:
-1. DIRECT_PRODUCT: o item menciona explicitamente o produto solicitado ou sua edição correta; ou
-2. ATTRIBUTED_FINDING: o item apresenta dado, conclusão, estatística ou achado e atribui explicitamente esse conteúdo ao produto solicitado ou ao ISP em contexto inequívoco da mesma edição.
-
-REJEITE:
-- outra edição do produto;
-- Dossiê Mulher 2025 quando o objeto for Dossiê Mulher 2026;
-- Dossiê Mulher 2024 quando o objeto for Dossiê Mulher 2026;
-- matéria genérica sobre violência contra a mulher;
-- caso individual de violência sem relação documental com o produto;
-- matéria que apenas menciona ISP sem atribuir ao produto analisado o dado ou conclusão;
-- conteúdo que compartilha apenas palavras ou temas do produto.
-
-Uma edição anterior só pode ser aceita em uma matéria comparativa quando a edição alvo também estiver explicitamente presente e for parte material da análise.
-THEMATIC_ONLY sempre implica related=false.
-Não presuma que uma matéria pertence ao Dossiê apenas porque aborda violência contra mulheres no Rio de Janeiro.
-O campo anchor deve identificar a evidência textual concreta que conecta o item ao produto e à edição solicitada.
+Outra edição do produto pode ser contexto comparativo, mas não deve ser confundida com a edição-alvo.
+THEMATIC_ONLY deve ficar restrito a semelhança superficial ou genérica e implica related=false.
+O campo anchor deve mostrar a conexão concreta com o tema; não exija o nome do ISP como prova de relevância.
 """
 
     payload_items = []
@@ -250,11 +247,13 @@ O campo anchor deve identificar a evidência textual concreta que conecta o item
         for row in result.get("decisions", [])
         if row.get("media_item_id") is not None
     }
-    allowed_types = (
-        {"DIRECT_PRODUCT", "ATTRIBUTED_FINDING"}
-        if project.project_type == "INSTITUTIONAL_PRODUCT"
-        else {"DIRECT_PRODUCT", "ATTRIBUTED_FINDING", "DIRECT_EVENT"}
-    )
+    allowed_types = {
+        "DIRECT_PRODUCT",
+        "ATTRIBUTED_FINDING",
+        "DERIVED_COVERAGE",
+        "DIRECT_EVENT",
+        "THEMATIC_CONTEXT",
+    }
 
     decisions: dict[int, tuple[bool, str]] = {}
     for item in items:
@@ -349,42 +348,9 @@ def validate_and_classify(
             discarded += 1
             continue
 
-        # Produto institucional com edição/ano: rejeita explicitamente a edição
-        # errada antes de qualquer chamada semântica.
-        if project.project_type == "INSTITUTIONAL_PRODUCT":
-            version_ok, version_reason = institutional_product_version_guard_text(
-                project,
-                title=item.title,
-                snippet=item.snippet,
-                content=(item.content or "")[: settings.validation_item_max_chars],
-            )
-            if not version_ok:
-                item.status = "NOT_RELATED"
-                item.discard_reason = (version_reason or "Edição incompatível")[:1000]
-                discarded += 1
-                if progress_detail:
-                    progress_detail(
-                        f"Descartado antes da IA: {item.title[:80]} · edição incompatível"
-                    )
-                continue
-
-        # Produtos institucionais e eventos factuais ancorados recebem um
-        # pré-filtro determinístico antes da chamada LLM. Isso elimina ruído
-        # grosseiro sem gastar revisão semântica.
-        if not collection_guard(
-            project,
-            title=item.title,
-            snippet=item.snippet,
-            content=(item.content or "")[: settings.validation_item_max_chars],
-        ):
-            item.status = "NOT_RELATED"
-            item.discard_reason = (
-                "Pré-filtro temático: item não preserva a âncora nominal/factual "
-                "do objeto monitorado"
-            )
-            discarded += 1
-            continue
-
+        # Relevância temática não é decidida por um guard lexical rígido.
+        # A menção ao ISP/produto é um sinal, não uma condição obrigatória.
+        # Itens dentro da janela seguem para a revisão semântica em lote.
         candidates.append(item)
 
     db.commit()
@@ -471,6 +437,17 @@ def validate_and_classify(
             profile_state["observed_collection_end"] = observed_end.isoformat()
             project.topic_profile = profile_state
             db.commit()
+
+    # Persist the current project's verdict back into the reusable corpus
+    # relation. The global document remains immutable evidence; only this
+    # project's relation status is updated.
+    for item in items:
+        sync_media_item_to_corpus(
+            db,
+            item,
+            origin=item.corpus_origin or "SEARCH",
+        )
+    db.commit()
 
     return {
         "valid": valid,

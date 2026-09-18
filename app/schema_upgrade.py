@@ -45,6 +45,10 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "results_accepted": "INTEGER DEFAULT 0",
     },
     "media_items": {
+        "corpus_document_id": "INTEGER",
+        "corpus_origin": "VARCHAR(30) DEFAULT 'SEARCH'",
+        "relation_type": "VARCHAR(50)",
+        "relevance_evidence": "TEXT",
         "source_name": "VARCHAR(300)",
         "view_count": "INTEGER",
         "source_provenance": "JSON",
@@ -129,6 +133,7 @@ def ensure_schema() -> None:
         if "media_items" in existing_tables:
             connection.execute(text("UPDATE media_items SET fact_status = 'PENDING' WHERE fact_status IS NULL"))
             connection.execute(text("UPDATE media_items SET cross_validation_status = 'NOT_APPLICABLE' WHERE cross_validation_status IS NULL"))
+            connection.execute(text("UPDATE media_items SET corpus_origin = 'HISTORICAL' WHERE corpus_origin IS NULL"))
             connection.execute(text("UPDATE media_items SET retrieved_at = CURRENT_TIMESTAMP WHERE retrieved_at IS NULL"))
 
         if "generated_reports" in existing_tables:
