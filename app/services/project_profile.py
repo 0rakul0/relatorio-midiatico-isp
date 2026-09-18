@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from datetime import date
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -11,7 +13,7 @@ from app.llm import llm_is_configured
 from app.models import OfficialFact, Project
 from app.schemas import InstitutionalProductProfileResponse
 from app.source_registry import OFFICIAL_SECURITY_SOURCES
-from app.topic_profile import build_topic_profile
+from app.topic_profile import build_topic_profile, normalized_text
 from app.tools import build_agent_tools
 from app.services.execution_profile import execution_flags
 from app.services.collection.common import result_publication_date
@@ -23,6 +25,10 @@ PROJECT_TYPE_LABELS = {
     "GENERAL_TOPIC": "Tema geral",
     "AUTO": "Classificação automática",
 }
+
+def _host(url: str) -> str:
+    return urlparse(url).netloc.lower().split(":")[0]
+
 
 def trusted_launch_date(project: Project) -> date | None:
     options = project.execution_options or {}
@@ -150,6 +156,26 @@ def discover_project_profile(db: Session, project: Project) -> dict:
         "providers": {},
     }
 
+    official_domains = [
+        source["domain"]
+        for source in OFFICIAL_SECURITY_SOURCES
+        if source.get("label") in {"ISP", "ISP Conecta", "Governo do RJ"}
+    ]
+    anchor_tokens = {
+        token
+        for token in re.findall(r"[a-z0-9]+", normalized_text(f"{product_name} {product_anchor}"))
+        if len(token) >= 4
+    }
+
+    def _documentalist_accepts(row: dict) -> bool:
+        host = _host(str(row.get("url") or ""))
+        if any(host == domain.lower().split("/")[0] or host.endswith("." + domain.lower().split("/")[0]) for domain in official_domains):
+            return True
+        text = normalized_text(
+            f"{row.get('title') or ''} {row.get('snippet') or ''} {row.get('content') or ''}"
+        )
+        return any(token in text for token in anchor_tokens)
+
     def _documentalist_source_sink(
         rows: list[dict],
         provider: str,
@@ -162,6 +188,8 @@ def discover_project_profile(db: Session, project: Project) -> dict:
         for row in rows:
             url = str(row.get("url") or "").strip()
             if not url:
+                continue
+            if not _documentalist_accepts(row):
                 continue
 
             if url in seen:
@@ -201,11 +229,7 @@ def discover_project_profile(db: Session, project: Project) -> dict:
             "product_name": product_name,
             "product_anchor": product_anchor,
             "product_search_variants": profile.get("product_search_variants") or [],
-            "official_domains": [
-                source["domain"]
-                for source in OFFICIAL_SECURITY_SOURCES
-                if source.get("label") in {"ISP", "ISP Conecta", "Governo do RJ"}
-            ],
+            "official_domains": official_domains,
             "sources": [],
         },
         schema_name="institutional_product_profile_v2",

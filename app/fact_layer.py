@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from datetime import date
 from urllib.parse import urlparse
@@ -47,14 +48,115 @@ def normalize_person_name(value: str | None) -> str | None:
     return normalized or None
 
 
+_RANK_ABBREVIATIONS = {
+    "cel": "coronel",
+    "ten": "tenente",
+    "cap": "capitao",
+    "maj": "major",
+    "sgt": "sargento",
+    "cb": "cabo",
+    "sd": "soldado",
+    "insp": "inspetor",
+    "del": "delegado",
+    "subten": "subtenente",
+}
+
+_INSTITUTION_ALIASES = {
+    "pmrj": "policia militar do estado do rio de janeiro",
+    "pm erj": "policia militar do estado do rio de janeiro",
+    "pcerj": "policia civil do estado do rio de janeiro",
+    "pc erj": "policia civil do estado do rio de janeiro",
+    "isp": "instituto de seguranca publica",
+    "isp rj": "instituto de seguranca publica",
+}
+
+_PROFESSIONAL_STATUS_ALIASES = {
+    "da ativa": "ativo",
+    "em atividade": "ativo",
+    "na ativa": "ativo",
+    "reformado": "reforma",
+    "aposentado": "aposentadoria",
+}
+
+
+def _normalize_unit(value: str) -> str:
+    text = normalized_text(value).replace("º", "").replace("°", "")
+    text = text.replace(" n. ", " ").replace("no.", "")
+    text = " ".join(text.replace(".", " ").split())
+    text = re.sub(r"\b0+(\d)", r"\1", text)
+    return text
+
+
+def _normalize_rank(value: str) -> str:
+    tokens = re.findall(r"[a-z0-9]+", normalized_text(value))
+    expanded = [_RANK_ABBREVIATIONS.get(token, token) for token in tokens]
+    return " ".join(expanded)
+
+
+def _normalize_institution(value: str) -> str:
+    text = " ".join(re.findall(r"[a-z0-9]+", normalized_text(value)))
+    if not text:
+        return ""
+    for alias, canonical in _INSTITUTION_ALIASES.items():
+        if text == alias or text.replace(" ", "") == alias.replace(" ", ""):
+            return canonical
+    return text
+
+
+def _normalize_professional_status(value: str) -> str:
+    text = " ".join(re.findall(r"[a-z0-9]+", normalized_text(value)))
+    return _PROFESSIONAL_STATUS_ALIASES.get(text, text)
+
+
 def normalize_fact_value(field_name: str, value: str | None) -> str:
     if not value:
         return ""
-    text = " ".join(normalized_text(value).split())
     if field_name in {"event_date", "death_date"}:
         parsed = _parse_iso_date(value)
-        return parsed.isoformat() if parsed else text
-    return text
+        return parsed.isoformat() if parsed else " ".join(normalized_text(value).split())
+    if field_name == "unit":
+        return _normalize_unit(value)
+    if field_name == "rank_or_role":
+        return _normalize_rank(value)
+    if field_name == "institution":
+        return _normalize_institution(value)
+    if field_name == "professional_status":
+        return _normalize_professional_status(value)
+    return " ".join(normalized_text(value).split())
+
+
+def event_identity_key(extracted: dict) -> str | None:
+    """Chave conservadora para decidir se dois eventos são o mesmo fato.
+
+    Só devolve uma chave quando há informação suficiente para uma fusão
+    segura: nome normalizado ou (data + instituição + cidade). Caso contrário,
+    retorna None e o chamador deve manter os eventos separados.
+    """
+    name = normalize_person_name((extracted.get("subject_name") or {}).get("value"))
+    event_date = _parse_iso_date((extracted.get("event_date") or {}).get("value"))
+    death_date = _parse_iso_date((extracted.get("death_date") or {}).get("value"))
+    institution = normalize_fact_value("institution", _extracted_value(extracted, "institution"))
+    unit = normalize_fact_value("unit", _extracted_value(extracted, "unit"))
+    city = normalize_fact_value("city", _extracted_value(extracted, "city"))
+
+    parts: list[str] = []
+    if name:
+        parts.append(f"name={name}")
+    event_date_iso = (event_date or death_date)
+    if event_date_iso:
+        parts.append(f"date={event_date_iso.isoformat()}")
+    if institution:
+        parts.append(f"institution={institution}")
+    if unit:
+        parts.append(f"unit={unit}")
+    if city:
+        parts.append(f"city={city}")
+
+    if name and (event_date_iso or institution or unit):
+        return "|".join(parts)
+    if event_date_iso and institution and city:
+        return "|".join(parts)
+    return None
 
 
 def _parse_iso_date(value: object) -> date | None:
@@ -117,7 +219,28 @@ def extract_fact_events_from_item(project: Project, item: MediaItem) -> list[dic
         response_model=FACT_EXTRACTION_SCHEMA,
         max_output_tokens=7000,
     )
-    return [event for event in result.get("events", []) if event.get("related_to_topic")]
+    events = [event for event in result.get("events", []) if event.get("related_to_topic")]
+    return _reject_unanchored_relative_dates(events, item)
+
+
+def _reject_unanchored_relative_dates(events: list[dict], item: MediaItem) -> list[dict]:
+    """Descarta datas relativas quando não há publicação para ancorá-las."""
+    if item.published_at:
+        return events
+    for event in events:
+        for field_name in ("event_date", "death_date"):
+            fact = event.get(field_name)
+            if isinstance(fact, dict) and fact.get("basis") == "RELATIVE_TO_PUBLICATION":
+                event[field_name] = {"value": None, "evidence": None, "basis": "NOT_PRESENT"}
+    return events
+
+
+def _fact_extraction_priority(item: MediaItem) -> tuple:
+    """Ordena a extração: oficial, conteúdo completo, data confiável, demais."""
+    source_rank = 0 if source_type_for_item(item) == "OFFICIAL" else 1
+    content_rank = 0 if len(item.content or "") >= 400 else 1
+    date_rank = 0 if item.published_at else 1
+    return (source_rank, content_rank, date_rank, item.id or 0)
 
 
 def _event_window_contains(project: Project, event: dict) -> bool | None:
@@ -180,12 +303,27 @@ def _find_event_by_name(db: Session, project: Project, name: str | None, extract
     if len(compatible) == 1:
         return compatible[0]
     if len(compatible) > 1:
-        # Tenta desambiguar pela data do fato; senão, mantém o candidato mais
-        # antigo para preservar estabilidade entre execuções.
+        # Tenta desambiguar pela data do fato. Quando ainda há ambiguidade,
+        # NÃO funde automaticamente: cria um novo evento e sinaliza possível
+        # duplicidade para revisão humana.
         same_date = [candidate for candidate in compatible if _same_known_date(candidate, extracted)]
-        return same_date[0] if len(same_date) == 1 else compatible[0]
+        if len(same_date) == 1:
+            return same_date[0]
+        for candidate in compatible:
+            _mark_possible_duplicate(candidate, normalize_person_name(name))
+        return None
     # Há um homônimo, mas os atributos conflitam: não fundir; cria novo evento.
     return None
+
+
+def _mark_possible_duplicate(event: FactEvent, name: str | None) -> None:
+    extra = dict(event.extra_attributes or {})
+    duplicates = set(extra.get("possible_duplicate_subjects") or [])
+    if name:
+        duplicates.add(name)
+    extra["possible_duplicate_subjects"] = sorted(duplicates)
+    extra["possible_duplicate"] = True
+    event.extra_attributes = extra
 
 
 def _find_conservative_unnamed_event(db: Session, project: Project, event: dict) -> FactEvent | None:
@@ -235,6 +373,11 @@ def _get_or_create_event(db: Session, project: Project, extracted: dict) -> Fact
     )
     db.add(event)
     db.flush()
+    identity_key = event_identity_key(extracted)
+    if identity_key:
+        extra = dict(event.extra_attributes or {})
+        extra["event_identity_key"] = identity_key
+        event.extra_attributes = extra
     return event
 
 
@@ -342,6 +485,7 @@ def extract_project_facts(
     processed = events_extracted = errors = 0
 
     eligible_items = [item for item in items if _item_should_feed_fact_layer(item, purpose_by_query, project)]
+    eligible_items.sort(key=_fact_extraction_priority)
     total_eligible = len(eligible_items)
 
     for item_index, item in enumerate(eligible_items, start=1):
