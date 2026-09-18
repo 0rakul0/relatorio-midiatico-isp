@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,65 +8,80 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://relatorio:relatorio@localhost:5432/repercussao"
     tavily_api_key: str | None = None
 
-    # A arquitetura atual usa somente OpenAI como LLM e um único modelo configurável.
+    # OpenAI is used only as the LLM. External search remains DuckDuckGo -> Tavily.
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
-    # A coleta externa usa somente DuckDuckGo e Tavily.
-    # A OpenAI permanece apenas para análise estruturada, classificação, redação e QA.
     youtube_search_max_results: int = 15
 
-    # Rodadas máximas em que um agente pode decidir chamar tools opcionais.
-    max_agent_tool_rounds: int = 3
-    agent_search_max_results: int = 5
+    # Optional agent-tool rounds. Collector normally uses one bulk call per medium.
+    max_agent_tool_rounds: int = Field(default=3, ge=1, le=10)
+
+    # Provider result ceiling. Keep this >= max_results_per_query, otherwise the
+    # provider layer would silently cap the collection below the requested value.
+    agent_search_max_results: int = Field(default=8, ge=1, le=10)
 
     app_env: str = "development"
-    # Limite GLOBAL de novos itens coletados pela etapa web.
-    # Ex.: MAX_SEARCH_RESULTS=250 significa no máximo 250 novos itens no total,
-    # e não 250 itens por consulta. Deve comportar o teto de consultas
-    # (max_search_queries) x (max_results_per_query).
-    max_search_results: int = 250
 
-    # Evita uma única consulta consumir todo o orçamento da coleta.
-    max_results_per_query: int = 5
+    # ------------------------------------------------------------------
+    # Search strategy
+    # ------------------------------------------------------------------
+    # The planner optimizes one primary query and may add only a very small
+    # number of materially different complementary queries.
+    max_complementary_queries: int = Field(default=2, ge=0, le=4)
 
-    # Limita quantas consultas o planejador pode criar/executar na primeira coleta.
-    # As consultas prioritárias por portal são preservadas antes das complementares.
-    max_search_queries: int = 50
+    # Media plan = 1 primary + up to 2 complementary + priority portals.
+    # This is a safety ceiling, not a target that the planner should fill.
+    max_media_queries: int = Field(default=12, ge=1, le=30)
+    max_fact_queries: int = Field(default=1, ge=0, le=5)
+    max_official_queries: int = Field(default=3, ge=0, le=10)
+    max_nominal_queries: int = Field(default=12, ge=0, le=50)
+
+    # Soft target and hard ceiling for unique media URLs collected before
+    # semantic validation. The target is not a quota: quality guards still win.
+    target_media_items: int = Field(default=27, ge=1, le=200)
+    max_search_results: int = Field(default=40, ge=1, le=500)
+
+    # A broad thematic query may bring several useful articles. Priority portal
+    # checks are intentionally smaller to improve source diversity.
+    max_results_per_query: int = Field(default=8, ge=1, le=10)
+    max_priority_results_per_query: int = Field(default=2, ge=1, le=10)
+
+    # Separate result budgets prevent factual/official research from consuming
+    # the media corpus budget.
+    max_fact_search_results: int = Field(default=12, ge=1, le=100)
+    max_official_search_results: int = Field(default=6, ge=1, le=100)
+    max_nominal_search_results: int = Field(default=12, ge=1, le=100)
+
+    # Backward-compatibility only. New planning code does not use a single
+    # shared query budget anymore.
+    max_search_queries: int = Field(default=30, ge=1, le=100)
 
     duckduckgo_region: str = "br-pt"
     duckduckgo_safesearch: str = "moderate"
-    duckduckgo_max_retries: int = 2
-    duckduckgo_retry_base_seconds: float = 0.8
+    duckduckgo_max_retries: int = Field(default=2, ge=0, le=5)
+    duckduckgo_retry_base_seconds: float = Field(default=0.8, ge=0.0, le=10.0)
     duckduckgo_fetch_pages: bool = True
-    duckduckgo_fetch_max_chars: int = 12000
-    duckduckgo_fetch_timeout_seconds: float = 10.0
+    duckduckgo_fetch_max_chars: int = Field(default=12000, ge=1000, le=100000)
+    duckduckgo_fetch_timeout_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
 
-    max_fact_source_chars: int = 16000
+    max_fact_source_chars: int = Field(default=16000, ge=1000, le=100000)
 
-    # Orçamento de ITENS de IA por execução. A validação e a classificação
-    # usam lotes; portanto estes limites controlam quantos itens podem ser
-    # processados, e não quantas chamadas HTTP serão feitas.
-    max_semantic_reviews: int = 250
-    max_fact_extractions: int = 40
-    max_classifications: int = 250
-    max_cross_validations: int = 20
+    # LLM item budgets. Keeping these close to the raw corpus ceiling avoids a
+    # search explosion becoming an OpenAI-cost explosion later in the pipeline.
+    max_semantic_reviews: int = Field(default=40, ge=1, le=500)
+    max_fact_extractions: int = Field(default=20, ge=1, le=200)
+    max_classifications: int = Field(default=40, ge=1, le=500)
+    max_cross_validations: int = Field(default=20, ge=0, le=200)
 
-    # Tamanho dos lotes enviados à OpenAI. Ex.: 40 itens com batch_size=10
-    # geram, no máximo, 4 chamadas na validação e 4 na classificação.
-    validation_batch_size: int = 10
-    classification_batch_size: int = 10
+    validation_batch_size: int = Field(default=10, ge=1, le=40)
+    classification_batch_size: int = Field(default=10, ge=1, le=40)
+    validation_item_max_chars: int = Field(default=4000, ge=500, le=50000)
+    classification_item_max_chars: int = Field(default=6000, ge=500, le=50000)
 
-    # Limita o volume textual por item dentro de cada lote.
-    validation_item_max_chars: int = 4000
-    classification_item_max_chars: int = 6000
-
-    # Limites globais do YouTube. Evitam que N tarefas x M resultados
-    # criem centenas de itens antes da validacao.
-    # Canais prioritários são sempre verificados; o padrão deixa espaço para
-    # os nove canais e algumas buscas temáticas.
-    max_youtube_tasks: int = 12
-    max_youtube_results_total: int = 20
-    max_youtube_results_per_task: int = 5
+    # Video collection has an independent budget.
+    max_youtube_tasks: int = Field(default=12, ge=1, le=50)
+    max_youtube_results_total: int = Field(default=20, ge=1, le=200)
+    max_youtube_results_per_task: int = Field(default=5, ge=1, le=10)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.fact_layer import extract_project_facts, plan_nominal_followups, resolve_project_facts
 from app.models import Project
 from app.report_qa import run_report_qa
@@ -24,7 +25,7 @@ def run_full_methodology(
     progress_callback: Callable[[str, str, str | None], None] | None = None,
     cancel_check: Callable[[], None] | None = None,
 ) -> dict:
-    """Executa as etapas necessárias; toda IA passa pelo único ReportAgent."""
+    """Run the required stages; every AI task goes through ReportAgent."""
 
     def check() -> None:
         if cancel_check:
@@ -37,7 +38,9 @@ def run_full_methodology(
     def detail_for(key: str) -> Callable[[str], None]:
         return lambda detail: stage(key, "RUNNING", detail)
 
-    # 1. Perfil temático: necessário até no modo AUTO, pois decide o pipeline efetivo.
+    settings = get_settings()
+
+    # 1. Topic profile
     check()
     stage("profile", "RUNNING", "Classificando o tipo de pauta e estruturando o perfil do tema")
     if project.status in {"DRAFT", "CUSTOM_DATES", "PROFILE_NEEDS_REVIEW"} or not project.topic_profile:
@@ -48,50 +51,65 @@ def run_full_methodology(
             "project_type": project.project_type,
             "topic_profile": project.topic_profile,
         }
+
     profile_note = None
     if project.project_type == "INSTITUTIONAL_PRODUCT":
         profile_state = project.topic_profile or {}
         product_status = str(profile_state.get("product_status") or "NOT_CONFIRMED")
         launch_confirmed = bool(profile_state.get("launch_date_confirmed"))
-
         if product_status == "PUBLISHED":
             trusted_launch = trusted_launch_date(project)
             if launch_confirmed and trusted_launch:
-                profile_note = (
-                    f"produto publicado confirmado · lançamento real confirmado em "
-                    f"{trusted_launch.isoformat()}"
-                )
+                profile_note = f"produto publicado confirmado; lancamento real em {trusted_launch.isoformat()}"
             else:
-                profile_note = "produto publicado confirmado · data exata de lançamento não confirmada"
+                profile_note = "produto publicado confirmado; data exata de lancamento nao confirmada"
         elif product_status == "ANNOUNCED":
             expected = profile_state.get("expected_launch_date")
-            profile_note = "produto anunciado; publicação efetiva ainda não confirmada"
+            profile_note = "produto anunciado; publicacao efetiva ainda nao confirmada"
             if expected:
-                profile_note += f" · previsão localizada: {expected}"
+                profile_note += f"; previsao localizada: {expected}"
         else:
-            profile_note = "confirmação documental do produto pendente; seguindo por busca temática"
+            profile_note = "confirmacao documental do produto pendente; seguindo por busca tematica"
 
     execution_profile, flags = execution_flags(project)
     stage(
         "profile",
         "DONE",
-        (
-            f"Tema: {project.project_type} · perfil de execução: {execution_profile}"
-            + (f" · {profile_note}" if profile_note else "")
-        ),
+        f"Tema: {project.project_type}; perfil de execucao: {execution_profile}"
+        + (f"; {profile_note}" if profile_note else ""),
     )
 
-    # 2. Planejamento de buscas. plan_queries_with_llm já respeita enable_fact_layer.
+    # 2. Search strategy. The LLM optimizes one primary query instead of
+    # producing a large paraphrase list; portal checks are expanded by code.
     check()
-    stage("search_plan", "RUNNING", "Gerando consultas apenas para as finalidades habilitadas")
+    stage(
+        "search_plan",
+        "RUNNING",
+        "Otimizando uma consulta principal e poucas complementares realmente distintas",
+    )
     planned = plan_queries_with_llm(db, project)
-    stage("search_plan", "DONE", f"{len(planned)} consulta(s) criada(s)")
+    media_count = sum(1 for row in planned if row.purpose == "MEDIA_REPERCUSSION")
+    fact_count = sum(1 for row in planned if row.purpose == "FACT_DISCOVERY")
+    official_count = sum(1 for row in planned if row.purpose == "OFFICIAL_FACT")
+    strategy = (project.topic_profile or {}).get("search_strategy") or {}
+    complementary_count = len(strategy.get("complementary_queries") or [])
+    stage(
+        "search_plan",
+        "DONE",
+        f"Estrategia pronta: 1 consulta principal, {complementary_count} complementar(es), "
+        f"{media_count} consulta(s) midiaticas totais incluindo portais, "
+        f"{fact_count} factual(is) e {official_count} oficial(is)",
+    )
 
-    # 3. Coleta web + YouTube opcional.
+    # 3. Web + optional YouTube collection
     check()
-    stage("collection", "RUNNING", "Consultando fontes web: DuckDuckGo → Tavily")
+    stage(
+        "collection",
+        "RUNNING",
+        f"Buscando corpus; meta midiática aproximada: {settings.target_media_items} URL(s) unicas",
+    )
     if flags["enable_youtube"]:
-        stage("youtube", "RUNNING", "Pesquisando vídeos: DuckDuckGo Videos → Tavily")
+        stage("youtube", "RUNNING", "Pesquisando videos: DuckDuckGo Videos -> Tavily")
     else:
         stage("youtube", "SKIPPED", f"Desativado pelo perfil {execution_profile}")
 
@@ -106,31 +124,31 @@ def run_full_methodology(
     web = collection_sources["web"]
     collected = int(web["collected"])
     web_stats = web.get("stats") or {}
+    media_added = int(web_stats.get("media_added", 0))
+    target = int(web_stats.get("target_media_items", settings.target_media_items))
+
     if web["status"] == "COMPLETED":
         provider_label = str(web.get("provider") or "duckduckgo")
         stage(
             "collection",
             "DONE",
-            f"{collected} novo(s) item(ns). Provedores usados: {provider_label}. "
-            f"DuckDuckGo: {int(web_stats.get('duckduckgo_queries', 0))} consulta(s), "
-            f"{int(web_stats.get('duckduckgo_added', 0))} novo(s); "
-            f"Tavily: {int(web_stats.get('tavily_queries', 0))} consulta(s), "
-            f"{int(web_stats.get('tavily_added', 0))} novo(s).",
+            f"{collected} novo(s) item(ns) no total; {media_added}/{target} da meta midiática preliminar. "
+            f"Provedores: {provider_label}. DuckDuckGo: {int(web_stats.get('duckduckgo_queries', 0))} consulta(s), "
+            f"{int(web_stats.get('duckduckgo_added', 0))} novo(s); Tavily: "
+            f"{int(web_stats.get('tavily_queries', 0))} consulta(s), {int(web_stats.get('tavily_added', 0))} novo(s).",
         )
     elif web["status"] == "PARTIAL":
         stage(
             "collection",
             "DONE",
-            f"Coleta parcial: {collected} novo(s) item(ns). "
-            f"DuckDuckGo {int(web_stats.get('duckduckgo_queries', 0))} consulta(s); "
-            f"Tavily {int(web_stats.get('tavily_queries', 0))}; "
-            f"{int(web_stats.get('failed_queries', 0))} consulta(s) não puderam ser concluídas.",
+            f"Coleta parcial: {collected} novo(s); {media_added}/{target} da meta midiática preliminar. "
+            f"{int(web_stats.get('failed_queries', 0))} consulta(s) nao puderam ser concluidas.",
         )
     else:
         stage(
             "collection",
             "FAILED",
-            f"Coleta web indisponível nesta execução: {str(web.get('error') or '')[:180]}",
+            f"Coleta web indisponivel nesta execucao: {str(web.get('error') or '')[:180]}",
         )
 
     youtube = collection_sources["youtube"]
@@ -140,25 +158,25 @@ def run_full_methodology(
     if project.youtube_collection_status == "DISABLED":
         stage("youtube", "SKIPPED", f"Desativado pelo perfil {execution_profile}")
     elif project.youtube_collection_status == "FALLBACK_DUCKDUCKGO":
-        stage("youtube", "DONE", f"Fallback DuckDuckGo Videos concluído: {youtube_collected} vídeo(s)")
+        stage("youtube", "DONE", f"Fallback DuckDuckGo Videos concluido: {youtube_collected} video(s)")
     elif project.youtube_collection_status == "UNAVAILABLE":
         stage(
             "youtube",
             "SKIPPED",
-            "Coleta no YouTube indisponível; isso não será interpretado como ausência de cobertura.",
+            "Coleta no YouTube indisponivel; isso nao sera interpretado como ausencia de cobertura.",
         )
     elif project.youtube_collection_status == "NOT_CONFIGURED":
-        stage("youtube", "SKIPPED", "Nenhum coletor do YouTube está disponível nesta execução")
+        stage("youtube", "SKIPPED", "Nenhum coletor do YouTube esta disponivel nesta execucao")
     else:
-        stage("youtube", "DONE", f"{youtube_collected} vídeo(s) coletado(s)")
+        stage("youtube", "DONE", f"{youtube_collected} video(s) coletado(s)")
     db.commit()
 
-    # 4. Validação cruzada só existe se YouTube estiver habilitado.
+    # 4. Optional cross validation
     check()
     if not flags["enable_cross_validation"]:
-        stage("cross_validation", "SKIPPED", "Opcional e desativada nesta execução")
+        stage("cross_validation", "SKIPPED", "Opcional e desativada nesta execucao")
     else:
-        stage("cross_validation", "RUNNING", "Comparando metadados coincidentes do Tavily e do DuckDuckGo Videos")
+        stage("cross_validation", "RUNNING", "Comparando metadados coincidentes de video")
         try:
             cross_validation = validate_video_metadata_cross_source(
                 db,
@@ -167,21 +185,20 @@ def run_full_methodology(
                 progress_detail=detail_for("cross_validation"),
             )
         except RuntimeError as exc:
-            stage("cross_validation", "SKIPPED", f"Validação cruzada indisponível: {str(exc)[:180]}")
+            stage("cross_validation", "SKIPPED", f"Validacao cruzada indisponivel: {str(exc)[:180]}")
         else:
             if cross_validation["skipped"]:
                 if cross_validation.get("reason") == "NO_COMPARABLE_ITEMS":
                     stage(
                         "cross_validation",
                         "SKIPPED",
-                        "Não necessária: nenhum vídeo foi obtido por dois coletores independentes",
+                        "Nao necessaria: nenhum video foi obtido por dois coletores independentes",
                     )
                 else:
-                    stage("cross_validation", "SKIPPED", "OPENAI_API_KEY não configurada")
+                    stage("cross_validation", "SKIPPED", "OPENAI_API_KEY nao configurada")
             else:
-                stage("cross_validation", "DONE", f"{cross_validation['validated']} vídeo(s) comparado(s)")
+                stage("cross_validation", "DONE", f"{cross_validation['validated']} video(s) comparado(s)")
 
-    # Valores padrão permitem retornar um resultado estável mesmo quando a camada factual é pulada.
     fact_pass_1 = {"processed": 0, "events_extracted": 0, "errors": 0}
     fact_resolution_1 = {"events": 0, "confirmed": 0, "partial": 0, "conflicts": 0}
     nominal_created = 0
@@ -189,29 +206,36 @@ def run_full_methodology(
     fact_pass_2 = {"processed": 0, "events_extracted": 0, "errors": 0}
     fact_resolution_2 = dict(fact_resolution_1)
 
-    # 5. Camada factual opcional.
+    # 5. Optional fact layer
     fact_layer_active = flags["enable_fact_layer"] and project.project_type == "EVENT_TOPIC"
     if not fact_layer_active:
         reason = (
-            f"Não necessária para o perfil {execution_profile}"
+            f"Nao necessaria para o perfil {execution_profile}"
             if not flags["enable_fact_layer"]
-            else f"Tipo de projeto {project.project_type} não exige fatos individuais"
+            else f"Tipo de projeto {project.project_type} nao exige fatos individuais"
         )
-        for key in ("facts_pass_1", "fact_resolution_1", "nominal_plan", "nominal_collection", "facts_pass_2", "fact_resolution_2"):
+        for key in (
+            "facts_pass_1",
+            "fact_resolution_1",
+            "nominal_plan",
+            "nominal_collection",
+            "facts_pass_2",
+            "fact_resolution_2",
+        ):
             stage(key, "SKIPPED", reason)
     else:
         check()
-        stage("facts_pass_1", "RUNNING", "Extraindo datas, causas, locais e evidências por campo")
+        stage("facts_pass_1", "RUNNING", "Extraindo datas, causas, locais e evidencias por campo")
         fact_pass_1 = extract_project_facts(
             db,
             project,
             cancel_check=check,
             progress_detail=detail_for("facts_pass_1"),
         )
-        stage("facts_pass_1", "DONE", f"{fact_pass_1['events_extracted']} evento(s) extraído(s)")
+        stage("facts_pass_1", "DONE", f"{fact_pass_1['events_extracted']} evento(s) extraido(s)")
 
         check()
-        stage("fact_resolution_1", "RUNNING", "Consolidando evidências e detectando conflitos entre fontes")
+        stage("fact_resolution_1", "RUNNING", "Consolidando evidencias e detectando conflitos")
         fact_resolution_1 = resolve_project_facts(db, project)
         stage(
             "fact_resolution_1",
@@ -220,21 +244,20 @@ def run_full_methodology(
         )
         fact_resolution_2 = dict(fact_resolution_1)
 
-        # Busca nominal é uma camada extra, reservada ao perfil completo ou override explícito.
         if not flags["enable_nominal_followup"]:
             stage("nominal_plan", "SKIPPED", f"Busca nominal desativada no perfil {execution_profile}")
             stage("nominal_collection", "SKIPPED", "Sem segunda coleta nominal")
             stage("facts_pass_2", "SKIPPED", "Sem segunda passagem factual")
-            stage("fact_resolution_2", "SKIPPED", "A consolidação da primeira passagem foi mantida")
+            stage("fact_resolution_2", "SKIPPED", "A consolidacao da primeira passagem foi mantida")
         else:
             check()
-            stage("nominal_plan", "RUNNING", "Criando buscas somente para nomes já identificados")
+            stage("nominal_plan", "RUNNING", "Criando buscas somente para nomes ja identificados")
             nominal_created = plan_nominal_followups(db, project)
             stage("nominal_plan", "DONE", f"{nominal_created} consulta(s) nominal(is) criada(s)")
 
             if nominal_created:
                 check()
-                stage("nominal_collection", "RUNNING", "Buscando corroboradores e fontes complementares por nome")
+                stage("nominal_collection", "RUNNING", "Buscando corroboradores por nome")
                 second_collected = collect_web(
                     db,
                     project.id,
@@ -244,17 +267,17 @@ def run_full_methodology(
                 stage("nominal_collection", "DONE", f"{second_collected} novo(s) item(ns) coletado(s)")
 
                 check()
-                stage("facts_pass_2", "RUNNING", "Extraindo evidências das novas fontes nominais")
+                stage("facts_pass_2", "RUNNING", "Extraindo evidencias das novas fontes nominais")
                 fact_pass_2 = extract_project_facts(
                     db,
                     project,
                     cancel_check=check,
                     progress_detail=detail_for("facts_pass_2"),
                 )
-                stage("facts_pass_2", "DONE", f"{fact_pass_2['events_extracted']} evento(s) adicional(is) extraído(s)")
+                stage("facts_pass_2", "DONE", f"{fact_pass_2['events_extracted']} evento(s) adicional(is) extraido(s)")
 
                 check()
-                stage("fact_resolution_2", "RUNNING", "Reconciliando a camada factual com as novas fontes")
+                stage("fact_resolution_2", "RUNNING", "Reconciliando a camada factual")
                 fact_resolution_2 = resolve_project_facts(db, project)
                 stage(
                     "fact_resolution_2",
@@ -264,11 +287,11 @@ def run_full_methodology(
             else:
                 stage("nominal_collection", "SKIPPED", "Nenhum nome novo exigiu segunda coleta")
                 stage("facts_pass_2", "SKIPPED", "Nenhuma segunda coleta para extrair")
-                stage("fact_resolution_2", "SKIPPED", "A consolidação da primeira passagem foi mantida")
+                stage("fact_resolution_2", "SKIPPED", "A consolidacao da primeira passagem foi mantida")
 
-    # 6. Núcleo midiático: sempre executado.
+    # 6. Media core
     check()
-    stage("validation", "RUNNING", "Validando janela de publicação e aderência temática")
+    stage("validation", "RUNNING", "Validando janela de publicacao e aderencia tematica")
     validation = validate_and_classify(
         db,
         project,
@@ -278,12 +301,12 @@ def run_full_methodology(
     stage(
         "validation",
         "DONE",
-        f"{validation['valid']} válido(s); {validation['discarded']} descartado(s); "
+        f"{validation['valid']} valido(s); {validation['discarded']} descartado(s); "
         f"{validation.get('llm_calls', 0)} chamada(s) LLM em lote",
     )
 
     check()
-    stage("classification", "RUNNING", "Classificando enquadramento, fidelidade e menção institucional")
+    stage("classification", "RUNNING", "Classificando enquadramento, fidelidade e mencao institucional")
     classification = classify_with_llm(
         db,
         project,
@@ -300,16 +323,16 @@ def run_full_methodology(
 
     check()
     report_detail = (
-        "Redigindo relatório com camada factual individual"
+        "Redigindo relatorio com camada factual individual"
         if fact_layer_active
-        else "Redigindo relatório de repercussão sem camada factual individual"
+        else "Redigindo relatorio de repercussao sem camada factual individual"
     )
     stage("report", "RUNNING", report_detail)
     drafted = draft_report_with_llm(db, project)
-    stage("report", "DONE", "Relatório estruturado e persistido")
+    stage("report", "DONE", "Relatorio estruturado e persistido")
 
     check()
-    stage("qa", "RUNNING", "Executando verificações determinísticas e auditoria final")
+    stage("qa", "RUNNING", "Executando verificacoes deterministicas e auditoria final")
     qa = run_report_qa(db, project, drafted)
     stage("qa", "DONE", f"QA {qa['status']}")
 
@@ -335,5 +358,3 @@ def run_full_methodology(
         "qa": qa,
         **drafted,
     }
-
-

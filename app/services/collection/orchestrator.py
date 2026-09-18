@@ -1,13 +1,8 @@
-"""Orquestração da coleta obrigatória executada pelo ReportAgent.
+"""Mandatory collection orchestration executed through ReportAgent tools.
 
-Regra estrutural: QUALQUER pesquisa web/vídeo é feita pelo agente. Este módulo
-NÃO acessa provedores nem a cadeia de busca diretamente; ele monta o plano de
-consultas (a metodologia), entrega as tools ``pesquisar_internet`` /
-``pesquisar_videos`` ao ``ReportAgent`` (tarefa ``collector``) e concentra a
-persistência determinística (guard, janela, dedup, proveniência e estatísticas)
-nos *sinks* fornecidos às tools.
-
-O acesso a provedores vive exclusivamente em ``app.tools.search``.
+Structural invariant: services never call DuckDuckGo/Tavily or tool.invoke().
+The ReportAgent invokes the bulk tools; this module only supplies approved
+queries, deterministic context, sinks, guards, budgets and audit observers.
 """
 
 from __future__ import annotations
@@ -42,8 +37,6 @@ from app.tools.search import (
 
 
 class CollectionState:
-    """Estado compartilhado entre os sinks e o chamador da coleta."""
-
     def __init__(
         self,
         *,
@@ -63,28 +56,58 @@ class CollectionState:
         self.cancel_exc: Exception | None = None
         self.unavailable: str | None = None
         self.added = 0
+        self.added_by_purpose: dict[str, int] = {}
         self.errors: list[str] = []
         self.attempted: set[str] = set()
         self.resolved: set[str] = set()
 
 
+def _query_budget_for_purpose(settings, purpose: str) -> int:
+    return {
+        "MEDIA_REPERCUSSION": settings.max_media_queries,
+        "FACT_DISCOVERY": settings.max_fact_queries,
+        "OFFICIAL_FACT": settings.max_official_queries,
+        "NOMINAL_FOLLOWUP": settings.max_nominal_queries,
+    }.get(purpose, settings.max_search_queries)
+
+
+def _result_budget_for_purpose(settings, purpose: str) -> int:
+    return {
+        "MEDIA_REPERCUSSION": settings.max_search_results,
+        "FACT_DISCOVERY": settings.max_fact_search_results,
+        "OFFICIAL_FACT": settings.max_official_search_results,
+        "NOMINAL_FOLLOWUP": settings.max_nominal_search_results,
+    }.get(purpose, settings.max_search_results)
+
+
 def web_queries_pending(project_id: int) -> list[str]:
-    """Snapshot das consultas web pendentes, respeitando o teto configurável."""
+    """Return pending queries with independent per-purpose query budgets."""
     settings = get_settings()
     session = SessionLocal()
     try:
         rows = session.scalars(
             select(SearchQuery)
-            .where(SearchQuery.project_id == project_id, SearchQuery.executed_at.is_(None))
+            .where(
+                SearchQuery.project_id == project_id,
+                SearchQuery.executed_at.is_(None),
+            )
             .order_by(SearchQuery.priority.asc(), SearchQuery.id.asc())
         ).all()
-        return [row.query for row in rows[: max(1, settings.max_search_queries)]]
+        selected: list[str] = []
+        counts: dict[str, int] = {}
+        for row in rows:
+            purpose = str(row.purpose or "MEDIA_REPERCUSSION")
+            limit = max(0, int(_query_budget_for_purpose(settings, purpose)))
+            if counts.get(purpose, 0) >= limit:
+                continue
+            selected.append(row.query)
+            counts[purpose] = counts.get(purpose, 0) + 1
+        return selected
     finally:
         session.close()
 
 
 def video_queries_pending(project_id: int) -> list[str]:
-    """Snapshot das tarefas de vídeo (canais prioritários primeiro)."""
     session = SessionLocal()
     try:
         project = session.get(Project, project_id)
@@ -96,11 +119,6 @@ def video_queries_pending(project_id: int) -> list[str]:
 
 
 def _check_cancel(state: CollectionState) -> bool:
-    """Devolve ``False`` (registrando o motivo) quando o cancelamento foi pedido.
-
-    Não propaga a exceção: ela viajaria pela execução da tool e seria convertida
-    em observação de erro pelo agente. O chamador re-levanta ao final.
-    """
     if state.cancel_check is None:
         return True
     try:
@@ -121,18 +139,61 @@ def _existing_items(session: Session, project_id: int) -> dict[str, MediaItem]:
     }
 
 
-def _make_web_context(project: Project, plan: dict[str, SearchQuery]):
+def _make_web_context(
+    project: Project,
+    plan: dict[str, SearchQuery],
+    state: CollectionState,
+):
     settings = get_settings()
 
     def context(query: str) -> dict[str, Any]:
-        options: dict[str, Any] = {"max_results": max(1, settings.max_results_per_query)}
         entry = plan.get(query)
-        if entry is not None:
-            start, end = query_window(project, entry)
-            options["window_start"] = start.isoformat() if start else None
-            options["window_end"] = end.isoformat() if end else None
-            options["purpose"] = entry.purpose
-        return options
+        if entry is None:
+            return {
+                "skip": True,
+                "skip_reason": "query outside approved plan",
+                "max_results": 1,
+            }
+
+        purpose = str(entry.purpose or "MEDIA_REPERCUSSION")
+        used = state.added_by_purpose.get(purpose, 0)
+        hard_limit = max(1, int(state.counters.get("global_result_limit", settings.max_search_results))) if purpose == "MEDIA_REPERCUSSION" else max(1, _result_budget_for_purpose(settings, purpose))
+        if used >= hard_limit:
+            return {
+                "skip": True,
+                "skip_reason": f"result budget reached for {purpose}",
+                "purpose": purpose,
+                "max_results": 1,
+            }
+
+        # TARGET_MEDIA_ITEMS is a soft target. We still execute deterministic
+        # priority-portal checks for diversity, but complementary thematic
+        # searches become unnecessary once the target has been reached.
+        if (
+            purpose == "MEDIA_REPERCUSSION"
+            and entry.kind == "media_complementary"
+            and state.added_by_purpose.get("MEDIA_REPERCUSSION", 0)
+            >= settings.target_media_items
+        ):
+            return {
+                "skip": True,
+                "skip_reason": "media target reached; complementary query not needed",
+                "purpose": purpose,
+                "max_results": 1,
+            }
+
+        per_query = (
+            settings.max_priority_results_per_query
+            if entry.kind == "media_portal"
+            else settings.max_results_per_query
+        )
+        start, end = query_window(project, entry)
+        return {
+            "max_results": max(1, int(per_query)),
+            "window_start": start.isoformat() if start else None,
+            "window_end": end.isoformat() if end else None,
+            "purpose": purpose,
+        }
 
     return context
 
@@ -143,7 +204,7 @@ def _make_video_context(project: Project):
 
     def context(query: str) -> dict[str, Any]:
         return {
-            "max_results": max(1, settings.max_results_per_query),
+            "max_results": max(1, settings.max_youtube_results_per_task),
             "window_start": start.isoformat() if start else None,
             "window_end": end.isoformat() if end else None,
         }
@@ -152,13 +213,6 @@ def _make_video_context(project: Project):
 
 
 class SearchAuditObserver(SearchObserver):
-    """Grava ``SearchCall`` e atualiza o estado da ``SearchQuery`` por tentativa.
-
-    Diferencia, para cada consulta planejada: nunca executada, executada sem
-    resultado, executada com resultado aceito e executada com falha. O conteúdo
-    completo permanece no sink; aqui registramos apenas a trilha de auditoria.
-    """
-
     def __init__(
         self,
         *,
@@ -195,7 +249,7 @@ class SearchAuditObserver(SearchObserver):
             try:
                 self.session.flush()
             except Exception as exc:
-                self.state.errors.append(f"{query}: falha ao registrar execução ({exc})")
+                self.state.errors.append(f"{query}: audit start failed ({exc})")
         if self.state.progress_detail:
             self.state.progress_detail(f"Executando consulta: {query[:90]}")
 
@@ -219,7 +273,13 @@ class SearchAuditObserver(SearchObserver):
             self._attempts[query].append(provider)
 
     def provider_result(
-        self, *, query: str, provider: str, tool_name: str, returned: int, accepted: int
+        self,
+        *,
+        query: str,
+        provider: str,
+        tool_name: str,
+        returned: int,
+        accepted: int,
     ) -> None:
         key = self._key(query, provider, tool_name)
         call = self._open.pop(key, None)
@@ -233,7 +293,12 @@ class SearchAuditObserver(SearchObserver):
         self._accepted[query] = self._accepted.get(query, 0) + int(accepted)
 
     def provider_error(
-        self, *, query: str, provider: str, tool_name: str, error: str
+        self,
+        *,
+        query: str,
+        provider: str,
+        tool_name: str,
+        error: str,
     ) -> None:
         key = self._key(query, provider, tool_name)
         call = self._open.pop(key, None)
@@ -272,6 +337,15 @@ class SearchAuditObserver(SearchObserver):
         return max(0, int((time.monotonic() - started) * 1000))
 
 
+def _purpose_counter_key(purpose: str) -> str:
+    return {
+        "MEDIA_REPERCUSSION": "media_added",
+        "FACT_DISCOVERY": "fact_added",
+        "OFFICIAL_FACT": "official_added",
+        "NOMINAL_FOLLOWUP": "nominal_added",
+    }.get(purpose, "other_added")
+
+
 def _make_web_sink(
     state: CollectionState,
     session: Session,
@@ -281,8 +355,6 @@ def _make_web_sink(
 ):
     counters = state.counters
     settings = get_settings()
-    global_limit = max(1, counters.get("global_result_limit", settings.max_search_results))
-    per_query_cap = max(1, settings.max_results_per_query)
     progress = state.progress_detail
 
     def sink(rows: list[dict[str, Any]], provider: str, query: str) -> list[dict[str, Any]]:
@@ -293,19 +365,28 @@ def _make_web_sink(
 
         entry = plan.get(query)
         if entry is None:
-            state.errors.append(f"{query}: consulta fora do plano aprovado")
+            state.errors.append(f"{query}: query outside approved plan")
             return []
 
-        if state.added >= global_limit:
-            counters["global_limit_reached"] = 1
-            if progress:
-                progress(
-                    f"Limite global de {global_limit} item(ns) atingido; consulta ignorada"
-                )
+        purpose = str(entry.purpose or "MEDIA_REPERCUSSION")
+        hard_limit = (
+            max(1, int(counters.get("global_result_limit", settings.max_search_results)))
+            if purpose == "MEDIA_REPERCUSSION"
+            else max(1, int(_result_budget_for_purpose(settings, purpose)))
+        )
+        used = state.added_by_purpose.get(purpose, 0)
+        if used >= hard_limit:
+            if purpose == "MEDIA_REPERCUSSION":
+                counters["global_limit_reached"] = 1
             return []
 
-        remaining = global_limit - state.added
-        query_limit = min(per_query_cap, max(1, remaining))
+        per_query_cap = (
+            settings.max_priority_results_per_query
+            if entry.kind == "media_portal"
+            else settings.max_results_per_query
+        )
+        remaining = hard_limit - used
+        query_limit = min(max(1, int(per_query_cap)), max(1, remaining))
         start, end = query_window(project, entry)
         has_window = _valid_search_window(start, end)
 
@@ -323,21 +404,32 @@ def _make_web_sink(
         )
 
         if provider == "duckduckgo":
-            counters["duckduckgo_queries"] += 1
-            counters["duckduckgo_results"] += len(rows)
-            counters["duckduckgo_added"] += int(local.get("added", 0))
-            counters["duckduckgo_rejected"] += int(local.get("rejected", 0))
+            counters["duckduckgo_queries"] = counters.get("duckduckgo_queries", 0) + 1
+            counters["duckduckgo_results"] = counters.get("duckduckgo_results", 0) + len(rows)
+            counters["duckduckgo_added"] = counters.get("duckduckgo_added", 0) + int(local.get("added", 0))
+            counters["duckduckgo_rejected"] = counters.get("duckduckgo_rejected", 0) + int(local.get("rejected", 0))
         elif provider == "tavily":
-            counters["tavily_queries"] += 1
-            counters["tavily_results"] += len(rows)
-            counters["tavily_added"] += int(local.get("added", 0))
-            counters["tavily_rejected"] += int(local.get("rejected", 0))
+            counters["tavily_queries"] = counters.get("tavily_queries", 0) + 1
+            counters["tavily_results"] = counters.get("tavily_results", 0) + len(rows)
+            counters["tavily_added"] = counters.get("tavily_added", 0) + int(local.get("added", 0))
+            counters["tavily_rejected"] = counters.get("tavily_rejected", 0) + int(local.get("rejected", 0))
 
-        state.added += int(local.get("added", 0))
+        added = int(local.get("added", 0))
+        state.added += added
+        state.added_by_purpose[purpose] = state.added_by_purpose.get(purpose, 0) + added
+        counter_key = _purpose_counter_key(purpose)
+        counters[counter_key] = state.added_by_purpose[purpose]
+
+        if (
+            purpose == "MEDIA_REPERCUSSION"
+            and state.added_by_purpose[purpose] >= settings.target_media_items
+        ):
+            counters["media_target_reached"] = 1
+
         if provider in {"duckduckgo", "tavily"}:
-            counters["queries_successful"] += 1
+            counters["queries_successful"] = counters.get("queries_successful", 0) + 1
         else:
-            counters["failed_queries"] += 1
+            counters["failed_queries"] = counters.get("failed_queries", 0) + 1
         return accepted_rows
 
     return sink
@@ -366,22 +458,19 @@ def _make_video_sink(
 
         task = plan.get(query)
         if task is None:
-            state.errors.append(f"{query}: tarefa fora do plano aprovado")
+            state.errors.append(f"{query}: task outside approved plan")
             return []
-
         if state.added >= total_limit:
             return []
 
-        is_priority_task = task.is_priority
         task_limit = min(
-            1 if is_priority_task else per_task_cap,
+            1 if task.is_priority else per_task_cap,
             max(1, total_limit - state.added),
         )
-
         if provider == "duckduckgo":
-            counters["duckduckgo_attempts"] += 1
+            counters["duckduckgo_attempts"] = counters.get("duckduckgo_attempts", 0) + 1
         elif provider == "tavily":
-            counters["tavily_attempts"] += 1
+            counters["tavily_attempts"] = counters.get("tavily_attempts", 0) + 1
         else:
             return []
 
@@ -399,9 +488,9 @@ def _make_video_sink(
             progress_detail=progress,
         )
         if provider == "duckduckgo":
-            counters["duckduckgo_added"] += int(local.get("added", 0))
+            counters["duckduckgo_added"] = counters.get("duckduckgo_added", 0) + int(local.get("added", 0))
         else:
-            counters["tavily_added"] += int(local.get("added", 0))
+            counters["tavily_added"] = counters.get("tavily_added", 0) + int(local.get("added", 0))
         state.added += int(local.get("added", 0))
         if int(local.get("added", 0)) > 0 or int(local.get("duplicates", 0)) > 0:
             state.resolved.add(query)
@@ -415,7 +504,7 @@ def _mark_web_missed(state: CollectionState, planned: list[str]) -> None:
     if not missed:
         return
     state.counters["failed_queries"] = state.counters.get("failed_queries", 0) + len(missed)
-    state.errors.append(f"web: {len(missed)} consulta(s) do plano não executada(s)")
+    state.errors.append(f"web: {len(missed)} planned query/queries not executed")
 
 
 def run_agent_collection(
@@ -429,7 +518,6 @@ def run_agent_collection(
     video_progress: Callable[[str], None] | None = None,
     cancel_check: Callable[[], None] | None = None,
 ) -> tuple[CollectionState, CollectionState | None]:
-    """Executa o plano de coleta pelo agente e devolve os estados consolidados."""
     reset_tavily_circuit_breaker()
     web_state = CollectionState(
         project_id=project_id,
@@ -452,10 +540,7 @@ def run_agent_collection(
         return web_state, video_state
 
     if not search_providers_available():
-        message = (
-            "Nenhum provedor de pesquisa está disponível. Instale `ddgs` "
-            "ou configure TAVILY_API_KEY."
-        )
+        message = "No search provider is available. Install ddgs or configure TAVILY_API_KEY."
         if web_queries:
             web_state.unavailable = message
         if video_state and video_state.expect_queries:
@@ -467,7 +552,6 @@ def run_agent_collection(
         project = session.get(Project, project_id)
         if not project:
             raise RuntimeError("Projeto nao encontrado")
-
         existing_items = _existing_items(session, project_id)
 
         web_plan: dict[str, SearchQuery] = {}
@@ -485,7 +569,7 @@ def run_agent_collection(
             web_state.counters["queries_total"] = max(
                 web_state.counters.get("queries_total", 0), len(web_queries)
             )
-            web_context = _make_web_context(project, web_plan)
+            web_context = _make_web_context(project, web_plan, web_state)
             web_observer = SearchAuditObserver(
                 session=session,
                 project_id=project_id,
@@ -513,7 +597,11 @@ def run_agent_collection(
                 count_key="tasks_attempted",
             )
             video_sink = _make_video_sink(
-                video_state, session, project, video_plan, existing_items
+                video_state,
+                session,
+                project,
+                video_plan,
+                existing_items,
             )
 
         tools = build_agent_tools(
@@ -545,21 +633,21 @@ def run_agent_collection(
         except Exception as exc:
             if web_state.cancelled or (video_state is not None and video_state.cancelled):
                 raise (web_state.cancel_exc or video_state.cancel_exc)  # type: ignore[misc]
-            message = f"Agente de coleta indisponível: {str(exc)[:1000]}"
+            message = f"Collector agent unavailable: {str(exc)[:1000]}"
             if web_queries and not web_state.invoked:
                 web_state.unavailable = message
             if video_state is not None and video_state.expect_queries and not video_state.invoked:
                 video_state.unavailable = message
 
         if web_queries and not web_state.invoked and not web_state.unavailable:
-            web_state.unavailable = "O agente de coleta não executou a coleta web planejada"
+            web_state.unavailable = "Collector agent did not execute the approved web plan"
         if (
             video_state is not None
             and video_state.expect_queries
             and not video_state.invoked
             and not video_state.unavailable
         ):
-            video_state.unavailable = "O agente de coleta não executou a coleta de vídeos planejada"
+            video_state.unavailable = "Collector agent did not execute the approved video plan"
 
         _mark_web_missed(web_state, web_queries)
         if video_state is not None and video_state.expect_queries:

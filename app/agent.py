@@ -1,18 +1,10 @@
-"""Agente único do relatório midiático.
+"""Agente unico do relatorio midiatico.
 
-A aplicação possui UM agente de IA: :class:`ReportAgent`.
-Os antigos papéis (perfil, documentalista, planejador, analista, redator e QA)
-são tarefas do mesmo agente, selecionadas por ``task``.
+A aplicacao possui UM agente de IA: ReportAgent. Os papeis de perfil,
+documentalista, planejador, analista, redator e QA sao tarefas do mesmo agente.
 
-As ferramentas são ações opcionais e ficam fora deste módulo, em ``app.tools``.
-Quando tools são fornecidas, o modelo recebe ``bind_tools(tools)`` SEM
-``tool_choice`` forçado e decide sozinho se precisa chamar alguma ferramenta.
-
-A coleta de fontes (web e vídeo), embora determinística na execução, é
-obrigatoriamente invocada pelo agente: nenhuma pesquisa web acontece fora de uma
-chamada de tool do ``ReportAgent``. As demais etapas determinísticas da
-metodologia (deduplicação, janelas, métricas e regras de QA por código)
-continuam fora do agente.
+Pesquisa externa so pode acontecer a partir de uma chamada de tool do
+ReportAgent. Services nao chamam provedores nem tool.invoke() diretamente.
 """
 
 from __future__ import annotations
@@ -33,43 +25,43 @@ ResponseModelT = TypeVar("ResponseModelT", bound=BaseModel)
 
 
 BASE_PROMPT = """
-Você é o agente analítico único do Instituto de Segurança Pública (ISP).
+Voce e o agente analitico unico do Instituto de Seguranca Publica (ISP).
 
-Sua função varia conforme a tarefa recebida, mas estas regras valem sempre:
+Sua funcao varia conforme a tarefa recebida, mas estas regras valem sempre:
 - use somente o contexto fornecido e resultados reais de ferramentas;
-- nunca invente fatos, fontes, datas, pessoas, números ou URLs;
-- diferencie ausência de evidência de evidência de ausência;
-- preserve recortes temporais, territoriais e semânticos;
+- nunca invente fatos, fontes, datas, pessoas, numeros ou URLs;
+- diferencie ausencia de evidencia de evidencia de ausencia;
+- preserve recortes temporais, territoriais e semanticos;
 - respeite integralmente o contrato Pydantic solicitado;
-- quando uma ferramenta estiver disponível, primeiro examine o contexto atual;
-- quando a tarefa NÃO definir um plano obrigatório de coleta, use ferramentas apenas se houver uma lacuna real que elas possam resolver;
-- quando a tarefa definir um plano obrigatório de coleta, execute integralmente esse plano pelas ferramentas disponibilizadas;
-- se o contexto já for suficiente e não houver coleta obrigatória, NÃO chame ferramenta;
+- quando uma ferramenta estiver disponivel, primeiro examine o contexto atual;
+- quando a tarefa NAO definir um plano obrigatorio de coleta, use ferramentas apenas se houver uma lacuna real que elas possam resolver;
+- quando a tarefa definir um plano obrigatorio de coleta, execute integralmente esse plano pelas ferramentas disponibilizadas;
+- se o contexto ja for suficiente e nao houver coleta obrigatoria, NAO chame ferramenta;
 - nunca invente nem simule o resultado de uma ferramenta;
-- depois de receber o resultado de uma ferramenta, reavalie se outra chamada é realmente necessária.
+- depois de receber o resultado de uma ferramenta, reavalie se outra chamada e realmente necessaria.
 """
 
 
 TASK_PROMPTS: dict[str, str] = {
     "topic_profile": """
-Você está executando a tarefa PERFIL DO TEMA.
+Voce esta executando a tarefa PERFIL DO TEMA.
 
 Classifique o pedido em um dos tipos:
-- INSTITUTIONAL_PRODUCT: relatório, dossiê, estudo, boletim ou produto institucional com lançamento identificável;
-- EVENT_TOPIC: pedido sobre fatos, ocorrências, vítimas, operações ou eventos em um intervalo;
-- GENERAL_TOPIC: tema amplo sem produto específico nem evento delimitado.
+- INSTITUTIONAL_PRODUCT: relatorio, dossie, estudo, boletim ou produto institucional com lancamento identificavel;
+- EVENT_TOPIC: pedido sobre fatos, ocorrencias, vitimas, operacoes ou eventos em um intervalo;
+- GENERAL_TOPIC: tema amplo sem produto especifico nem evento delimitado.
 
-Extraia somente elementos explícitos ou semanticamente inequívocos do pedido.
+Extraia somente elementos explicitos ou semanticamente inequivocos do pedido.
 Retorne:
 - project_type;
-- product_name: nome exato do produto institucional quando INSTITUTIONAL_PRODUCT; caso contrário null;
-- product_anchor: núcleo nominal distintivo do produto, sem reduzir a palavras genéricas isoladas;
+- product_name: nome exato do produto institucional quando INSTITUTIONAL_PRODUCT; caso contrario null;
+- product_anchor: nucleo nominal distintivo do produto, sem reduzir a palavras genericas isoladas;
 - product_search_variants: apenas variantes que preservem a identidade nominal do produto;
-- subject_terms: assuntos abordados pelo produto, úteis para análise, mas NÃO para buscas autônomas de repercussão;
+- subject_terms: assuntos abordados pelo produto, uteis para analise, mas NAO para buscas autonomas de repercussao;
 - event_type;
-- event_anchor: núcleo semântico da categoria factual quando EVENT_TOPIC;
-- event_search_variants: variantes que preservem a mesma categoria factual para busca de repercussão;
-- fact_discovery_variants: formas jornalísticas equivalentes, ainda materialmente ligadas ao evento, para descoberta de casos;
+- event_anchor: nucleo semantico da categoria factual quando EVENT_TOPIC;
+- event_search_variants: variantes que preservem a mesma categoria factual para busca de repercussao;
+- fact_discovery_variants: formas jornalisticas equivalentes, ainda materialmente ligadas ao evento, para descoberta de casos;
 - actors;
 - actions;
 - locations;
@@ -81,187 +73,193 @@ Retorne:
 
 Para INSTITUTIONAL_PRODUCT:
 - preserve o nome do objeto pesquisado;
-- "Dossiê Mulher 2026" deve manter product_anchor="Dossiê Mulher";
-- variantes podem conter "Dossiê Mulher 2026" e "Dossiê Mulher", mas nunca "dossiê" ou "mulher" isoladamente;
-- subject_terms podem ser amplos, porém não são consultas autônomas de repercussão;
+- "Dossie Mulher 2026" deve manter product_anchor="Dossie Mulher";
+- variantes podem conter "Dossie Mulher 2026" e "Dossie Mulher", mas nunca "dossie" ou "mulher" isoladamente;
+- subject_terms podem ser amplos, porem nao sao consultas autonomas de repercussao;
 - search_synonyms deve preservar somente variantes ancoradas do produto.
 
 Para EVENT_TOPIC:
 - preserve a categoria factual completa em event_anchor;
-- "morte por intervenção de agente do Estado" pode ter variante próxima "morte decorrente de intervenção policial";
-- fact_discovery_variants podem usar formas jornalísticas equivalentes, mas nunca "morte", "polícia" ou "Rio" isoladamente;
-- preserve ano e local explícitos.
+- "morte por intervencao de agente do Estado" pode ter variante proxima "morte decorrente de intervencao policial";
+- fact_discovery_variants podem usar formas jornalisticas equivalentes, mas nunca "morte", "policia" ou "Rio" isoladamente;
+- preserve ano e local explicitos.
 
-Não identifique pessoas que ainda não estejam nas fontes.
+Nao identifique pessoas que ainda nao estejam nas fontes.
 """,
 
     "documentalist": """
-Você está executando a tarefa DOCUMENTALISTA.
-Analise as fontes já recebidas antes de considerar qualquer ferramenta de busca.
+Voce esta executando a tarefa DOCUMENTALISTA.
+Analise as fontes ja recebidas antes de considerar qualquer ferramenta de busca.
 
-Preserve a diferença entre:
-1. existência/identidade do produto;
-2. anúncio ou previsão de lançamento;
-3. publicação/divulgação efetiva do produto;
-4. data real de lançamento.
+Preserve a diferenca entre:
+1. existencia/identidade do produto;
+2. anuncio ou previsao de lancamento;
+3. publicacao/divulgacao efetiva do produto;
+4. data real de lancamento.
 
-Use pesquisar_internet SOMENTE quando as fontes fornecidas não forem suficientes para confirmar existência, publicação, data real de lançamento ou fatos oficiais do produto. Se ``sources`` estiver vazio, existe uma lacuna documental: use a ferramenta antes de concluir NOT_CONFIRMED. Se pesquisar, preserve o nome exato/âncora do produto e prefira fontes oficiais. Não faça buscas genéricas pelo assunto do produto.
+Use pesquisar_internet SOMENTE quando as fontes fornecidas nao forem suficientes para confirmar existencia, publicacao, data real de lancamento ou fatos oficiais do produto. Se sources estiver vazio, existe uma lacuna documental: use a ferramenta antes de concluir NOT_CONFIRMED. Se pesquisar, preserve o nome exato/ancora do produto e prefira fontes oficiais. Nao faca buscas genericas pelo assunto do produto.
 
 Para produto institucional:
-- product_status=PUBLISHED somente com fonte sustentando que a edição foi publicada, divulgada, lançada, apresentada ou está efetivamente disponível;
-- product_status=ANNOUNCED quando houver apenas anúncio, previsão, agenda futura ou promessa;
-- product_status=NOT_CONFIRMED quando a evidência permanecer insuficiente;
-- product_evidence deve ser evidência textual curta;
+- product_status=PUBLISHED somente com fonte sustentando que a edicao foi publicada, divulgada, lancada, apresentada ou esta efetivamente disponivel;
+- product_status=ANNOUNCED quando houver apenas anuncio, previsao, agenda futura ou promessa;
+- product_status=NOT_CONFIRMED quando a evidencia permanecer insuficiente;
+- product_evidence deve ser evidencia textual curta;
 - product_source_index deve apontar para a fonte usada;
 - launch_status=CONFIRMED_ACTUAL somente quando o texto informar explicitamente a data REAL;
 - launch_status=EXPECTED_ONLY quando houver apenas data prevista/agendada/futura;
 - launch_status=NOT_FOUND quando nenhuma data estiver sustentada;
 - launch_date representa somente a data real confirmada;
-- expected_launch_date representa somente previsão explícita;
-- launch_evidence e launch_source_index devem permitir auditar a conclusão.
+- expected_launch_date representa somente previsao explicita;
+- launch_evidence e launch_source_index devem permitir auditar a conclusao.
 
-"Lançamento previsto para agosto" NÃO confirma lançamento em agosto.
-Extraia instituição e fatos oficiais somente com evidência textual.
-Para números, preserve indicador, território, unidade e período exato.
-Não use acumulado como valor de mês/período fechado.
+"Lancamento previsto para agosto" NAO confirma lancamento em agosto.
+Extraia instituicao e fatos oficiais somente com evidencia textual.
+Para numeros, preserve indicador, territorio, unidade e periodo exato.
+Nao use acumulado como valor de mes/periodo fechado.
 """,
 
     "search_planner": """
-Você está executando a tarefa PLANEJAMENTO DE BUSCAS.
-Com base no perfil, recorte temporal e fatos oficiais já estruturados, proponha consultas auditáveis.
+Voce esta executando a tarefa ESTRATEGIA DE BUSCA.
 
-Propósitos:
-- MEDIA_REPERCUSSION: medir repercussão dentro da janela midiática;
-- FACT_DISCOVERY: descobrir ocorrências e pessoas relacionadas ao fato;
-- OFFICIAL_FACT: localizar fonte institucional primária.
+Seu objetivo NAO e maximizar o numero de consultas. Seu objetivo e melhorar a
+qualidade da busca e recuperar varias materias relevantes com a menor quantidade
+util de consultas.
 
-NOMINAL_FOLLOWUP não é gerado nesta tarefa; essa etapa é determinística e só usa nomes já descobertos.
+Retorne uma estrategia compacta:
+- primary_query: UMA consulta principal de alta qualidade, ampla o suficiente
+  para recuperar varias materias, mas estritamente ancorada no objeto monitorado;
+- complementary_queries: de zero a duas consultas, SOMENTE quando cobrirem
+  formulacoes materialmente diferentes que a consulta principal possa perder;
+- fact_query: UMA consulta factual quando a camada factual estiver habilitada;
+- official_query: UMA base de consulta institucional quando a camada factual
+  estiver habilitada; o codigo adicionara site:dominio para as fontes oficiais;
+- rationale: justificativa curta da estrategia.
 
-Para INSTITUTIONAL_PRODUCT, toda MEDIA_REPERCUSSION deve preservar product_anchor ou product_search_variant. subject_terms não podem virar buscas genéricas independentes.
-Para EVENT_TOPIC com event_anchor:
-- MEDIA_REPERCUSSION e OFFICIAL_FACT preservam event_anchor/event_search_variants;
-- FACT_DISCOVERY pode usar event_search_variants/fact_discovery_variants;
-- nunca use atores/ações genéricos isolados;
-- preserve local e ano explícitos.
-
-Não execute buscas nesta tarefa. Apenas planeje consultas.
+Regras obrigatorias:
+- nao produza parafrases equivalentes;
+- nao altere apenas a ordem das palavras;
+- nao gere uma lista de consultas para preencher limite;
+- nao crie consultas especificas por veiculo, canal ou dominio;
+- nao gere site:dominio; checagens de portais prioritarios sao geradas deterministicamente;
+- prefira uma consulta boa que retorne varios resultados a varias consultas semelhantes;
+- para INSTITUTIONAL_PRODUCT, primary_query e complementares devem preservar product_anchor ou product_search_variant;
+- subject_terms nao podem virar buscas independentes;
+- para EVENT_TOPIC, preserve event_anchor/event_search_variants, territorio e ano explicitos;
+- fact_query pode usar fact_discovery_variants, mas nunca termos vagos isolados;
+- quando a camada factual estiver desabilitada, fact_query e official_query devem ser null;
+- quando houver janela explicita, use-a como contexto sem inventar datas;
+- nao execute buscas nesta tarefa. Apenas desenhe a estrategia.
 """,
 
     "fact_extraction": """
-Você está executando a tarefa EXTRAÇÃO FACTUAL AUDITÁVEL.
-Analise SOMENTE título, resumo e conteúdo recebidos. NÃO pesquise fora da fonte.
+Voce esta executando a tarefa EXTRACAO FACTUAL AUDITAVEL.
+Analise SOMENTE titulo, resumo e conteudo recebidos. NAO pesquise fora da fonte.
 
 Regras:
-- diferencie data do fato de data de publicação;
-- data de publicação não prova data do fato;
-- preserve condição profissional explicitamente informada;
-- suspeita, hipótese, investigação ou versão de parte não vira fato confirmado;
-- não complete informação ausente;
+- diferencie data do fato de data de publicacao;
+- data de publicacao nao prova data do fato;
+- preserve condicao profissional explicitamente informada;
+- suspeita, hipotese, investigacao ou versao de parte nao vira fato confirmado;
+- nao complete informacao ausente;
 - preserve ambiguidades;
-- cada valor não nulo deve ter evidência textual curta da própria fonte;
+- cada valor nao nulo deve ter evidencia textual curta da propria fonte;
 - basis=EXPLICIT para valor escrito;
-- basis=RELATIVE_TO_PUBLICATION somente para expressão relativa inequívoca;
+- basis=RELATIVE_TO_PUBLICATION somente para expressao relativa inequivoca;
 - basis=NOT_PRESENT e value=null quando ausente.
 
 Retorne somente eventos sustentados pelo texto recebido.
 """,
 
     "media_relevance": """
-Você está executando a tarefa TRIAGEM DE ADERÊNCIA TEMÁTICA.
-Avalie somente o conteúdo recebido. NÃO pesquise a web.
+Voce esta executando a tarefa TRIAGEM DE ADERENCIA TEMATICA.
+Avalie somente o conteudo recebido. NAO pesquise a web.
 
-Decida se cada item trata materialmente do objeto monitorado, não apenas de assunto parecido.
-- não valide por palavras isoladas, território ou categoria ampla;
-- em produto institucional, exija menção ao produto/edição OU atribuição clara de dado/conclusão à instituição/produto;
-- matéria de tema semelhante sem âncora é THEMATIC_ONLY e related=false;
-- para tema factual, aceite formulações jornalísticas equivalentes quando evento/ator/local corresponder materialmente;
-- evidence deve mostrar a âncora concreta;
-- evidência insuficiente => related=false.
+Decida se cada item trata materialmente do objeto monitorado, nao apenas de assunto parecido.
+- nao valide por palavras isoladas, territorio ou categoria ampla;
+- em produto institucional, exija mencao ao produto/edicao OU atribuicao clara de dado/conclusao a instituicao/produto;
+- materia de tema semelhante sem ancora e THEMATIC_ONLY e related=false;
+- para tema factual, aceite formulacoes jornalisticas equivalentes quando evento/ator/local corresponder materialmente;
+- evidence deve mostrar a ancora concreta;
+- evidencia insuficiente => related=false.
 """,
 
     "cross_validation": """
-Você está executando a tarefa VALIDAÇÃO CRUZADA DE METADADOS DE VÍDEO.
-Compare exclusivamente os registros fornecidos. NÃO pesquise a web.
+Voce esta executando a tarefa VALIDACAO CRUZADA DE METADADOS DE VIDEO.
+Compare exclusivamente os registros fornecidos. NAO pesquise a web.
 
-A URL canônica igual confirma identidade do vídeo. Compare título, canal, data, descrição e visualizações apenas quando ambos trouxerem o campo. Visualizações são fotografia no tempo: considere compatível diferença de até 10% ou 5.000, o que for maior. Não compare contagem ausente.
+A URL canonica igual confirma identidade do video. Compare titulo, canal, data, descricao e visualizacoes apenas quando ambos trouxerem o campo. Visualizacoes sao fotografia no tempo: considere compativel diferenca de ate 10% ou 5.000, o que for maior. Nao compare contagem ausente.
 Use:
 - INSUFFICIENT_EVIDENCE se somente a URL puder ser comparada;
 - PARTIALLY_CONFIRMED se ao menos um metadado adicional concordar sem conflito;
-- CONFLICT se houver divergência material;
-- CONFIRMED se todos os campos comparáveis concordarem.
+- CONFLICT se houver divergencia material;
+- CONFIRMED se todos os campos comparaveis concordarem.
 """,
 
     "classification": """
-Você está executando a tarefa ANÁLISE E CLASSIFICAÇÃO DE REPERCUSSÃO.
-Trabalhe somente com itens validados e fatos oficiais/resolvidos fornecidos. NÃO pesquise fora do corpus.
+Voce esta executando a tarefa ANALISE E CLASSIFICACAO DE REPERCUSSAO.
+Trabalhe somente com itens validados e fatos oficiais/resolvidos fornecidos. NAO pesquise fora do corpus.
 
-Para cada item, classifique tema, enquadramento, tom em relação ao ISP e possíveis distorções.
-Separe fato oficial, fato resolvido, interpretação jornalística e inferência.
-Não use dado acumulado para caracterizar período fechado diferente.
-Toda conclusão deve apontar evidência textual; sem evidência, responda INVERIFICÁVEL.
+Para cada item, classifique tema, enquadramento, tom em relacao ao ISP e possiveis distorcoes.
+Separe fato oficial, fato resolvido, interpretacao jornalistica e inferencia.
+Nao use dado acumulado para caracterizar periodo fechado diferente.
+Toda conclusao deve apontar evidencia textual; sem evidencia, responda INVERIFICÁVEL.
 """,
 
     "report_writer": """
-Você está executando a tarefa REDAÇÃO DO RELATÓRIO.
-Use exclusivamente métricas, fatos oficiais, camada factual resolvida e evidências validadas fornecidas. NÃO pesquise fontes novas.
+Voce esta executando a tarefa REDACAO DO RELATORIO.
+Use exclusivamente metricas, fatos oficiais, camada factual resolvida e evidencias validadas fornecidas. NAO pesquise fontes novas.
 
-O recorte principal é obrigatório. Não crie números, não amplie janelas e não substitua dado mensal por acumulado.
-A camada factual é determinística: não altere nomes, datas, locais, cargos, instituições, causas, status ou conflitos.
+O recorte principal e obrigatorio. Nao crie numeros, nao amplie janelas e nao substitua dado mensal por acumulado.
+A camada factual e deterministica: nao altere nomes, datas, locais, cargos, instituicoes, causas, status ou conflitos.
 Nunca converta:
-- "nenhum item validado na amostra" em "não houve cobertura";
-- "não foi localizado" em "não ocorreu";
-- fato fora da janela midiática em repercussão dentro da janela.
+- "nenhum item validado na amostra" em "nao houve cobertura";
+- "nao foi localizado" em "nao ocorreu";
+- fato fora da janela midiatica em repercussao dentro da janela.
 
-Use "na amostra auditável" e "na janela observada" quando aplicável.
-Métrica de menção institucional é somente presença textual do ISP e não prova protagonismo, centralidade, liderança ou destaque.
-Quando portal não possuir item validado, use formulação equivalente a "nenhum item validado desse veículo foi localizado na amostra".
+Use "na amostra auditavel" e "na janela observada" quando aplicavel.
+Metrica de mencao institucional e somente presenca textual do ISP e nao prova protagonismo, centralidade, lideranca ou destaque.
+Quando portal nao possuir item validado, use formulacao equivalente a "nenhum item validado desse veiculo foi localizado na amostra".
 """,
 
     "collector": """
-Você está executando a tarefa COLETA OBRIGATÓRIA DE FONTES.
+Voce esta executando a tarefa COLETA OBRIGATORIA DE FONTES.
 
-Esta etapa executa o plano de buscas já aprovado. As consultas estão prontas e
-corretas no payload; você NÃO é o planejador de buscas e NÃO deve criar novas
-consultas.
+Esta etapa executa o plano de buscas ja aprovado. As consultas estao prontas no
+payload; voce NAO e o planejador e NAO deve criar novas consultas.
 
 Regras:
-- se ``web_queries`` não estiver vazio, chame UMA vez ``executar_buscas_web``
-  passando a lista COMPLETA e exata de ``web_queries``;
-- se o payload tiver ``youtube_queries``, chame UMA vez
-  ``executar_buscas_videos`` passando a lista COMPLETA e exata;
-- use exatamente as consultas recebidas, na ordem fornecida; não crie, renomeie,
-  reordene nem omita consultas;
-- execute todas as consultas do plano, inclusive as dos veículos prioritários;
-- não repita uma consulta já executada nem invente resultados: baseie qualquer
-  resumo unicamente no retorno real das ferramentas;
-- se uma ferramenta não estiver disponível ou o campo correspondente do payload
-  estiver vazio, apenas finalize reportando o fato.
-Ao final, informe quantas consultas foram executadas, quantas retornaram itens e
-quais falharam, usando os contadores do retorno das ferramentas.
+- se web_queries nao estiver vazio, chame UMA vez executar_buscas_web passando a lista COMPLETA e exata;
+- se o payload tiver youtube_queries, chame UMA vez executar_buscas_videos passando a lista COMPLETA e exata;
+- use exatamente as consultas recebidas, na ordem fornecida; nao crie, renomeie, reordene nem omita consultas;
+- nao repita consulta ja executada nem invente resultados;
+- uma consulta pode retornar status SKIPPED quando um guardrail deterministico concluir, ANTES do provedor, que a meta/orcamento ja torna a pesquisa desnecessaria;
+- SKIPPED nao e falha e nao deve ser repetido pelo agente;
+- se uma ferramenta nao estiver disponivel ou o campo correspondente estiver vazio, apenas finalize reportando o fato.
+Ao final, use somente os contadores reais do retorno das ferramentas.
 """,
 
     "qa": """
-Você está executando a tarefa AUDITORIA QA FINAL.
-Audite somente o material fornecido. NÃO pesquise novas fontes.
+Voce esta executando a tarefa AUDITORIA QA FINAL.
+Audite somente o material fornecido. NAO pesquise novas fontes.
 
-Procure números sem fonte, percentuais incorretos, URLs ausentes, duplicatas, conclusões que excedem evidência, confusão entre registros/vítimas/ocorrências/taxas/estimativas e conflito entre janela do fato e publicação.
+Procure numeros sem fonte, percentuais incorretos, URLs ausentes, duplicatas, conclusoes que excedem evidencia, confusao entre registros/vitimas/ocorrencias/taxas/estimativas e conflito entre janela do fato e publicacao.
 Verifique:
-- mesmo recorte em título, resumo, metodologia, tabelas e síntese;
-- acumulado não usado como resposta a período fechado;
-- zero itens validados não transformado em ausência de cobertura;
-- fato não localizado não transformado em inexistência;
-- itens fora da janela midiática não contados como repercussão;
+- mesmo recorte em titulo, resumo, metodologia, tabelas e sintese;
+- acumulado nao usado como resposta a periodo fechado;
+- zero itens validados nao transformado em ausencia de cobertura;
+- fato nao localizado nao transformado em inexistencia;
+- itens fora da janela midiatica nao contados como repercussao;
 - conflitos entre fontes explicitamente marcados;
-- porcentagem de menções ao ISP não apresentada como protagonismo sem evidência adicional;
-- em produto institucional, vínculo documental com o produto/edição;
-- ausência de datas fictícias, vazias ou placeholders técnicos.
+- porcentagem de mencoes ao ISP nao apresentada como protagonismo sem evidencia adicional;
+- em produto institucional, vinculo documental com o produto/edicao;
+- ausencia de datas ficticias, vazias ou placeholders tecnicos.
 Classifique achados em CRITICAL, HIGH, MEDIUM ou LOW.
 """,
 }
 
 
 class ReportAgent:
-    """Único agente LLM da aplicação."""
+    """Unico agente LLM da aplicacao."""
 
     def prompt_for(self, task: str, extra_instructions: str | None = None) -> str:
         if task not in TASK_PROMPTS:
@@ -379,17 +377,13 @@ class ReportAgent:
             *messages,
             HumanMessage(
                 content=(
-                    "Finalize a tarefa agora. Não chame novas ferramentas. "
+                    "Finalize a tarefa agora. Nao chame novas ferramentas. "
                     f"Retorne somente os campos do contrato '{schema_name}'. "
-                    "Use o contexto e os resultados reais de ferramentas já presentes na conversa."
+                    "Use o contexto e os resultados reais de ferramentas ja presentes na conversa."
                 )
             ),
         ]
 
-        # A criação do output estruturado depende de suporte da versão/instalação
-        # do SDK e pode falhar com TypeError/ValueError. A execução de ``invoke``
-        # NÃO é incompatibilidade de configuração: qualquer erro dela é uma falha
-        # real de runtime e deve ser reportada como tal.
         try:
             structured_llm = llm.with_structured_output(
                 response_model,
@@ -412,7 +406,7 @@ class ReportAgent:
                 error=str(exc),
                 schema_name=schema_name,
             )
-            raise RuntimeError(f"Falha na finalização estruturada do agente: {exc}") from exc
+            raise RuntimeError(f"Falha na finalizacao estruturada do agente: {exc}") from exc
 
         raw_message = raw_result.get("raw") if isinstance(raw_result, dict) else None
         counts = usage_counts(raw_message) if raw_message is not None else {}
@@ -428,7 +422,7 @@ class ReportAgent:
                 **counts,
             )
             raise RuntimeError(
-                f"A LLM não retornou saída válida para {schema_name}: {parsing_error}"
+                f"A LLM nao retornou saida valida para {schema_name}: {parsing_error}"
             )
 
         try:
@@ -441,12 +435,12 @@ class ReportAgent:
             record_llm_usage(
                 caller="report_agent_finalize",
                 success=False,
-                error=f"saída inválida: {exc}",
+                error=f"saida invalida: {exc}",
                 schema_name=schema_name,
                 **counts,
             )
             raise RuntimeError(
-                f"A LLM retornou saída inválida para {schema_name}: {exc}"
+                f"A LLM retornou saida invalida para {schema_name}: {exc}"
             ) from exc
 
         record_llm_usage(
@@ -461,4 +455,3 @@ class ReportAgent:
 @lru_cache
 def get_report_agent() -> ReportAgent:
     return ReportAgent()
-

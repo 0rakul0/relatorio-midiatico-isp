@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 
 # ---------------------------------------------------------------------------
-# Schemas de entrada da API
+# API input schemas
 # ---------------------------------------------------------------------------
 
 
@@ -62,34 +62,27 @@ class ManualMediaItemCreate(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Base estrita para todas as saídas estruturadas da LLM
+# Strict base for structured LLM outputs
 # ---------------------------------------------------------------------------
 
 
 class StrictLLMOutput(BaseModel):
-    """Base comum das respostas estruturadas geradas pela LLM.
-
-    ``extra='forbid'`` produz ``additionalProperties: false`` no JSON Schema e
-    também impede que uma resposta com campos inesperados seja aceita depois
-    da chamada. Assim o mesmo contrato vale na geração e na validação local.
-    """
-
     model_config = ConfigDict(extra="forbid")
 
 
 # ---------------------------------------------------------------------------
-# Contratos das tools opcionais do agente
+# Optional agent-tool contracts
 # ---------------------------------------------------------------------------
 
 
 class AgentWebSearchArgs(BaseModel):
-    query: str = Field(min_length=3, max_length=500, description="Consulta que deve ser pesquisada na internet")
-    max_results: int = Field(default=5, ge=1, le=10, description="Quantidade máxima de resultados")
+    query: str = Field(min_length=3, max_length=500, description="Web search query")
+    max_results: int = Field(default=5, ge=1, le=10, description="Maximum results")
 
 
 class AgentVideoSearchArgs(BaseModel):
-    query: str = Field(min_length=3, max_length=500, description="Consulta para localizar vídeos relevantes")
-    max_results: int = Field(default=5, ge=1, le=10, description="Quantidade máxima de resultados")
+    query: str = Field(min_length=3, max_length=500, description="Video search query")
+    max_results: int = Field(default=5, ge=1, le=10, description="Maximum results")
 
 
 class AgentSearchHit(StrictLLMOutput):
@@ -115,7 +108,7 @@ class AgentBulkSearchArgs(BaseModel):
     queries: list[str] = Field(
         min_length=1,
         max_length=50,
-        description="Consultas já planejadas que devem ser executadas em lote, sem alteração",
+        description="Already-approved queries to execute in bulk without rewriting them",
     )
 
 
@@ -140,7 +133,7 @@ class CollectorExecutionResponse(StrictLLMOutput):
 
 
 # ---------------------------------------------------------------------------
-# Perfil do tema
+# Topic profile
 # ---------------------------------------------------------------------------
 
 
@@ -170,7 +163,7 @@ class TopicProfileResponse(StrictLLMOutput):
 
 
 # ---------------------------------------------------------------------------
-# Descoberta documental de produto institucional
+# Institutional product discovery
 # ---------------------------------------------------------------------------
 
 
@@ -200,10 +193,22 @@ class InstitutionalProductProfileResponse(StrictLLMOutput):
 
 
 # ---------------------------------------------------------------------------
-# Planejamento de busca
+# Search planning
 # ---------------------------------------------------------------------------
 
 
+class SearchStrategyResponse(StrictLLMOutput):
+    """A compact search strategy, not a long list of paraphrased queries."""
+
+    primary_query: str = Field(min_length=3, max_length=500)
+    complementary_queries: list[str] = Field(default_factory=list, max_length=2)
+    fact_query: str | None = Field(default=None, max_length=500)
+    official_query: str | None = Field(default=None, max_length=500)
+    rationale: str = Field(min_length=3, max_length=2000)
+
+
+# Legacy schema kept for compatibility with old stored code/tests. New planning
+# uses SearchStrategyResponse.
 class SearchPlanItem(StrictLLMOutput):
     query: str
     kind: str
@@ -213,12 +218,11 @@ class SearchPlanItem(StrictLLMOutput):
 
 
 class SearchPlanResponse(StrictLLMOutput):
-    # O limite operacional final continua sendo aplicado por settings no caller.
     queries: list[SearchPlanItem] = Field(max_length=50)
 
 
 # ---------------------------------------------------------------------------
-# Extração factual
+# Fact extraction
 # ---------------------------------------------------------------------------
 
 
@@ -259,7 +263,7 @@ class FactExtractionResponse(StrictLLMOutput):
 
 
 # ---------------------------------------------------------------------------
-# Validação de mídia e classificação
+# Media validation and classification
 # ---------------------------------------------------------------------------
 
 
@@ -310,7 +314,7 @@ class MediaClassificationBatchResponse(StrictLLMOutput):
 
 
 # ---------------------------------------------------------------------------
-# Relatório final
+# Final report
 # ---------------------------------------------------------------------------
 
 
@@ -351,7 +355,7 @@ class StructuredMediaReportResponse(StrictLLMOutput):
 
 
 # ---------------------------------------------------------------------------
-# QA final
+# Final QA
 # ---------------------------------------------------------------------------
 
 

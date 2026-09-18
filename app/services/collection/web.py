@@ -10,7 +10,9 @@ from app.services.collection.orchestrator import run_agent_collection, web_queri
 from app.tools.search import search_providers_available
 
 
-def new_web_counters(global_limit: int) -> dict[str, int]:
+def new_web_counters(global_limit: int, target_media_items: int | None = None) -> dict[str, int]:
+    settings = get_settings()
+    target = int(target_media_items or settings.target_media_items)
     return {
         "queries_total": 0,
         "queries_attempted": 0,
@@ -29,8 +31,15 @@ def new_web_counters(global_limit: int) -> dict[str, int]:
         "tavily_hard_failures": 0,
         "tavily_circuit_breaker_trips": 0,
         "failed_queries": 0,
-        "global_result_limit": global_limit,
+        "global_result_limit": int(global_limit),
         "global_limit_reached": 0,
+        "target_media_items": target,
+        "media_target_reached": 0,
+        "media_added": 0,
+        "fact_added": 0,
+        "official_added": 0,
+        "nominal_added": 0,
+        "other_added": 0,
     }
 
 
@@ -42,17 +51,11 @@ def collect_web(
     progress_detail: Callable[[str], None] | None = None,
     stats: dict[str, int] | None = None,
 ) -> int:
-    """Coleta web obrigatória executada pelo agente.
-
-    O serviço não acessa provedores: ele informa a metodologia (consultas já
-    planejadas) e o agente executa cada consulta via ``pesquisar_internet``,
-    persistindo pelos sinks do orquestrador.
-    """
+    """Execute the approved web plan through ReportAgent bulk tools."""
     settings = get_settings()
     if not search_providers_available():
         raise RuntimeError(
-            "Nenhum provedor de pesquisa está disponível. Instale `ddgs` "
-            "ou configure TAVILY_API_KEY."
+            "Nenhum provedor de pesquisa esta disponivel. Instale ddgs ou configure TAVILY_API_KEY."
         )
 
     project = db.get(Project, project_id)
@@ -60,7 +63,10 @@ def collect_web(
         raise RuntimeError("Projeto nao encontrado")
 
     queries = web_queries_pending(project_id)
-    counters = new_web_counters(max(1, settings.max_search_results))
+    counters = new_web_counters(
+        max(1, settings.max_search_results),
+        target_media_items=settings.target_media_items,
+    )
     state, _video = run_agent_collection(
         project_id=project_id,
         web_queries=queries,
