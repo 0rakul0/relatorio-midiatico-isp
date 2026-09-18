@@ -141,9 +141,11 @@ button {
     border-radius: 7px;
     background: var(--blue);
     color: #fff;
-    font: 700 14px inherit;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
     padding: 11px 15px;
-    cursor: pointer
+    cursor: pointer;
 }
 
 button.secondary {
