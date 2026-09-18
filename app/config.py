@@ -32,9 +32,6 @@ class Settings(BaseSettings):
     # As consultas prioritárias por portal são preservadas antes das complementares.
     max_search_queries: int = 50
 
-    # Quantas consultas complementares a IA pode sugerir dentro do limite acima.
-    max_llm_search_queries: int = 4
-
     duckduckgo_region: str = "br-pt"
     duckduckgo_safesearch: str = "moderate"
     duckduckgo_max_retries: int = 2
@@ -48,9 +45,9 @@ class Settings(BaseSettings):
     # Orçamento de ITENS de IA por execução. A validação e a classificação
     # usam lotes; portanto estes limites controlam quantos itens podem ser
     # processados, e não quantas chamadas HTTP serão feitas.
-    max_semantic_reviews: int = 40
+    max_semantic_reviews: int = 250
     max_fact_extractions: int = 40
-    max_classifications: int = 40
+    max_classifications: int = 250
     max_cross_validations: int = 20
 
     # Tamanho dos lotes enviados à OpenAI. Ex.: 40 itens com batch_size=10

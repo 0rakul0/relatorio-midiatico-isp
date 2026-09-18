@@ -33,11 +33,6 @@ class ProjectCreate(BaseModel):
     enable_cross_validation: bool | None = None
 
 
-class LLMSettingsUpdate(BaseModel):
-    provider: Literal["openai"] = "openai"
-    model: str = Field(min_length=1, max_length=120)
-
-
 class OfficialFactCreate(BaseModel):
     label: str
     value: str

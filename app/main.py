@@ -24,7 +24,7 @@ from app.models import (
 )
 from app.report_qa import run_report_qa
 from app.schema_upgrade import ensure_schema
-from app.schemas import LLMSettingsUpdate, ManualMediaItemCreate, OfficialFactCreate, ProjectCreate
+from app.schemas import ManualMediaItemCreate, OfficialFactCreate, ProjectCreate
 from app.services import (
     cached_report_for_project,
     cached_report_for_topic,
@@ -69,7 +69,6 @@ def health():
             "max_search_results": settings.max_search_results,
             "max_results_per_query": settings.max_results_per_query,
             "max_search_queries": settings.max_search_queries,
-            "max_llm_search_queries": settings.max_llm_search_queries,
             "duckduckgo_region": settings.duckduckgo_region,
             "duckduckgo_safesearch": settings.duckduckgo_safesearch,
             "duckduckgo_fetch_pages": settings.duckduckgo_fetch_pages,
@@ -95,23 +94,6 @@ def health():
             "classification_item_max_chars": settings.classification_item_max_chars,
         },
     }
-
-
-@app.get("/settings/llm")
-def get_llm_settings():
-    settings = get_settings()
-    return {
-        "provider": "openai",
-        "model": settings.openai_model,
-        "configured": bool(settings.openai_api_key),
-    }
-
-
-@app.post("/settings/llm")
-def update_llm_settings(payload: LLMSettingsUpdate):
-    settings = get_settings()
-    settings.openai_model = payload.model
-    return {"provider": "openai", "model": settings.openai_model}
 
 
 def _costs_rows(rows) -> list[dict]:
