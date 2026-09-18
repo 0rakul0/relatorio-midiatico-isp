@@ -122,6 +122,11 @@ def set_cost_operation(operation: str | None) -> None:
     _context_operation.set(operation)
 
 
+def current_run_id() -> str | None:
+    """Run corrente propagado pelo ``cost_context`` (usado na auditoria)."""
+    return _context_run_id.get()
+
+
 class cost_context:
     """Propaga o contexto de custo para chamadas feitas dentro do bloco."""
 

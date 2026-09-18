@@ -3,6 +3,9 @@
 Adicionar uma nova capacidade externa deve exigir alteração principalmente neste
 pacote, não no motor do agente. O caller escolhe quais capacidades disponibilizar
 em cada tarefa; a LLM decide se chama alguma das tools efetivamente oferecidas.
+
+``bulk=True`` substitui as tools individuais pelas versões em lote, usadas pela
+coleta obrigatória para executar todo o plano em poucas chamadas do agente.
 """
 
 from __future__ import annotations
@@ -10,9 +13,11 @@ from __future__ import annotations
 from langchain_core.tools import BaseTool
 
 from app.tools.search import (
-    SearchAttempt,
     SearchContextResolver,
+    SearchObserver,
     SearchSink,
+    make_bulk_video_search_tool,
+    make_bulk_web_search_tool,
     make_video_search_tool,
     make_web_search_tool,
 )
@@ -26,28 +31,31 @@ def build_agent_tools(
     video_sink: SearchSink | None = None,
     web_context: SearchContextResolver | None = None,
     video_context: SearchContextResolver | None = None,
-    web_on_attempt: SearchAttempt | None = None,
-    video_on_attempt: SearchAttempt | None = None,
+    web_observer: SearchObserver | None = None,
+    video_observer: SearchObserver | None = None,
     web_providers: tuple[str, ...] = ("duckduckgo", "tavily"),
     video_providers: tuple[str, ...] = ("duckduckgo", "tavily"),
+    bulk: bool = False,
 ) -> list[BaseTool]:
     tools: list[BaseTool] = []
     if enable_web:
+        web_factory = make_bulk_web_search_tool if bulk else make_web_search_tool
         tools.append(
-            make_web_search_tool(
+            web_factory(
                 sink=web_sink,
                 context=web_context,
                 providers=web_providers,
-                on_attempt=web_on_attempt,
+                observer=web_observer,
             )
         )
     if enable_video:
+        video_factory = make_bulk_video_search_tool if bulk else make_video_search_tool
         tools.append(
-            make_video_search_tool(
+            video_factory(
                 sink=video_sink,
                 context=video_context,
                 providers=video_providers,
-                on_attempt=video_on_attempt,
+                observer=video_observer,
             )
         )
     return tools

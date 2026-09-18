@@ -75,6 +75,46 @@ class SearchQuery(Base):
     priority: Mapped[int] = mapped_column(Integer, default=2)
     executed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # Estado auditável da tentativa. ``executed_at`` sozinho não distingue
+    # "executada com resultado" de "executada sem resultado" nem de falha.
+    execution_status: Mapped[str] = mapped_column(String(30), default="PENDING")
+    execution_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    providers_attempted: Mapped[list] = mapped_column(JSON, default=list)
+    results_returned: Mapped[int] = mapped_column(Integer, default=0)
+    results_accepted: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class SearchCall(Base):
+    """Auditoria de cada tentativa de busca externa (item por provedor).
+
+    Permite responder, para cada consulta planejada, se ela foi realmente
+    executada, em qual provedor, quando, com qual latência, quantos resultados
+    retornou/aceitou e se falhou. Complementa ``LLMCall`` para as chamadas de IA.
+    """
+
+    __tablename__ = "search_calls"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    run_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    search_query_id: Mapped[int | None] = mapped_column(
+        ForeignKey("search_queries.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    tool_name: Mapped[str] = mapped_column(String(60))
+    provider: Mapped[str] = mapped_column(String(40))
+    query: Mapped[str] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    success: Mapped[bool] = mapped_column(Boolean, default=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    results_returned: Mapped[int] = mapped_column(Integer, default=0)
+    results_accepted: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
 
 class MediaItem(Base):
     __tablename__ = "media_items"

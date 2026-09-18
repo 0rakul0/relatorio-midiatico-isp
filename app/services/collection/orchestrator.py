@@ -12,6 +12,7 @@ O acesso a provedores vive exclusivamente em ``app.tools.search``.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
@@ -21,8 +22,9 @@ from sqlalchemy.orm import Session
 
 from app.agent import get_report_agent
 from app.config import get_settings
+from app.cost_tracker import current_run_id
 from app.database import SessionLocal
-from app.models import MediaItem, Project, SearchQuery
+from app.models import MediaItem, Project, SearchCall, SearchQuery
 from app.schemas import CollectorExecutionResponse
 from app.services.collection.common import (
     _valid_search_window,
@@ -31,7 +33,7 @@ from app.services.collection.common import (
 )
 from app.services.collection.persist import persist_video_rows, persist_web_rows
 from app.services.collection.youtube_helpers import youtube_tasks_for_execution
-from app.tools import build_agent_tools
+from app.tools import SearchObserver, build_agent_tools
 from app.tools.search import (
     reset_tavily_circuit_breaker,
     search_providers_available,
@@ -149,47 +151,125 @@ def _make_video_context(project: Project):
     return context
 
 
-def _make_web_attempt(
-    state: CollectionState,
-    session: Session,
-    plan: dict[str, SearchQuery],
-):
-    """Registra que a tool iniciou de fato a consulta planejada.
+class SearchAuditObserver(SearchObserver):
+    """Grava ``SearchCall`` e atualiza o estado da ``SearchQuery`` por tentativa.
 
-    Marca ``SearchQuery.executed_at`` no primeiro início, mesmo quando a busca
-    não retorna resultado algum. Isso separa "tentada" de "com resultado
-    utilizável" e impede que uma consulta sem resultados seja reexecutada ou
-    contada como não executada.
+    Diferencia, para cada consulta planejada: nunca executada, executada sem
+    resultado, executada com resultado aceito e executada com falha. O conteúdo
+    completo permanece no sink; aqui registramos apenas a trilha de auditoria.
     """
-    counters = state.counters
-    progress = state.progress_detail
 
-    def attempt(query: str) -> None:
-        state.invoked = True
-        state.attempted.add(query)
-        counters["queries_attempted"] = counters.get("queries_attempted", 0) + 1
-        entry = plan.get(query)
-        if entry is not None and entry.executed_at is None:
+    def __init__(
+        self,
+        *,
+        session: Session,
+        project_id: int,
+        plan: dict[str, Any],
+        state: CollectionState,
+        count_key: str,
+    ) -> None:
+        self.session = session
+        self.project_id = project_id
+        self.run_id = current_run_id()
+        self.plan = plan
+        self.state = state
+        self.count_key = count_key
+        self._open: dict[tuple[str, str, str], SearchCall] = {}
+        self._started: dict[tuple[str, str, str], float] = {}
+        self._attempts: dict[str, list[str]] = {}
+        self._returned: dict[str, int] = {}
+        self._accepted: dict[str, int] = {}
+        self._errors: dict[str, list[str]] = {}
+
+    def _key(self, query: str, provider: str, tool_name: str) -> tuple[str, str, str]:
+        return (query, provider, tool_name)
+
+    def query_started(self, *, query: str, tool_name: str) -> None:
+        self.state.invoked = True
+        self.state.attempted.add(query)
+        self.state.counters[self.count_key] = self.state.counters.get(self.count_key, 0) + 1
+        entry = self.plan.get(query)
+        if isinstance(entry, SearchQuery) and entry.executed_at is None:
             entry.executed_at = datetime.now(timezone.utc)
+            entry.execution_status = "ATTEMPTED"
             try:
-                session.flush()
+                self.session.flush()
             except Exception as exc:
-                state.errors.append(f"{query}: falha ao registrar execução ({exc})")
-        if progress:
-            progress(f"Executando consulta: {query[:90]}")
+                self.state.errors.append(f"{query}: falha ao registrar execução ({exc})")
+        if self.state.progress_detail:
+            self.state.progress_detail(f"Executando consulta: {query[:90]}")
 
-    return attempt
+    def provider_attempted(self, *, query: str, provider: str, tool_name: str) -> None:
+        key = self._key(query, provider, tool_name)
+        entry = self.plan.get(query)
+        call = SearchCall(
+            project_id=self.project_id,
+            run_id=self.run_id,
+            search_query_id=getattr(entry, "id", None),
+            tool_name=tool_name,
+            provider=provider,
+            query=query,
+            started_at=datetime.now(timezone.utc),
+        )
+        self.session.add(call)
+        self._open[key] = call
+        self._started[key] = time.monotonic()
+        self._attempts.setdefault(query, [])
+        if provider not in self._attempts[query]:
+            self._attempts[query].append(provider)
 
+    def provider_result(
+        self, *, query: str, provider: str, tool_name: str, returned: int, accepted: int
+    ) -> None:
+        key = self._key(query, provider, tool_name)
+        call = self._open.pop(key, None)
+        if call is not None:
+            call.finished_at = datetime.now(timezone.utc)
+            call.success = True
+            call.results_returned = int(returned)
+            call.results_accepted = int(accepted)
+            call.latency_ms = self._latency(key)
+        self._returned[query] = self._returned.get(query, 0) + int(returned)
+        self._accepted[query] = self._accepted.get(query, 0) + int(accepted)
 
-def _make_video_attempt(state: CollectionState):
-    counters = state.counters
+    def provider_error(
+        self, *, query: str, provider: str, tool_name: str, error: str
+    ) -> None:
+        key = self._key(query, provider, tool_name)
+        call = self._open.pop(key, None)
+        if call is not None:
+            call.finished_at = datetime.now(timezone.utc)
+            call.success = False
+            call.error = (error or "")[:2000] or None
+            call.latency_ms = self._latency(key)
+        self._errors.setdefault(query, []).append(f"{provider}: {error}"[:2000])
 
-    def attempt(query: str) -> None:
-        state.invoked = True
-        state.attempted.add(query)
-        counters["tasks_attempted"] = counters.get("tasks_attempted", 0) + 1
+    def query_finished(self, *, query: str, tool_name: str) -> None:
+        entry = self.plan.get(query)
+        if not isinstance(entry, SearchQuery):
+            return
+        returned = self._returned.get(query, 0)
+        accepted = self._accepted.get(query, 0)
+        providers = self._attempts.get(query, [])
+        entry.results_returned = max(int(entry.results_returned or 0), returned)
+        entry.results_accepted = max(int(entry.results_accepted or 0), accepted)
+        entry.providers_attempted = providers
+        errors = self._errors.get(query, [])
+        if accepted > 0:
+            entry.execution_status = "SUCCEEDED"
+        elif errors and returned == 0:
+            entry.execution_status = "FAILED"
+            entry.execution_error = "; ".join(errors)[:2000]
+        elif providers:
+            entry.execution_status = "NO_RESULTS"
+        else:
+            entry.execution_status = "SKIPPED"
 
-    return attempt
+    def _latency(self, key: tuple[str, str, str]) -> int:
+        started = self._started.pop(key, None)
+        if started is None:
+            return 0
+        return max(0, int((time.monotonic() - started) * 1000))
 
 
 def _make_web_sink(
@@ -393,8 +473,7 @@ def run_agent_collection(
         web_plan: dict[str, SearchQuery] = {}
         web_context = None
         web_sink = None
-        web_attempt = None
-        tools = []
+        web_observer = None
         if web_queries:
             pending = session.scalars(
                 select(SearchQuery).where(
@@ -407,20 +486,32 @@ def run_agent_collection(
                 web_state.counters.get("queries_total", 0), len(web_queries)
             )
             web_context = _make_web_context(project, web_plan)
-            web_attempt = _make_web_attempt(web_state, session, web_plan)
+            web_observer = SearchAuditObserver(
+                session=session,
+                project_id=project_id,
+                plan=web_plan,
+                state=web_state,
+                count_key="queries_attempted",
+            )
             web_sink = _make_web_sink(web_state, session, project, web_plan, existing_items)
 
         video_plan: dict[str, Any] = {}
         video_context = None
         video_sink = None
-        video_attempt = None
+        video_observer = None
         if video_state is not None and video_state.expect_queries:
             video_plan = {task.query: task for task in youtube_tasks_for_execution(project)}
             video_state.counters["tasks_total"] = max(
                 video_state.counters.get("tasks_total", 0), len(video_queries or [])
             )
             video_context = _make_video_context(project)
-            video_attempt = _make_video_attempt(video_state)
+            video_observer = SearchAuditObserver(
+                session=session,
+                project_id=project_id,
+                plan=video_plan,
+                state=video_state,
+                count_key="tasks_attempted",
+            )
             video_sink = _make_video_sink(
                 video_state, session, project, video_plan, existing_items
             )
@@ -432,8 +523,9 @@ def run_agent_collection(
             video_sink=video_sink,
             web_context=web_context,
             video_context=video_context,
-            web_on_attempt=web_attempt,
-            video_on_attempt=video_attempt,
+            web_observer=web_observer,
+            video_observer=video_observer,
+            bulk=True,
         )
 
         payload: dict[str, Any] = {
@@ -444,12 +536,11 @@ def run_agent_collection(
         if video_state is not None and video_state.expect_queries:
             payload["youtube_queries"] = video_queries
 
-        total_queries = len(web_queries) + len(video_queries or [])
         try:
             run_collector_agent(
                 payload=payload,
                 tools=tools,
-                max_tool_rounds=max(6, min(60, total_queries + 3)),
+                max_tool_rounds=max(3, get_settings().max_agent_tool_rounds),
             )
         except Exception as exc:
             if web_state.cancelled or (video_state is not None and video_state.cancelled):

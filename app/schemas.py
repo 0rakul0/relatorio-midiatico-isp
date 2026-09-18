@@ -124,6 +124,8 @@ class AgentBulkQueryResult(StrictLLMOutput):
     provider: str
     status: Literal["OK", "NO_RESULTS", "ERROR", "SKIPPED"]
     error: str | None = None
+    returned: int = Field(default=0, ge=0)
+    accepted: int = Field(default=0, ge=0)
     hits: list[AgentSearchHit] = Field(default_factory=list, max_length=10)
 
 

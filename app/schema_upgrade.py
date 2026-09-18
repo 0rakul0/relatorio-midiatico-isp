@@ -24,6 +24,7 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "execution_profile": "VARCHAR(40) DEFAULT 'AUTO'",
         "execution_options": "JSON",
         "fact_grace_days": "INTEGER DEFAULT 10",
+        "has_custom_date_window": "BOOLEAN DEFAULT FALSE",
         "youtube_collection_status": "VARCHAR(40) DEFAULT 'NOT_ATTEMPTED'",
         "youtube_collection_error": "TEXT",
     },
@@ -36,6 +37,11 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     },
     "search_queries": {
         "purpose": "VARCHAR(50) DEFAULT 'MEDIA_REPERCUSSION'",
+        "execution_status": "VARCHAR(30) DEFAULT 'PENDING'",
+        "execution_error": "TEXT",
+        "providers_attempted": "JSON",
+        "results_returned": "INTEGER DEFAULT 0",
+        "results_accepted": "INTEGER DEFAULT 0",
     },
     "media_items": {
         "source_name": "VARCHAR(300)",
@@ -73,6 +79,8 @@ def _ddl_for_dialect(dialect_name: str, column_name: str, ddl: str) -> str:
     """
     if dialect_name == "sqlite" and column_name == "retrieved_at":
         return "TIMESTAMP"
+    if dialect_name == "sqlite" and column_name == "has_custom_date_window":
+        return "BOOLEAN DEFAULT 0"
     return ddl
 
 
@@ -170,6 +178,15 @@ def ensure_schema() -> None:
                     "UPDATE search_queries "
                     "SET purpose = 'MEDIA_REPERCUSSION' "
                     "WHERE purpose IS NULL"
+                )
+            )
+            connection.execute(
+                text(
+                    "UPDATE search_queries "
+                    "SET execution_status = CASE "
+                    "WHEN executed_at IS NULL THEN 'PENDING' "
+                    "ELSE 'SUCCEEDED' END "
+                    "WHERE execution_status IS NULL OR execution_status = 'PENDING'"
                 )
             )
 

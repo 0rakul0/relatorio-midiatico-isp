@@ -57,20 +57,21 @@ class _FakeAgent:
     """Agente de teste: executa cada consulta do plano via tool, como o real."""
 
     def __init__(self):
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
 
     def run(self, *, task, payload, response_model, tools, max_tool_rounds, max_output_tokens):
         assert task == "collector"
         for tool in tools:
-            if tool.name == "pesquisar_internet":
+            if tool.name == "executar_buscas_web":
                 queries = payload.get("web_queries", [])
-            elif tool.name == "pesquisar_videos":
+            elif tool.name == "executar_buscas_videos":
                 queries = payload.get("youtube_queries", [])
             else:
                 continue
-            for query in queries:
-                self.calls.append((tool.name, query))
-                tool.invoke({"query": query})
+            if not queries:
+                continue
+            self.calls.append((tool.name, tuple(queries)))
+            tool.invoke({"queries": list(queries)})
         return response_model(status="COMPLETED", detail="ok")
 
 
@@ -123,7 +124,7 @@ def test_collect_web_is_executed_by_agent(monkeypatch):
     added = services.collect_web(session, project.id)
 
     assert added == 1
-    assert fake_agent.calls == [("pesquisar_internet", "consulta web")]
+    assert fake_agent.calls == [("executar_buscas_web", ("consulta web",))]
     stored = session.scalars(select(MediaItem)).all()
     assert [item.url for item in stored] == ["https://midia.example.com/materia"]
 
@@ -145,11 +146,11 @@ def test_collect_media_sources_runs_web_and_video_tools(monkeypatch):
     result = collection_youtube.collect_media_sources(session, project)
 
     tool_names = {name for name, _query in fake_agent.calls}
-    assert tool_names == {"pesquisar_internet", "pesquisar_videos"}
-    web_calls = [query for name, query in fake_agent.calls if name == "pesquisar_internet"]
-    video_calls = [query for name, query in fake_agent.calls if name == "pesquisar_videos"]
-    assert web_calls == ["consulta web"]
-    assert video_calls == video_queries
+    assert tool_names == {"executar_buscas_web", "executar_buscas_videos"}
+    web_calls = [query for name, query in fake_agent.calls if name == "executar_buscas_web"]
+    video_calls = [query for name, query in fake_agent.calls if name == "executar_buscas_videos"]
+    assert web_calls == [("consulta web",)]
+    assert video_calls == [tuple(video_queries)]
 
     assert result["web"]["status"] == "COMPLETED"
     assert result["youtube"]["collected"] == 1
