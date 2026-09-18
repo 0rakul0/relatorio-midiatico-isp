@@ -36,15 +36,19 @@ class Settings(BaseSettings):
     max_official_queries: int = Field(default=3, ge=0, le=10)
     max_nominal_queries: int = Field(default=12, ge=0, le=50)
 
-    # Soft target and hard ceiling for unique media URLs collected before
-    # semantic validation. The target is not a quota: quality guards still win.
+    # Post-validation corpus target. It is NEVER used to stop collection.
+    # Search providers execute every approved query and every returned hit is
+    # preserved before later validation decides what belongs to the corpus.
     target_media_items: int = Field(default=27, ge=1, le=200)
-    max_search_results: int = Field(default=40, ge=1, le=500)
 
-    # A broad thematic query may bring several useful articles. Priority portal
-    # checks are intentionally smaller to improve source diversity.
+    # Compatibility/safety statistic. Raw collection is bounded primarily by
+    # query count x per-query limits and no longer discards hits at this value.
+    max_search_results: int = Field(default=250, ge=1, le=2000)
+
+    # Provider result windows. Priority portal queries preserve the same amount
+    # of returned evidence instead of truncating to one or two early hits.
     max_results_per_query: int = Field(default=8, ge=1, le=10)
-    max_priority_results_per_query: int = Field(default=2, ge=1, le=10)
+    max_priority_results_per_query: int = Field(default=8, ge=1, le=10)
 
     # Separate result budgets prevent factual/official research from consuming
     # the media corpus budget.
@@ -78,9 +82,11 @@ class Settings(BaseSettings):
     validation_item_max_chars: int = Field(default=4000, ge=500, le=50000)
     classification_item_max_chars: int = Field(default=6000, ge=500, le=50000)
 
-    # Video collection has an independent budget.
+    # Video search is bounded per task. max_youtube_results_total is retained
+    # for configuration compatibility, but it no longer causes raw hits to be
+    # discarded after they have been returned by a provider.
     max_youtube_tasks: int = Field(default=12, ge=1, le=50)
-    max_youtube_results_total: int = Field(default=20, ge=1, le=200)
+    max_youtube_results_total: int = Field(default=120, ge=1, le=1000)
     max_youtube_results_per_task: int = Field(default=5, ge=1, le=10)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

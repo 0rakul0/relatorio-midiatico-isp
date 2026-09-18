@@ -75,8 +75,7 @@ class SearchQuery(Base):
     priority: Mapped[int] = mapped_column(Integer, default=2)
     executed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-    # Estado auditável da tentativa. ``executed_at`` sozinho não distingue
-    # "executada com resultado" de "executada sem resultado" nem de falha.
+    # Estado auditavel da tentativa de pesquisa.
     execution_status: Mapped[str] = mapped_column(String(30), default="PENDING")
     execution_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     providers_attempted: Mapped[list] = mapped_column(JSON, default=list)
@@ -85,12 +84,7 @@ class SearchQuery(Base):
 
 
 class SearchCall(Base):
-    """Auditoria de cada tentativa de busca externa (item por provedor).
-
-    Permite responder, para cada consulta planejada, se ela foi realmente
-    executada, em qual provedor, quando, com qual latência, quantos resultados
-    retornou/aceitou e se falhou. Complementa ``LLMCall`` para as chamadas de IA.
-    """
+    """Auditoria de cada tentativa externa por consulta e provedor."""
 
     __tablename__ = "search_calls"
 
@@ -102,7 +96,6 @@ class SearchCall(Base):
     search_query_id: Mapped[int | None] = mapped_column(
         ForeignKey("search_queries.id", ondelete="SET NULL"), nullable=True, index=True
     )
-
     tool_name: Mapped[str] = mapped_column(String(60))
     provider: Mapped[str] = mapped_column(String(40))
     query: Mapped[str] = mapped_column(Text)
@@ -114,6 +107,53 @@ class SearchCall(Base):
     results_accepted: Mapped[int] = mapped_column(Integer, default=0)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class SearchHit(Base):
+    """Resultado bruto preservado exatamente no ponto de coleta.
+
+    Um hit nunca e apagado apenas por ser irrelevante, estar fora da janela,
+    divergir do dominio/canal alvo ou repetir uma URL ja encontrada. Essas
+    situacoes sao registradas em ``technical_flags`` e resolvidas nas camadas
+    posteriores. ``MediaItem`` continua sendo a entidade consolidada por URL.
+    """
+
+    __tablename__ = "search_hits"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    run_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    search_query_id: Mapped[int | None] = mapped_column(
+        ForeignKey("search_queries.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    media_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("media_items.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    purpose: Mapped[str] = mapped_column(String(50), default="MEDIA_REPERCUSSION")
+    query: Mapped[str | None] = mapped_column(Text, nullable=True)
+    target: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    canonical_url: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    domain: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    published_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    published_at_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    view_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    technical_status: Mapped[str] = mapped_column(String(40), default="COLLECTED")
+    technical_flags: Mapped[list] = mapped_column(JSON, default=list)
+    raw_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    retrieved_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), server_default=func.now()
+    )
 
 
 class MediaItem(Base):
@@ -250,17 +290,11 @@ class GeneratedReport(Base):
 
 
 class ReportRun(Base):
-    """Estado persistido de uma execução assíncrona de relatório.
-
-    Mantém progresso, estágios e pedido de cancelamento para sobreviver a
-    reinícios do processo e permitir coordenação entre workers. Os estágios são
-    serializados em JSON na ordem de ``RUN_STAGES``.
-    """
+    """Estado persistido de uma execucao assincrona de relatorio."""
 
     __tablename__ = "report_runs"
 
     run_id: Mapped[str] = mapped_column(String(40), primary_key=True)
-    # Sem FK para não perder o histórico de runs se o projeto for removido.
     project_id: Mapped[int] = mapped_column(Integer, index=True)
     status: Mapped[str] = mapped_column(String(40), default="PENDING")
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -278,9 +312,9 @@ class ReportRun(Base):
 class LLMCall(Base):
     """Registro de custo/consumo de uma chamada única à OpenAI.
 
-    Cada invocação observada pelo ReportAgent é registrada por linha. Retries
-    internos do SDK podem não aparecer como linhas separadas; o monitor usa
-    o consumo reportado pela resposta disponível.
+    Cada tentativa HTTP é registrada por linha (inclusive tentativas que
+    falharam antes de devolver conteúdo, com tokens zerados), para o monitor
+    refletir o custo real de retries e fallbacks.
     """
 
     __tablename__ = "llm_calls"
@@ -296,7 +330,7 @@ class LLMCall(Base):
     operation: Mapped[str | None] = mapped_column(String(80), nullable=True)
     schema_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
-    # Função de origem (ReportAgent), nome exato do modelo chamado e
+    # Função de origem (structured_response), nome exato do modelo chamado e
     # se a chamada produziu conteúdo.
     caller: Mapped[str | None] = mapped_column(String(80), nullable=True)
     model: Mapped[str] = mapped_column(String(120))

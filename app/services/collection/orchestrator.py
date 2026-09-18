@@ -71,15 +71,6 @@ def _query_budget_for_purpose(settings, purpose: str) -> int:
     }.get(purpose, settings.max_search_queries)
 
 
-def _result_budget_for_purpose(settings, purpose: str) -> int:
-    return {
-        "MEDIA_REPERCUSSION": settings.max_search_results,
-        "FACT_DISCOVERY": settings.max_fact_search_results,
-        "OFFICIAL_FACT": settings.max_official_search_results,
-        "NOMINAL_FOLLOWUP": settings.max_nominal_search_results,
-    }.get(purpose, settings.max_search_results)
-
-
 def web_queries_pending(project_id: int) -> list[str]:
     """Return pending queries with independent per-purpose query budgets."""
     settings = get_settings()
@@ -144,6 +135,11 @@ def _make_web_context(
     plan: dict[str, SearchQuery],
     state: CollectionState,
 ):
+    """Resolve provider options without stopping approved queries by corpus target.
+
+    The only pre-provider skip is an unapproved query. Targets and later
+    eligibility never suppress an approved external search.
+    """
     settings = get_settings()
 
     def context(query: str) -> dict[str, Any]:
@@ -155,58 +151,32 @@ def _make_web_context(
                 "max_results": 1,
             }
 
-        purpose = str(entry.purpose or "MEDIA_REPERCUSSION")
-        used = state.added_by_purpose.get(purpose, 0)
-        hard_limit = max(1, int(state.counters.get("global_result_limit", settings.max_search_results))) if purpose == "MEDIA_REPERCUSSION" else max(1, _result_budget_for_purpose(settings, purpose))
-        if used >= hard_limit:
-            return {
-                "skip": True,
-                "skip_reason": f"result budget reached for {purpose}",
-                "purpose": purpose,
-                "max_results": 1,
-            }
-
-        # TARGET_MEDIA_ITEMS is a soft target. We still execute deterministic
-        # priority-portal checks for diversity, but complementary thematic
-        # searches become unnecessary once the target has been reached.
-        if (
-            purpose == "MEDIA_REPERCUSSION"
-            and entry.kind == "media_complementary"
-            and state.added_by_purpose.get("MEDIA_REPERCUSSION", 0)
-            >= settings.target_media_items
-        ):
-            return {
-                "skip": True,
-                "skip_reason": "media target reached; complementary query not needed",
-                "purpose": purpose,
-                "max_results": 1,
-            }
-
         per_query = (
             settings.max_priority_results_per_query
             if entry.kind == "media_portal"
             else settings.max_results_per_query
         )
-        start, end = query_window(project, entry)
+        # Do not pre-filter at the provider by date. The query text keeps the
+        # requested temporal context, while every returned hit is preserved and
+        # the real window decision happens later in validation/fact extraction.
         return {
             "max_results": max(1, int(per_query)),
-            "window_start": start.isoformat() if start else None,
-            "window_end": end.isoformat() if end else None,
-            "purpose": purpose,
+            "window_start": None,
+            "window_end": None,
+            "purpose": str(entry.purpose or "MEDIA_REPERCUSSION"),
         }
 
     return context
 
-
 def _make_video_context(project: Project):
     settings = get_settings()
-    start, end = media_window(project)
 
     def context(query: str) -> dict[str, Any]:
+        # Same raw-first rule as web: preserve provider hits, validate dates later.
         return {
             "max_results": max(1, settings.max_youtube_results_per_task),
-            "window_start": start.isoformat() if start else None,
-            "window_end": end.isoformat() if end else None,
+            "window_start": None,
+            "window_end": None,
         }
 
     return context
@@ -322,6 +292,10 @@ class SearchAuditObserver(SearchObserver):
         errors = self._errors.get(query, [])
         if accepted > 0:
             entry.execution_status = "SUCCEEDED"
+        elif returned > 0:
+            # A pesquisa retornou hits, mas todos ficaram sinalizados tecnicamente.
+            # Os hits continuam preservados em search_hits para analise posterior.
+            entry.execution_status = "SUCCEEDED_FLAGGED"
         elif errors and returned == 0:
             entry.execution_status = "FAILED"
             entry.execution_error = "; ".join(errors)[:2000]
@@ -369,28 +343,17 @@ def _make_web_sink(
             return []
 
         purpose = str(entry.purpose or "MEDIA_REPERCUSSION")
-        hard_limit = (
-            max(1, int(counters.get("global_result_limit", settings.max_search_results)))
-            if purpose == "MEDIA_REPERCUSSION"
-            else max(1, int(_result_budget_for_purpose(settings, purpose)))
-        )
-        used = state.added_by_purpose.get(purpose, 0)
-        if used >= hard_limit:
-            if purpose == "MEDIA_REPERCUSSION":
-                counters["global_limit_reached"] = 1
-            return []
+        start, end = query_window(project, entry)
+        has_window = _valid_search_window(start, end)
 
+        # Every row returned by the provider is persisted. max_accepted only
+        # controls which rows resolve the provider fallback, never storage.
         per_query_cap = (
             settings.max_priority_results_per_query
             if entry.kind == "media_portal"
             else settings.max_results_per_query
         )
-        remaining = hard_limit - used
-        query_limit = min(max(1, int(per_query_cap)), max(1, remaining))
-        start, end = query_window(project, entry)
-        has_window = _valid_search_window(start, end)
-
-        local, accepted_rows = persist_web_rows(
+        local, usable_rows = persist_web_rows(
             session,
             project,
             entry,
@@ -399,27 +362,31 @@ def _make_web_sink(
             has_window=has_window,
             start=start,
             end=end,
-            max_accepted=query_limit,
+            max_accepted=max(1, int(per_query_cap)),
             progress_detail=progress,
         )
+
+        counters["raw_hits"] = counters.get("raw_hits", 0) + int(local.get("persisted", 0))
+        counters["flagged_hits"] = counters.get("flagged_hits", 0) + int(local.get("flagged", 0))
+        counters["invalid_hits"] = counters.get("invalid_hits", 0) + int(local.get("invalid", 0))
 
         if provider == "duckduckgo":
             counters["duckduckgo_queries"] = counters.get("duckduckgo_queries", 0) + 1
             counters["duckduckgo_results"] = counters.get("duckduckgo_results", 0) + len(rows)
             counters["duckduckgo_added"] = counters.get("duckduckgo_added", 0) + int(local.get("added", 0))
-            counters["duckduckgo_rejected"] = counters.get("duckduckgo_rejected", 0) + int(local.get("rejected", 0))
+            counters["duckduckgo_rejected"] = counters.get("duckduckgo_rejected", 0)
         elif provider == "tavily":
             counters["tavily_queries"] = counters.get("tavily_queries", 0) + 1
             counters["tavily_results"] = counters.get("tavily_results", 0) + len(rows)
             counters["tavily_added"] = counters.get("tavily_added", 0) + int(local.get("added", 0))
-            counters["tavily_rejected"] = counters.get("tavily_rejected", 0) + int(local.get("rejected", 0))
+            counters["tavily_rejected"] = counters.get("tavily_rejected", 0)
 
         added = int(local.get("added", 0))
         state.added += added
         state.added_by_purpose[purpose] = state.added_by_purpose.get(purpose, 0) + added
-        counter_key = _purpose_counter_key(purpose)
-        counters[counter_key] = state.added_by_purpose[purpose]
+        counters[_purpose_counter_key(purpose)] = state.added_by_purpose[purpose]
 
+        # Target is informational only. It NEVER stops collection.
         if (
             purpose == "MEDIA_REPERCUSSION"
             and state.added_by_purpose[purpose] >= settings.target_media_items
@@ -430,10 +397,9 @@ def _make_web_sink(
             counters["queries_successful"] = counters.get("queries_successful", 0) + 1
         else:
             counters["failed_queries"] = counters.get("failed_queries", 0) + 1
-        return accepted_rows
+        return usable_rows
 
     return sink
-
 
 def _make_video_sink(
     state: CollectionState,
@@ -444,7 +410,6 @@ def _make_video_sink(
 ):
     counters = state.counters
     settings = get_settings()
-    total_limit = max(1, settings.max_youtube_results_total)
     per_task_cap = max(1, settings.max_youtube_results_per_task)
     start, end = media_window(project)
     has_window = _valid_search_window(start, end)
@@ -460,13 +425,7 @@ def _make_video_sink(
         if task is None:
             state.errors.append(f"{query}: task outside approved plan")
             return []
-        if state.added >= total_limit:
-            return []
 
-        task_limit = min(
-            1 if task.is_priority else per_task_cap,
-            max(1, total_limit - state.added),
-        )
         if provider == "duckduckgo":
             counters["duckduckgo_attempts"] = counters.get("duckduckgo_attempts", 0) + 1
         elif provider == "tavily":
@@ -474,7 +433,7 @@ def _make_video_sink(
         else:
             return []
 
-        local, accepted_rows = persist_video_rows(
+        local, usable_rows = persist_video_rows(
             session,
             project,
             task,
@@ -483,21 +442,22 @@ def _make_video_sink(
             has_window=has_window,
             start=start,
             end=end,
-            max_accepted=task_limit,
-            enforce_priority_channel=(provider == "duckduckgo"),
+            max_accepted=per_task_cap,
+            enforce_priority_channel=True,
             progress_detail=progress,
         )
+        counters["raw_hits"] = counters.get("raw_hits", 0) + int(local.get("persisted", 0))
+        counters["flagged_hits"] = counters.get("flagged_hits", 0) + int(local.get("flagged", 0))
         if provider == "duckduckgo":
             counters["duckduckgo_added"] = counters.get("duckduckgo_added", 0) + int(local.get("added", 0))
         else:
             counters["tavily_added"] = counters.get("tavily_added", 0) + int(local.get("added", 0))
         state.added += int(local.get("added", 0))
-        if int(local.get("added", 0)) > 0 or int(local.get("duplicates", 0)) > 0:
+        if usable_rows or int(local.get("duplicates", 0)) > 0:
             state.resolved.add(query)
-        return accepted_rows
+        return usable_rows
 
     return sink
-
 
 def _mark_web_missed(state: CollectionState, planned: list[str]) -> None:
     missed = [query for query in planned if query not in state.attempted]

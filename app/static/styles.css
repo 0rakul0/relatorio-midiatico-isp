@@ -145,7 +145,7 @@ button {
     font-size: 14px;
     font-weight: 700;
     padding: 11px 15px;
-    cursor: pointer;
+    cursor: pointer
 }
 
 button.secondary {
@@ -890,6 +890,8 @@ td a {
     }
 }
 
+
+/* Etapa 3: subetapas de coleta exibidas verticalmente */
 .parallel-stage-list {
     display: grid;
     gap: 8px;
@@ -921,73 +923,37 @@ td a {
     margin-top: 1px;
 }
 
-.parallel-stage-content {
-    min-width: 0;
-}
-
+.parallel-stage-content { min-width: 0; }
 .parallel-stage-title {
     font-size: 12px;
     font-weight: 800;
     color: var(--ink);
     line-height: 1.3;
 }
-
 .parallel-stage-meta {
     margin-top: 2px;
     font-size: 11px;
     color: var(--muted);
     line-height: 1.35;
 }
-
 .parallel-stage small {
     display: block;
     margin-top: 4px;
     color: var(--muted);
     font-size: 10px;
 }
-
-.parallel-stage.done {
-    background: #f3faf6;
-    border-color: #cfe7d7;
-}
-
-.parallel-stage.done .parallel-stage-badge {
-    background: var(--ok);
-    border-color: var(--ok);
-    color: #fff;
-}
-
-.parallel-stage.running {
-    background: #fff9ef;
-    border-color: #f1d39c;
-}
-
+.parallel-stage.done { background: #f3faf6; border-color: #cfe7d7; }
+.parallel-stage.done .parallel-stage-badge { background: var(--ok); border-color: var(--ok); color: #fff; }
+.parallel-stage.running { background: #fff9ef; border-color: #f1d39c; }
 .parallel-stage.running .parallel-stage-badge {
     background: #d27a00;
     border-color: #d27a00;
     color: #fff;
     animation: runningBlink 1.2s infinite ease-in-out;
 }
-
 .parallel-stage.failed,
-.parallel-stage.cancelled {
-    background: #fff3f3;
-    border-color: #efc9c9;
-}
-
+.parallel-stage.cancelled { background: #fff3f3; border-color: #efc9c9; }
 .parallel-stage.failed .parallel-stage-badge,
-.parallel-stage.cancelled .parallel-stage-badge {
-    background: var(--bad);
-    border-color: var(--bad);
-    color: #fff;
-}
-
-.parallel-stage.skipped {
-    opacity: .72;
-}
-
-.parallel-stage.skipped .parallel-stage-badge {
-    background: #cfd7df;
-    border-color: #cfd7df;
-    color: #fff;
-}
+.parallel-stage.cancelled .parallel-stage-badge { background: var(--bad); border-color: var(--bad); color: #fff; }
+.parallel-stage.skipped { opacity: .72; }
+.parallel-stage.skipped .parallel-stage-badge { background: #cfd7df; border-color: #cfd7df; color: #fff; }

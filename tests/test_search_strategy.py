@@ -105,7 +105,7 @@ def test_pending_queries_use_independent_purpose_budgets(monkeypatch):
     assert len([q for q in pending if q.startswith("fact")]) == 1
 
 
-def test_bulk_tool_skips_before_provider_call(monkeypatch):
+def test_bulk_tool_can_block_query_outside_approved_plan_before_provider(monkeypatch):
     called = []
 
     def fake_search_web(*args, **kwargs):
@@ -116,7 +116,7 @@ def test_bulk_tool_skips_before_provider_call(monkeypatch):
     tool = tools_search.make_bulk_web_search_tool(
         context=lambda query: {
             "skip": query == "skip me",
-            "skip_reason": "target reached",
+            "skip_reason": "query outside approved plan",
             "max_results": 5,
         }
     )
@@ -127,3 +127,39 @@ def test_bulk_tool_skips_before_provider_call(monkeypatch):
     assert statuses["skip me"] == "SKIPPED"
     assert "skip me" not in called
     assert "run me" in called
+
+
+def test_media_target_never_skips_an_approved_query(monkeypatch):
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    project = _event_project(session)
+    query = SearchQuery(
+        project_id=project.id,
+        query='"policiais mortos" "Rio de Janeiro" 2026',
+        kind="media_complementary",
+        purpose="MEDIA_REPERCUSSION",
+        rationale="test",
+        priority=3,
+    )
+    session.add(query)
+    session.commit()
+
+    settings = Settings(target_media_items=1, max_results_per_query=8)
+    monkeypatch.setattr(orchestrator, "get_settings", lambda: settings)
+    state = orchestrator.CollectionState(
+        project_id=project.id,
+        counters={},
+        expect_queries=1,
+    )
+    state.added_by_purpose["MEDIA_REPERCUSSION"] = 99
+
+    context = orchestrator._make_web_context(
+        project,
+        {query.query: query},
+        state,
+    )
+    options = context(query.query)
+
+    assert options.get("skip") is not True
+    assert options["max_results"] == 8

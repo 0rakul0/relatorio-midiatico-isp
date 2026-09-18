@@ -232,8 +232,9 @@ Regras:
 - se o payload tiver youtube_queries, chame UMA vez executar_buscas_videos passando a lista COMPLETA e exata;
 - use exatamente as consultas recebidas, na ordem fornecida; nao crie, renomeie, reordene nem omita consultas;
 - nao repita consulta ja executada nem invente resultados;
-- uma consulta pode retornar status SKIPPED quando um guardrail deterministico concluir, ANTES do provedor, que a meta/orcamento ja torna a pesquisa desnecessaria;
-- SKIPPED nao e falha e nao deve ser repetido pelo agente;
+- uma consulta aprovada deve ser executada mesmo que a meta de corpus ja tenha sido atingida;
+- SKIPPED fica reservado a consulta fora do plano aprovado ou capacidade indisponivel;
+- a coleta preserva os hits retornados; relevancia, janela e duplicidade sao resolvidas depois;
 - se uma ferramenta nao estiver disponivel ou o campo correspondente estiver vazio, apenas finalize reportando o fato.
 Ao final, use somente os contadores reais do retorno das ferramentas.
 """,

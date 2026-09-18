@@ -31,8 +31,14 @@ def new_web_counters(global_limit: int, target_media_items: int | None = None) -
         "tavily_hard_failures": 0,
         "tavily_circuit_breaker_trips": 0,
         "failed_queries": 0,
+        # Compatibilidade: o valor continua exposto nas estatisticas, mas a
+        # coleta nao interrompe resultados por esse teto. O volume real e
+        # controlado pelo numero de consultas e pelo limite por consulta.
         "global_result_limit": int(global_limit),
         "global_limit_reached": 0,
+        "raw_hits": 0,
+        "flagged_hits": 0,
+        "invalid_hits": 0,
         "target_media_items": target,
         "media_target_reached": 0,
         "media_added": 0,

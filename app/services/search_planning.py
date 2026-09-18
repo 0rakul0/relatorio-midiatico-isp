@@ -348,8 +348,8 @@ def plan_queries_with_llm(db: Session, project: Project) -> list[SearchQuery]:
         "project": project_payload(project),
         "topic_profile": project.topic_profile,
         "search_constraints": {
-            "target_media_items": settings.target_media_items,
-            "hard_media_item_limit": settings.max_search_results,
+            "target_valid_media_items_after_validation": settings.target_media_items,
+            "collection_preserves_all_returned_hits": True,
             "results_per_thematic_query": settings.max_results_per_query,
             "max_complementary_queries": settings.max_complementary_queries,
             "priority_portal_queries_are_generated_by_code": True,

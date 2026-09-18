@@ -106,7 +106,7 @@ def run_full_methodology(
     stage(
         "collection",
         "RUNNING",
-        f"Buscando corpus; meta midiática aproximada: {settings.target_media_items} URL(s) unicas",
+        "Executando todas as buscas aprovadas e preservando os hits brutos para auditoria",
     )
     if flags["enable_youtube"]:
         stage("youtube", "RUNNING", "Pesquisando videos: DuckDuckGo Videos -> Tavily")
@@ -124,15 +124,16 @@ def run_full_methodology(
     web = collection_sources["web"]
     collected = int(web["collected"])
     web_stats = web.get("stats") or {}
-    media_added = int(web_stats.get("media_added", 0))
-    target = int(web_stats.get("target_media_items", settings.target_media_items))
+    raw_hits = int(web_stats.get("raw_hits", 0))
+    flagged_hits = int(web_stats.get("flagged_hits", 0))
 
     if web["status"] == "COMPLETED":
         provider_label = str(web.get("provider") or "duckduckgo")
         stage(
             "collection",
             "DONE",
-            f"{collected} novo(s) item(ns) no total; {media_added}/{target} da meta midiática preliminar. "
+            f"{raw_hits} hit(s) bruto(s) preservado(s); {collected} URL(s) unica(s) nova(s); "
+            f"{flagged_hits} hit(s) sinalizado(s) para revisao posterior. "
             f"Provedores: {provider_label}. DuckDuckGo: {int(web_stats.get('duckduckgo_queries', 0))} consulta(s), "
             f"{int(web_stats.get('duckduckgo_added', 0))} novo(s); Tavily: "
             f"{int(web_stats.get('tavily_queries', 0))} consulta(s), {int(web_stats.get('tavily_added', 0))} novo(s).",
@@ -141,7 +142,7 @@ def run_full_methodology(
         stage(
             "collection",
             "DONE",
-            f"Coleta parcial: {collected} novo(s); {media_added}/{target} da meta midiática preliminar. "
+            f"Coleta parcial: {raw_hits} hit(s) bruto(s) preservado(s), {collected} URL(s) unica(s) nova(s). "
             f"{int(web_stats.get('failed_queries', 0))} consulta(s) nao puderam ser concluidas.",
         )
     else:
@@ -301,7 +302,8 @@ def run_full_methodology(
     stage(
         "validation",
         "DONE",
-        f"{validation['valid']} valido(s); {validation['discarded']} descartado(s); "
+        f"{validation['valid']} valido(s) para o corpus (meta: {settings.target_media_items}); "
+        f"{validation['discarded']} fora do corpus; "
         f"{validation.get('llm_calls', 0)} chamada(s) LLM em lote",
     )
 

@@ -523,10 +523,11 @@ def make_bulk_web_search_tool(
     providers: tuple[str, ...] = ("duckduckgo", "tavily"),
     observer: SearchObserver | None = None,
 ) -> StructuredTool:
-    """Execute the approved plan in one agent tool call.
+    """Execute the complete approved plan in one agent tool call.
 
-    Context may mark a query as skip=True. This happens before provider access,
-    so reaching a corpus budget/target can avoid unnecessary external requests.
+    Approved queries are not skipped because a corpus target was reached.
+    ``skip=True`` is reserved for deterministic plan-integrity guards, such as
+    a hallucinated query that is not part of the approved plan.
     """
 
     def executar_buscas_web(queries: list[str]) -> dict[str, Any]:
@@ -612,8 +613,8 @@ def make_bulk_web_search_tool(
         name="executar_buscas_web",
         description=(
             "Executa em lote todas as consultas web do plano aprovado, sem criar, "
-            "renomear ou omitir consultas. Consultas podem ser marcadas SKIPPED por "
-            "guardrails deterministicos antes de qualquer acesso ao provedor."
+            "renomear ou omitir consultas. A meta de corpus nao interrompe buscas "
+            "aprovadas; SKIPPED e reservado a guardrails de integridade do plano."
         ),
         return_direct=False,
     )
