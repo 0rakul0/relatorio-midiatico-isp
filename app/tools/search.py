@@ -28,7 +28,6 @@ from app.schemas import (
 from app.tools.providers import (
     DuckDuckGoUnavailable,
     duckduckgo_available,
-    fetch_url_text,
     search_news as duckduckgo_news,
     search_text as duckduckgo_text,
     search_videos as duckduckgo_videos,
@@ -167,19 +166,15 @@ def _search_web(
                     url = str(row.get("url") or "").strip()
                     if not url:
                         continue
-                    content = None
-                    if settings.duckduckgo_fetch_pages:
-                        content = fetch_url_text(
-                            url,
-                            max_chars=settings.duckduckgo_fetch_max_chars,
-                            timeout=settings.duckduckgo_fetch_timeout_seconds,
-                        )
+                    # Collection is intentionally light: preserve provider
+                    # metadata/snippet now; full-page hydration happens only
+                    # after URL consolidation in stage 4 (news validation).
                     normalized.append(
                         {
                             "title": str(row.get("title") or "Sem titulo"),
                             "url": url,
                             "snippet": row.get("snippet"),
-                            "content": content or row.get("snippet"),
+                            "content": row.get("snippet"),
                             "published_at": row.get("published_at"),
                             "source_name": row.get("source_name"),
                             "provider": str(row.get("provider") or "duckduckgo"),

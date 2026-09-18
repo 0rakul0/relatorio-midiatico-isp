@@ -1,4 +1,5 @@
 """Tools opcionais disponíveis para o agente único."""
+from app.tools.hydration import ArticleHydrationSink, make_bulk_article_fetch_tool
 from app.tools.registry import build_agent_tools
 from app.tools.search import (
     SearchContextResolver,
@@ -11,10 +12,12 @@ from app.tools.search import (
 )
 
 __all__ = [
+    "ArticleHydrationSink",
     "SearchContextResolver",
     "SearchObserver",
     "SearchSink",
     "build_agent_tools",
+    "make_bulk_article_fetch_tool",
     "make_bulk_video_search_tool",
     "make_bulk_web_search_tool",
     "make_video_search_tool",

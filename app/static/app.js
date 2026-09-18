@@ -127,20 +127,20 @@ function runStatusClass(status){
 
 const STAGE_GROUPS = [
   { number: 1, label: 'Perfil do tema', keys: ['profile'] },
-  { number: 2, label: 'Planejamento de buscas', keys: ['search_plan'] },
+  { number: 2, label: 'Planejamento do relatório', keys: ['search_plan'] },
   {
     number: 3,
     label: 'Coleta',
     keys: ['collection', 'youtube', 'cross_validation'],
     vertical: true
   },
-  { number: 4, label: 'Extração factual - 1ª passagem', keys: ['facts_pass_1'] },
-  { number: 5, label: 'Consolidação factual - 1ª passagem', keys: ['fact_resolution_1'] },
-  { number: 6, label: 'Planejamento de buscas nominais', keys: ['nominal_plan'] },
-  { number: 7, label: 'Coleta nominal', keys: ['nominal_collection'] },
-  { number: 8, label: 'Extração factual - 2ª passagem', keys: ['facts_pass_2'] },
-  { number: 9, label: 'Consolidação factual - 2ª passagem', keys: ['fact_resolution_2'] },
-  { number: 10, label: 'Validação do corpus', keys: ['validation'] },
+  { number: 4, label: 'Validação das notícias', keys: ['validation'] },
+  { number: 5, label: 'Extração factual', keys: ['facts_pass_1'] },
+  { number: 6, label: 'Consolidação factual', keys: ['fact_resolution_1'] },
+  { number: 7, label: 'Planejamento nominal', keys: ['nominal_plan'] },
+  { number: 8, label: 'Coleta nominal', keys: ['nominal_collection'] },
+  { number: 9, label: 'Extração complementar', keys: ['facts_pass_2'] },
+  { number: 10, label: 'Consolidação final', keys: ['fact_resolution_2'] },
   { number: 11, label: 'Análise e classificação', keys: ['classification'] },
   { number: 12, label: 'Redação do relatório', keys: ['report'] },
   { number: 13, label: 'Auditoria QA final', keys: ['qa'] }
@@ -196,11 +196,11 @@ function renderGroupDetail(group){
 
   if(group.vertical){
     detailBox.innerHTML = `
-      <strong>Etapa ${group.number} · ${esc(group.label)}</strong>
+      <strong>Etapa ${group.displayNumber ?? group.number} · ${esc(group.label)}</strong>
       <div class="parallel-stage-list">
         ${group.children.map(child => `
           <div class="parallel-stage ${stageClass(child.status)}">
-            <div class="parallel-stage-badge">${group.number}</div>
+            <div class="parallel-stage-badge">${group.displayNumber ?? group.number}</div>
             <div class="parallel-stage-content">
               <div class="parallel-stage-title">${esc(child.label)}</div>
               <div class="parallel-stage-meta">
@@ -216,7 +216,7 @@ function renderGroupDetail(group){
   }
 
   detailBox.innerHTML = `
-    <strong>Etapa ${group.number} · ${esc(group.label)}</strong>
+    <strong>Etapa ${group.displayNumber ?? group.number} · ${esc(group.label)}</strong>
     <div>${esc(stageLabel(group.status))}${group.detail ? ` · ${esc(group.detail)}` : ''}</div>
     <small>${group.started_at ? `Tempo: ${esc(durationBetween(group.started_at, group.finished_at))}` : 'Aguardando início'}</small>
   `;
@@ -226,11 +226,16 @@ function renderRun(run){
   $('#run-tracker').classList.remove('hidden');
 
   const rawStages = run.stages || [];
-  const groups = buildGroupedStages(rawStages);
+  const allGroups = buildGroupedStages(rawStages);
+  const planningFinished = rawStages.find(stage => stage.key === 'search_plan')?.status === 'DONE';
+  const groups = (planningFinished
+    ? allGroups.filter(group => group.status !== 'SKIPPED')
+    : allGroups
+  ).map((group, index) => ({...group, displayNumber: index + 1}));
   const costs = run.costs || {};
 
   const completedGroups = groups.filter(group => group.status === 'DONE').length;
-  const processedGroups = groups.filter(group => ['DONE','SKIPPED'].includes(group.status)).length;
+  const processedGroups = groups.filter(group => group.status === 'DONE').length;
   const totalGroups = groups.length;
   const percent = totalGroups ? Math.round((processedGroups / totalGroups) * 100) : 0;
 
@@ -268,7 +273,7 @@ function renderRun(run){
   $('#run-metrics').innerHTML = `
     <div class="run-metric">
       <span class="run-metric-label">Etapa atual</span>
-      <strong>${esc(currentGroup ? `Etapa ${currentGroup.number} · ${currentGroup.label}` : runStatusLabel(run.status))}</strong>
+      <strong>${esc(currentGroup ? `Etapa ${currentGroup.displayNumber ?? currentGroup.number} · ${currentGroup.label}` : runStatusLabel(run.status))}</strong>
       <small>${currentGroup?.detail ? esc(currentGroup.detail) : 'Nenhuma operação em andamento'}</small>
     </div>
     <div class="run-metric cost">
@@ -290,7 +295,7 @@ function renderRun(run){
 
   $('#run-steps').innerHTML = groups.map(group => {
     const statusClass = stageClass(group.status);
-    const circleContent = group.status === 'DONE' ? '✓' : String(group.number);
+    const circleContent = group.status === 'DONE' ? '✓' : String(group.displayNumber ?? group.number);
     return `
       <div class="run-step ${statusClass}" title="${esc(group.detail || stageLabel(group.status))}">
         <div class="run-step-circle">${circleContent}</div>

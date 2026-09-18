@@ -118,6 +118,62 @@ Para numeros, preserve indicador, territorio, unidade e periodo exato.
 Nao use acumulado como valor de mes/periodo fechado.
 """,
 
+    "report_planner": """
+Voce esta executando a tarefa PLANEJAMENTO DO RELATORIO.
+
+Sua tarefa e decidir, ANTES da coleta, quais processos realmente fazem sentido
+para esta pauta e ao mesmo tempo desenhar uma estrategia de busca compacta.
+Nao execute ferramentas nesta tarefa.
+
+Para cada processo, retorne enabled=true/false e uma razao auditavel:
+- web_collection: base obrigatoria do relatorio midiatico;
+- youtube_collection: use quando video puder agregar cobertura relevante;
+- cross_validation: somente quando youtube_collection estiver habilitada;
+- media_validation: obrigatoria para transformar hits brutos em corpus valido;
+- fact_extraction: habilite quando a pauta exigir estruturar ocorrencias/casos
+  individualizaveis compativeis com a camada factual atual (por exemplo vitimas,
+  datas, locais, causas, vinculos e circunstancias). Nao use esta etapa apenas
+  para extrair atributos tematicos gerais que podem ser tratados na classificacao;
+- fact_resolution: somente quando fact_extraction estiver habilitada;
+- nominal_followup: habilite SOMENTE quando a metodologia exigir identificar e
+  corroborar pessoas nominalmente. Nao habilite apenas porque pessoas podem ser
+  mencionadas incidentalmente;
+- second_fact_pass: somente quando nominal_followup puder gerar novas fontes;
+- classification: obrigatoria;
+- report_writer: obrigatoria;
+- qa: obrigatoria.
+
+Exemplo: para "Drones Utilizados por Faccoes Criminosas no Rio de Janeiro",
+a analise e predominantemente tematica. Nao habilite a camada factual individual
+nem busca nominal apenas para organizar atributos como tipo de drone, faccao ou
+local; esses elementos podem ser tratados na validacao/classificacao do corpus.
+
+Exemplo: para "policiais mortos em agosto de 2026 no Rio de Janeiro", a camada
+factual e a corroboracao nominal podem ser necessarias porque o objetivo envolve
+casos/pessoas individualizaveis.
+
+A estrategia de busca deve ser compacta:
+- primary_query: UMA consulta principal de alta qualidade;
+- complementary_queries: zero a duas, apenas se materialmente diferentes;
+- fact_query: uma consulta factual apenas se fact_extraction estiver habilitada;
+- official_query: uma base institucional apenas se fact_extraction estiver habilitada;
+- nao gere site:dominio; os portais sao expandidos deterministicamente pelo codigo;
+- nao gere parafrases equivalentes nem listas para preencher limite;
+- preserve local, periodo e ancora semantica do tema.
+
+Os presets/overrides explicitos do usuario serao aplicados pelo codigo depois da
+sua resposta. Sua decisao deve refletir a metodologia mais enxuta que ainda
+responda corretamente a pauta.
+""",
+
+    "article_hydrator": """
+Voce esta executando a tarefa HIDRATACAO DE ARTIGOS PARA VALIDACAO.
+O payload contem uma lista fechada de URLs ja coletadas e deduplicadas.
+Se a lista nao estiver vazia, chame UMA vez a ferramenta hidratar_artigos com a
+lista COMPLETA e exata. Nao pesquise novas URLs, nao altere enderecos e nao crie
+consultas. Depois da ferramenta, retorne status e um detalhe curto.
+""",
+
     "search_planner": """
 Voce esta executando a tarefa ESTRATEGIA DE BUSCA.
 

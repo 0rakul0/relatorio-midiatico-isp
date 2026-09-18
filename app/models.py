@@ -32,6 +32,9 @@ class Project(Base):
     execution_profile: Mapped[str] = mapped_column(String(40), default="AUTO")
     # Overrides pontuais de agentes, por exemplo {"enable_youtube": False}.
     execution_options: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Plano metodologico resolvido para esta pauta. Mantem as decisoes e razoes
+    # que habilitam/desabilitam etapas opcionais da pipeline.
+    execution_plan: Mapped[dict] = mapped_column(JSON, default=dict)
 
     fact_grace_days: Mapped[int] = mapped_column(Integer, default=10)
 

@@ -22,17 +22,17 @@ from app.models import ReportRun
 
 RUN_STAGES = [
     ("profile", "Perfil do tema"),
-    ("search_plan", "Planejamento de buscas"),
+    ("search_plan", "Planejamento do relatório"),
     ("collection", "Coleta em sites"),
     ("youtube", "Coleta no YouTube"),
-    ("cross_validation", "Validação cruzada Tavily × DuckDuckGo Videos"),
-    ("facts_pass_1", "Extração factual - 1ª passagem"),
-    ("fact_resolution_1", "Consolidação factual - 1ª passagem"),
+    ("cross_validation", "Validação cruzada de vídeos"),
+    ("validation", "Validação das notícias"),
+    ("facts_pass_1", "Extração factual"),
+    ("fact_resolution_1", "Consolidação factual"),
     ("nominal_plan", "Planejamento de buscas nominais"),
     ("nominal_collection", "Coleta nominal"),
-    ("facts_pass_2", "Extração factual - 2ª passagem"),
-    ("fact_resolution_2", "Consolidação factual - 2ª passagem"),
-    ("validation", "Validação do corpus"),
+    ("facts_pass_2", "Extração factual complementar"),
+    ("fact_resolution_2", "Consolidação factual final"),
     ("classification", "Análise e classificação"),
     ("report", "Redação do relatório"),
     ("qa", "Auditoria QA final"),
@@ -139,7 +139,6 @@ def _state_from_row(row: ReportRun) -> RunState:
 
 
 def _persist(state: RunState) -> None:
-    """Persistência best-effort: nunca deve derrubar a execução."""
     try:
         session = SessionLocal()
     except Exception:
@@ -231,27 +230,18 @@ def create_run(project_id: int) -> RunState:
 
 
 def create_run_if_none(project_id: int) -> tuple[RunState, bool]:
-    """Cria uma execução apenas se não houver outra ativa para o projeto.
-
-    A checagem e a criação acontecem sob o mesmo lock, eliminando a corrida
-    entre ``active_run_for_project`` e ``create_run``. Execuções ativas de
-    outros workers são detectadas pelo estado persistido.
-    """
     with _lock:
         for state in _runs.values():
             if state.project_id == project_id and state.status in _ACTIVE_STATUSES:
                 return state, False
-
         persisted = _load_active_from_db(project_id)
         if persisted is not None:
             _runs.setdefault(persisted.run_id, persisted)
             _cancel_events.setdefault(persisted.run_id, Event())
             return persisted, False
-
         state = _new_state(project_id)
         _runs[state.run_id] = state
         _cancel_events[state.run_id] = Event()
-
     _persist(state)
     return state, True
 
@@ -304,7 +294,6 @@ def mark_run_cancelled(run_id: str, message: str = "Execução interrompida pelo
         state.status = "CANCELLED"
         state.finished_at = _now()
         state.message = message
-        # A etapa que estava rodando fica explicitamente interrompida.
         for stage in state.stages.values():
             if stage.status == "RUNNING":
                 stage.status = "CANCELLED"
@@ -374,8 +363,6 @@ def check_cancelled(run_id: str) -> None:
     if state is not None and state.cancel_requested:
         raise RunCancelled("Execução interrompida pelo usuário")
 
-    # Coordenação entre workers: consulta o flag persistido, com throttling
-    # para não fazer uma leitura por item processado.
     now = time.monotonic()
     if now - _last_db_poll.get(run_id, 0.0) < _DB_POLL_INTERVAL_SECONDS:
         return

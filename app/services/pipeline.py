@@ -8,14 +8,16 @@ from app.config import get_settings
 from app.fact_layer import extract_project_facts, plan_nominal_followups, resolve_project_facts
 from app.models import Project
 from app.report_qa import run_report_qa
-from app.services.execution_profile import execution_flags
-from app.services.project_profile import project_payload, trusted_launch_date, discover_project_profile
-from app.services.search_planning import plan_queries_with_llm
+from app.services.article_hydration import hydrate_media_items
+from app.services.classification import classify_with_llm
 from app.services.collection.web import collect_web
 from app.services.collection.youtube import collect_media_sources
-from app.services.validation import validate_and_classify, validate_video_metadata_cross_source
-from app.services.classification import classify_with_llm
+from app.services.execution_profile import execution_flags
+from app.services.news_validation import validate_news_stage
+from app.services.project_profile import discover_project_profile, project_payload, trusted_launch_date
 from app.services.reporting import draft_report_with_llm
+from app.services.search_planning import plan_report_with_llm
+from app.services.validation import validate_video_metadata_cross_source
 
 
 def run_full_methodology(
@@ -25,7 +27,7 @@ def run_full_methodology(
     progress_callback: Callable[[str, str, str | None], None] | None = None,
     cancel_check: Callable[[], None] | None = None,
 ) -> dict:
-    """Run the required stages; every AI task goes through ReportAgent."""
+    """Execute only the stages selected by the report plan."""
 
     def check() -> None:
         if cancel_check:
@@ -40,7 +42,7 @@ def run_full_methodology(
 
     settings = get_settings()
 
-    # 1. Topic profile
+    # 1. Topic profile -------------------------------------------------
     check()
     stage("profile", "RUNNING", "Classificando o tipo de pauta e estruturando o perfil do tema")
     if project.status in {"DRAFT", "CUSTOM_DATES", "PROFILE_NEEDS_REVIEW"} or not project.topic_profile:
@@ -71,47 +73,75 @@ def run_full_methodology(
         else:
             profile_note = "confirmacao documental do produto pendente; seguindo por busca tematica"
 
-    execution_profile, flags = execution_flags(project)
     stage(
         "profile",
         "DONE",
-        f"Tema: {project.project_type}; perfil de execucao: {execution_profile}"
-        + (f"; {profile_note}" if profile_note else ""),
+        f"Tema classificado como {project.project_type}" + (f"; {profile_note}" if profile_note else ""),
     )
 
-    # 2. Search strategy. The LLM optimizes one primary query instead of
-    # producing a large paraphrase list; portal checks are expanded by code.
+    # 2. Report planning + compact search strategy --------------------
     check()
     stage(
         "search_plan",
         "RUNNING",
-        "Otimizando uma consulta principal e poucas complementares realmente distintas",
+        "Definindo quais processos serao usados e otimizando a estrategia de busca",
     )
-    planned = plan_queries_with_llm(db, project)
+    planned = plan_report_with_llm(db, project)
+    execution_profile, flags = execution_flags(project)
+
     media_count = sum(1 for row in planned if row.purpose == "MEDIA_REPERCUSSION")
     fact_count = sum(1 for row in planned if row.purpose == "FACT_DISCOVERY")
     official_count = sum(1 for row in planned if row.purpose == "OFFICIAL_FACT")
     strategy = (project.topic_profile or {}).get("search_strategy") or {}
     complementary_count = len(strategy.get("complementary_queries") or [])
+    processes = (project.execution_plan or {}).get("processes") or {}
+    enabled_optional = [
+        label
+        for key, label in (
+            ("youtube_collection", "YouTube"),
+            ("cross_validation", "validacao cruzada"),
+            ("fact_extraction", "camada factual"),
+            ("nominal_followup", "busca nominal"),
+        )
+        if bool((processes.get(key) or {}).get("enabled"))
+    ]
     stage(
         "search_plan",
         "DONE",
-        f"Estrategia pronta: 1 consulta principal, {complementary_count} complementar(es), "
-        f"{media_count} consulta(s) midiaticas totais incluindo portais, "
-        f"{fact_count} factual(is) e {official_count} oficial(is)",
+        f"Plano {execution_profile}: 1 consulta principal, {complementary_count} complementar(es), "
+        f"{media_count} midiaticas, {fact_count} factual(is), {official_count} oficial(is). "
+        f"Opcionais ativos: {', '.join(enabled_optional) if enabled_optional else 'nenhum'}.",
     )
 
-    # 3. Web + optional YouTube collection
+    # As soon as planning is done, expose optional stages that will not run.
+    # This makes the execution tracker reflect the real methodology immediately.
+    if not flags["enable_youtube"]:
+        stage("youtube", "SKIPPED", (processes.get("youtube_collection") or {}).get("reason") or "Nao prevista no plano")
+    if not flags["enable_cross_validation"]:
+        stage("cross_validation", "SKIPPED", (processes.get("cross_validation") or {}).get("reason") or "Nao prevista no plano")
+    if not flags["enable_fact_layer"]:
+        fact_reason = (processes.get("fact_extraction") or {}).get("reason") or "Camada factual nao prevista no plano"
+        for optional_key in ("facts_pass_1", "fact_resolution_1", "nominal_plan", "nominal_collection", "facts_pass_2", "fact_resolution_2"):
+            stage(optional_key, "SKIPPED", fact_reason)
+    elif not flags["enable_nominal_followup"]:
+        nominal_reason = (processes.get("nominal_followup") or {}).get("reason") or "Busca nominal nao prevista no plano"
+        for optional_key in ("nominal_plan", "nominal_collection", "facts_pass_2", "fact_resolution_2"):
+            stage(optional_key, "SKIPPED", nominal_reason)
+
+    # 3. Collection ----------------------------------------------------
+    collected = youtube_collected = 0
+    web_stats: dict = {}
     check()
     stage(
         "collection",
         "RUNNING",
-        "Executando todas as buscas aprovadas e preservando os hits brutos para auditoria",
+        "Executando buscas aprovadas em modo leve: metadados/snippets e hits brutos auditaveis",
     )
     if flags["enable_youtube"]:
         stage("youtube", "RUNNING", "Pesquisando videos: DuckDuckGo Videos -> Tavily")
     else:
-        stage("youtube", "SKIPPED", f"Desativado pelo perfil {execution_profile}")
+        reason = (processes.get("youtube_collection") or {}).get("reason") or "Desativado pelo plano"
+        stage("youtube", "SKIPPED", reason)
 
     collection_sources = collect_media_sources(
         db,
@@ -127,79 +157,78 @@ def run_full_methodology(
     raw_hits = int(web_stats.get("raw_hits", 0))
     flagged_hits = int(web_stats.get("flagged_hits", 0))
 
-    if web["status"] == "COMPLETED":
+    if web["status"] in {"COMPLETED", "PARTIAL"}:
         provider_label = str(web.get("provider") or "duckduckgo")
         stage(
             "collection",
             "DONE",
             f"{raw_hits} hit(s) bruto(s) preservado(s); {collected} URL(s) unica(s) nova(s); "
-            f"{flagged_hits} hit(s) sinalizado(s) para revisao posterior. "
-            f"Provedores: {provider_label}. DuckDuckGo: {int(web_stats.get('duckduckgo_queries', 0))} consulta(s), "
-            f"{int(web_stats.get('duckduckgo_added', 0))} novo(s); Tavily: "
-            f"{int(web_stats.get('tavily_queries', 0))} consulta(s), {int(web_stats.get('tavily_added', 0))} novo(s).",
-        )
-    elif web["status"] == "PARTIAL":
-        stage(
-            "collection",
-            "DONE",
-            f"Coleta parcial: {raw_hits} hit(s) bruto(s) preservado(s), {collected} URL(s) unica(s) nova(s). "
-            f"{int(web_stats.get('failed_queries', 0))} consulta(s) nao puderam ser concluidas.",
+            f"{flagged_hits} hit(s) sinalizado(s). Provedores: {provider_label}. "
+            "O corpo completo das paginas sera obtido somente na validacao.",
         )
     else:
-        stage(
-            "collection",
-            "FAILED",
-            f"Coleta web indisponivel nesta execucao: {str(web.get('error') or '')[:180]}",
-        )
+        stage("collection", "FAILED", f"Coleta web indisponivel: {str(web.get('error') or '')[:180]}")
 
     youtube = collection_sources["youtube"]
     youtube_collected = int(youtube["collected"])
     project.youtube_collection_status = str(youtube["status"])
     project.youtube_collection_error = youtube.get("error")
-    if project.youtube_collection_status == "DISABLED":
-        stage("youtube", "SKIPPED", f"Desativado pelo perfil {execution_profile}")
-    elif project.youtube_collection_status == "FALLBACK_DUCKDUCKGO":
-        stage("youtube", "DONE", f"Fallback DuckDuckGo Videos concluido: {youtube_collected} video(s)")
+    if not flags["enable_youtube"] or project.youtube_collection_status == "DISABLED":
+        stage("youtube", "SKIPPED", (processes.get("youtube_collection") or {}).get("reason") or "Desativado")
     elif project.youtube_collection_status == "UNAVAILABLE":
-        stage(
-            "youtube",
-            "SKIPPED",
-            "Coleta no YouTube indisponivel; isso nao sera interpretado como ausencia de cobertura.",
-        )
-    elif project.youtube_collection_status == "NOT_CONFIGURED":
-        stage("youtube", "SKIPPED", "Nenhum coletor do YouTube esta disponivel nesta execucao")
+        stage("youtube", "SKIPPED", "Coleta de videos indisponivel; nao sera interpretada como ausencia de cobertura")
     else:
-        stage("youtube", "DONE", f"{youtube_collected} video(s) coletado(s)")
+        stage("youtube", "DONE", f"{youtube_collected} video(s) consolidados")
     db.commit()
 
-    # 4. Optional cross validation
+    # Cross-validation belongs to collection group (stage 3 in the UI).
     check()
     if not flags["enable_cross_validation"]:
-        stage("cross_validation", "SKIPPED", "Opcional e desativada nesta execucao")
+        stage("cross_validation", "SKIPPED", (processes.get("cross_validation") or {}).get("reason") or "Nao necessaria")
     else:
         stage("cross_validation", "RUNNING", "Comparando metadados coincidentes de video")
         try:
             cross_validation = validate_video_metadata_cross_source(
-                db,
-                project,
-                cancel_check=check,
-                progress_detail=detail_for("cross_validation"),
+                db, project, cancel_check=check, progress_detail=detail_for("cross_validation")
             )
         except RuntimeError as exc:
             stage("cross_validation", "SKIPPED", f"Validacao cruzada indisponivel: {str(exc)[:180]}")
         else:
             if cross_validation["skipped"]:
-                if cross_validation.get("reason") == "NO_COMPARABLE_ITEMS":
-                    stage(
-                        "cross_validation",
-                        "SKIPPED",
-                        "Nao necessaria: nenhum video foi obtido por dois coletores independentes",
-                    )
-                else:
-                    stage("cross_validation", "SKIPPED", "OPENAI_API_KEY nao configurada")
+                stage("cross_validation", "SKIPPED", "Nenhum video comparavel por dois coletores independentes")
             else:
                 stage("cross_validation", "DONE", f"{cross_validation['validated']} video(s) comparado(s)")
 
+    # 4. News validation ------------------------------------------------
+    validation = {
+        "valid": 0,
+        "discarded": 0,
+        "llm_calls": 0,
+        "hydration": {"requested": 0, "fetched": 0, "empty": 0, "errors": 0},
+    }
+    check()
+    if not flags["enable_media_validation"]:
+        stage("validation", "SKIPPED", (processes.get("media_validation") or {}).get("reason") or "Nao necessaria")
+    else:
+        stage(
+            "validation",
+            "RUNNING",
+            "Deduplicando, hidratando URLs candidatas em paralelo e validando as noticias",
+        )
+        validation = validate_news_stage(
+            db, project, cancel_check=check, progress_detail=detail_for("validation")
+        )
+        hydration = validation.get("hydration") or {}
+        stage(
+            "validation",
+            "DONE",
+            f"{validation.get('valid', 0)} noticia(s) valida(s) (meta: {settings.target_media_items}); "
+            f"{validation.get('discarded', 0)} fora do corpus; "
+            f"{hydration.get('fetched', 0)}/{hydration.get('requested', 0)} pagina(s) hidratada(s); "
+            f"{validation.get('llm_calls', 0)} chamada(s) LLM em lote",
+        )
+
+    # Optional factual branch -----------------------------------------
     fact_pass_1 = {"processed": 0, "events_extracted": 0, "errors": 0}
     fact_resolution_1 = {"events": 0, "confirmed": 0, "partial": 0, "conflicts": 0}
     nominal_created = 0
@@ -207,49 +236,32 @@ def run_full_methodology(
     fact_pass_2 = {"processed": 0, "events_extracted": 0, "errors": 0}
     fact_resolution_2 = dict(fact_resolution_1)
 
-    # 5. Optional fact layer
-    fact_layer_active = flags["enable_fact_layer"] and project.project_type == "EVENT_TOPIC"
+    fact_layer_active = bool(flags["enable_fact_layer"])
     if not fact_layer_active:
-        reason = (
-            f"Nao necessaria para o perfil {execution_profile}"
-            if not flags["enable_fact_layer"]
-            else f"Tipo de projeto {project.project_type} nao exige fatos individuais"
-        )
-        for key in (
-            "facts_pass_1",
-            "fact_resolution_1",
-            "nominal_plan",
-            "nominal_collection",
-            "facts_pass_2",
-            "fact_resolution_2",
-        ):
+        reason = (processes.get("fact_extraction") or {}).get("reason") or "Camada factual nao necessaria para esta pauta"
+        for key in ("facts_pass_1", "fact_resolution_1", "nominal_plan", "nominal_collection", "facts_pass_2", "fact_resolution_2"):
             stage(key, "SKIPPED", reason)
     else:
         check()
-        stage("facts_pass_1", "RUNNING", "Extraindo datas, causas, locais e evidencias por campo")
-        fact_pass_1 = extract_project_facts(
-            db,
-            project,
-            cancel_check=check,
-            progress_detail=detail_for("facts_pass_1"),
-        )
+        stage("facts_pass_1", "RUNNING", "Extraindo fatos sustentados pelas fontes hidratadas")
+        fact_pass_1 = extract_project_facts(db, project, cancel_check=check, progress_detail=detail_for("facts_pass_1"))
         stage("facts_pass_1", "DONE", f"{fact_pass_1['events_extracted']} evento(s) extraido(s)")
 
-        check()
-        stage("fact_resolution_1", "RUNNING", "Consolidando evidencias e detectando conflitos")
-        fact_resolution_1 = resolve_project_facts(db, project)
-        stage(
-            "fact_resolution_1",
-            "DONE",
-            f"{fact_resolution_1['events']} evento(s); {fact_resolution_1['conflicts']} conflito(s)",
-        )
-        fact_resolution_2 = dict(fact_resolution_1)
+        if flags["enable_fact_resolution"]:
+            check()
+            stage("fact_resolution_1", "RUNNING", "Consolidando evidencias e detectando conflitos")
+            fact_resolution_1 = resolve_project_facts(db, project)
+            fact_resolution_2 = dict(fact_resolution_1)
+            stage("fact_resolution_1", "DONE", f"{fact_resolution_1['events']} evento(s); {fact_resolution_1['conflicts']} conflito(s)")
+        else:
+            stage("fact_resolution_1", "SKIPPED", (processes.get("fact_resolution") or {}).get("reason") or "Nao necessaria")
 
         if not flags["enable_nominal_followup"]:
-            stage("nominal_plan", "SKIPPED", f"Busca nominal desativada no perfil {execution_profile}")
-            stage("nominal_collection", "SKIPPED", "Sem segunda coleta nominal")
-            stage("facts_pass_2", "SKIPPED", "Sem segunda passagem factual")
-            stage("fact_resolution_2", "SKIPPED", "A consolidacao da primeira passagem foi mantida")
+            reason = (processes.get("nominal_followup") or {}).get("reason") or "Busca nominal nao necessaria"
+            stage("nominal_plan", "SKIPPED", reason)
+            stage("nominal_collection", "SKIPPED", reason)
+            stage("facts_pass_2", "SKIPPED", reason)
+            stage("fact_resolution_2", "SKIPPED", reason)
         else:
             check()
             stage("nominal_plan", "RUNNING", "Criando buscas somente para nomes ja identificados")
@@ -258,82 +270,67 @@ def run_full_methodology(
 
             if nominal_created:
                 check()
-                stage("nominal_collection", "RUNNING", "Buscando corroboradores por nome")
+                stage("nominal_collection", "RUNNING", "Coletando corroboradores nominais em modo leve")
                 second_collected = collect_web(
+                    db, project.id, cancel_check=check, progress_detail=detail_for("nominal_collection")
+                )
+                hydration2 = hydrate_media_items(
                     db,
-                    project.id,
+                    project,
+                    purposes={"NOMINAL_FOLLOWUP"},
                     cancel_check=check,
                     progress_detail=detail_for("nominal_collection"),
                 )
-                stage("nominal_collection", "DONE", f"{second_collected} novo(s) item(ns) coletado(s)")
-
-                check()
-                stage("facts_pass_2", "RUNNING", "Extraindo evidencias das novas fontes nominais")
-                fact_pass_2 = extract_project_facts(
-                    db,
-                    project,
-                    cancel_check=check,
-                    progress_detail=detail_for("facts_pass_2"),
-                )
-                stage("facts_pass_2", "DONE", f"{fact_pass_2['events_extracted']} evento(s) adicional(is) extraido(s)")
-
-                check()
-                stage("fact_resolution_2", "RUNNING", "Reconciliando a camada factual")
-                fact_resolution_2 = resolve_project_facts(db, project)
                 stage(
-                    "fact_resolution_2",
+                    "nominal_collection",
                     "DONE",
-                    f"{fact_resolution_2['events']} evento(s); {fact_resolution_2['conflicts']} conflito(s)",
+                    f"{second_collected} URL(s) nova(s); {hydration2.get('fetched', 0)} pagina(s) hidratada(s)",
                 )
+
+                if flags["enable_second_fact_pass"]:
+                    check()
+                    stage("facts_pass_2", "RUNNING", "Extraindo evidencias das novas fontes nominais")
+                    fact_pass_2 = extract_project_facts(db, project, cancel_check=check, progress_detail=detail_for("facts_pass_2"))
+                    stage("facts_pass_2", "DONE", f"{fact_pass_2['events_extracted']} evento(s) adicional(is) extraido(s)")
+
+                    check()
+                    stage("fact_resolution_2", "RUNNING", "Reconciliando a camada factual final")
+                    fact_resolution_2 = resolve_project_facts(db, project)
+                    stage("fact_resolution_2", "DONE", f"{fact_resolution_2['events']} evento(s); {fact_resolution_2['conflicts']} conflito(s)")
+                else:
+                    reason = (processes.get("second_fact_pass") or {}).get("reason") or "Segunda passagem nao necessaria"
+                    stage("facts_pass_2", "SKIPPED", reason)
+                    stage("fact_resolution_2", "SKIPPED", reason)
             else:
-                stage("nominal_collection", "SKIPPED", "Nenhum nome novo exigiu segunda coleta")
-                stage("facts_pass_2", "SKIPPED", "Nenhuma segunda coleta para extrair")
-                stage("fact_resolution_2", "SKIPPED", "A consolidacao da primeira passagem foi mantida")
+                stage("nominal_collection", "SKIPPED", "Nenhum nome identificado exigiu nova coleta")
+                stage("facts_pass_2", "SKIPPED", "Sem nova coleta nominal")
+                stage("fact_resolution_2", "SKIPPED", "Consolidacao anterior mantida")
 
-    # 6. Media core
+    # 11. Classification ----------------------------------------------
+    classification = {"updated": 0, "llm_calls": 0}
     check()
-    stage("validation", "RUNNING", "Validando janela de publicacao e aderencia tematica")
-    validation = validate_and_classify(
-        db,
-        project,
-        cancel_check=check,
-        progress_detail=detail_for("validation"),
-    )
-    stage(
-        "validation",
-        "DONE",
-        f"{validation['valid']} valido(s) para o corpus (meta: {settings.target_media_items}); "
-        f"{validation['discarded']} fora do corpus; "
-        f"{validation.get('llm_calls', 0)} chamada(s) LLM em lote",
-    )
+    if flags["enable_classification"]:
+        stage("classification", "RUNNING", "Classificando enquadramento, fidelidade e mencao institucional")
+        classification = classify_with_llm(db, project, cancel_check=check, progress_detail=detail_for("classification"))
+        detail = f"{classification.get('updated', 0)} item(ns) classificado(s); {classification.get('llm_calls', 0)} chamada(s) LLM"
+        if classification.get("failed_batches"):
+            detail += f"; {classification['failed_batches']} lote(s) com falha"
+        stage("classification", "DONE", detail)
+    else:
+        stage("classification", "SKIPPED", (processes.get("classification") or {}).get("reason") or "Nao necessaria")
 
+    # 12. Report -------------------------------------------------------
     check()
-    stage("classification", "RUNNING", "Classificando enquadramento, fidelidade e mencao institucional")
-    classification = classify_with_llm(
-        db,
-        project,
-        cancel_check=check,
-        progress_detail=detail_for("classification"),
-    )
-    classification_detail = (
-        f"{classification.get('updated', 0)} item(ns) classificado(s); "
-        f"{classification.get('llm_calls', 0)} chamada(s) LLM em lote"
-    )
-    if classification.get("failed_batches"):
-        classification_detail += f"; {classification['failed_batches']} lote(s) com falha"
-    stage("classification", "DONE", classification_detail)
-
-    check()
-    report_detail = (
-        "Redigindo relatorio com camada factual individual"
-        if fact_layer_active
-        else "Redigindo relatorio de repercussao sem camada factual individual"
-    )
-    stage("report", "RUNNING", report_detail)
+    if not flags["enable_report_writer"]:
+        raise RuntimeError("O plano desativou a redacao, mas esta etapa e obrigatoria para gerar o relatorio")
+    stage("report", "RUNNING", "Redigindo o relatorio a partir do corpus validado e das camadas habilitadas")
     drafted = draft_report_with_llm(db, project)
     stage("report", "DONE", "Relatorio estruturado e persistido")
 
+    # 13. QA -----------------------------------------------------------
     check()
+    if not flags["enable_qa"]:
+        raise RuntimeError("O plano desativou QA, mas esta etapa e obrigatoria")
     stage("qa", "RUNNING", "Executando verificacoes deterministicas e auditoria final")
     qa = run_report_qa(db, project, drafted)
     stage("qa", "DONE", f"QA {qa['status']}")
@@ -345,6 +342,7 @@ def run_full_methodology(
         "project": project_payload(project, for_report=True),
         "profile": profile,
         "execution_profile": execution_profile,
+        "execution_plan": project.execution_plan,
         "execution_flags": flags,
         "planned": len(planned),
         "collected": collected,

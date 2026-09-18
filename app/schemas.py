@@ -132,6 +132,30 @@ class CollectorExecutionResponse(StrictLLMOutput):
     detail: str
 
 
+class AgentBulkArticleFetchArgs(BaseModel):
+    urls: list[str] = Field(
+        min_length=1,
+        max_length=100,
+        description="Canonical article URLs selected for full-text hydration",
+    )
+
+
+class ArticleFetchItemResult(StrictLLMOutput):
+    url: str
+    status: Literal["FETCHED", "EMPTY_OR_BLOCKED", "ERROR"]
+    chars: int = Field(default=0, ge=0)
+    error: str | None = None
+
+
+class ArticleFetchToolResponse(StrictLLMOutput):
+    results: list[ArticleFetchItemResult] = Field(default_factory=list, max_length=100)
+
+
+class HydrationExecutionResponse(StrictLLMOutput):
+    status: Literal["COMPLETED", "PARTIAL", "UNAVAILABLE"]
+    detail: str
+
+
 # ---------------------------------------------------------------------------
 # Topic profile
 # ---------------------------------------------------------------------------
@@ -205,6 +229,35 @@ class SearchStrategyResponse(StrictLLMOutput):
     fact_query: str | None = Field(default=None, max_length=500)
     official_query: str | None = Field(default=None, max_length=500)
     rationale: str = Field(min_length=3, max_length=2000)
+
+
+class ProcessDecision(StrictLLMOutput):
+    enabled: bool
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class ReportPlanResponse(StrictLLMOutput):
+    """Methodological plan + compact search strategy for one report run."""
+
+    web_collection: ProcessDecision
+    youtube_collection: ProcessDecision
+    cross_validation: ProcessDecision
+    media_validation: ProcessDecision
+    fact_extraction: ProcessDecision
+    fact_resolution: ProcessDecision
+    nominal_followup: ProcessDecision
+    second_fact_pass: ProcessDecision
+    classification: ProcessDecision
+    report_writer: ProcessDecision
+    qa: ProcessDecision
+
+    fact_fields: list[str] = Field(default_factory=list, max_length=30)
+
+    primary_query: str = Field(min_length=3, max_length=500)
+    complementary_queries: list[str] = Field(default_factory=list, max_length=2)
+    fact_query: str | None = Field(default=None, max_length=500)
+    official_query: str | None = Field(default=None, max_length=500)
+    rationale: str = Field(min_length=3, max_length=3000)
 
 
 # Legacy schema kept for compatibility with old stored code/tests. New planning

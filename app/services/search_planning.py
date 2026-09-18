@@ -11,11 +11,15 @@ from app.config import get_settings
 from app.llm import llm_is_configured
 from app.media_scout import MediaScout, ScoutTask
 from app.models import OfficialFact, Project, SearchQuery
-from app.schemas import SearchStrategyResponse
+from app.schemas import ReportPlanResponse
 from app.source_registry import OFFICIAL_SECURITY_SOURCES
 from app.topic_profile import build_topic_profile, normalized_text
 from app.services.collection.guards import query_preserves_project_anchor
-from app.services.execution_profile import execution_flags
+from app.services.execution_profile import (
+    execution_flags,
+    heuristic_execution_plan,
+    sanitize_execution_plan,
+)
 from app.services.project_profile import project_payload
 
 
@@ -159,7 +163,7 @@ def _sanitize_strategy(
 
     fact_query = None
     official_query = None
-    if enable_fact_layer and project.project_type == "EVENT_TOPIC":
+    if enable_fact_layer:
         candidate = " ".join(str(raw.get("fact_query") or "").split()).strip()
         if candidate and query_preserves_project_anchor(
             project, candidate, purpose="FACT_DISCOVERY"
@@ -268,7 +272,7 @@ def _persist_strategy_queries(
             created.append(row)
             media_added += 1
 
-    if project.project_type == "EVENT_TOPIC" and flags["enable_fact_layer"]:
+    if flags["enable_fact_layer"]:
         fact_query = str(strategy.get("fact_query") or "").strip()
         if settings.max_fact_queries > 0 and fact_query:
             row = _add_query(
@@ -315,10 +319,17 @@ def _ensure_profile(project: Project) -> None:
     project.project_type = project.topic_profile["project_type"]
 
 
+def _persist_execution_plan(project: Project, raw: dict[str, Any] | None) -> dict[str, Any]:
+    plan = sanitize_execution_plan(project, raw)
+    project.execution_plan = plan
+    return plan
+
+
 def plan_queries(db: Session, project: Project) -> list[SearchQuery]:
-    """Deterministic fallback: compact strategy, never a paraphrase matrix."""
+    """Deterministic fallback when the planning LLM is unavailable."""
     _ensure_profile(project)
     settings = get_settings()
+    _persist_execution_plan(project, heuristic_execution_plan(project))
     _, flags = execution_flags(project)
     fallback = MediaScout(project.topic, project.topic_profile).fallback_search_strategy(
         max_complementary=settings.max_complementary_queries
@@ -331,11 +342,10 @@ def plan_queries(db: Session, project: Project) -> list[SearchQuery]:
     return _persist_strategy_queries(db, project, strategy)
 
 
-def plan_queries_with_llm(db: Session, project: Project) -> list[SearchQuery]:
-    """Ask the LLM to improve search quality, not to maximize query count."""
+def plan_report_with_llm(db: Session, project: Project) -> list[SearchQuery]:
+    """Plan the methodology and the compact search strategy in one LLM call."""
     _ensure_profile(project)
     settings = get_settings()
-    _, flags = execution_flags(project)
 
     if not llm_is_configured():
         return plan_queries(db, project)
@@ -347,13 +357,17 @@ def plan_queries_with_llm(db: Session, project: Project) -> list[SearchQuery]:
     payload = {
         "project": project_payload(project),
         "topic_profile": project.topic_profile,
-        "search_constraints": {
+        "requested_execution_profile": project.execution_profile or "AUTO",
+        "execution_overrides": project.execution_options or {},
+        "planning_constraints": {
             "target_valid_media_items_after_validation": settings.target_media_items,
             "collection_preserves_all_returned_hits": True,
-            "results_per_thematic_query": settings.max_results_per_query,
+            "collection_is_metadata_and_snippet_only": True,
+            "full_article_hydration_happens_during_media_validation": True,
+            "results_per_query": settings.max_results_per_query,
             "max_complementary_queries": settings.max_complementary_queries,
             "priority_portal_queries_are_generated_by_code": True,
-            "fact_layer_enabled": bool(flags["enable_fact_layer"]),
+            "nominal_followup_is_optional": True,
         },
         "official_facts": [
             {
@@ -372,28 +386,46 @@ def plan_queries_with_llm(db: Session, project: Project) -> list[SearchQuery]:
 
     try:
         result = get_report_agent().run(
-            task="search_planner",
-            extra_instructions=(
-                "Return a SEARCH STRATEGY, not a long list of queries. "
-                "primary_query must be the single best broad but anchored query. "
-                "complementary_queries may contain at most two materially different searches; "
-                "do not produce rewordings that only change word order. "
-                "Do not generate site:domain queries because priority outlets are expanded by code. "
-                "If fact_layer_enabled is false, fact_query and official_query must be null. "
-                "The goal is to retrieve several useful articles per query and approach the media-item target "
-                "with the smallest useful query set. Preserve explicit place/year and the monitored-object anchor."
-            ),
+            task="report_planner",
             payload=payload,
-            schema_name="search_strategy_v1",
-            response_model=SearchStrategyResponse,
-            max_output_tokens=2200,
+            schema_name="report_plan_v1",
+            response_model=ReportPlanResponse,
+            max_output_tokens=3800,
         )
     except RuntimeError:
         return plan_queries(db, project)
+
+    process_raw = {
+        "processes": {
+            "web_collection": result["web_collection"],
+            "youtube_collection": result["youtube_collection"],
+            "cross_validation": result["cross_validation"],
+            "media_validation": result["media_validation"],
+            "fact_extraction": result["fact_extraction"],
+            "fact_resolution": result["fact_resolution"],
+            "nominal_followup": result["nominal_followup"],
+            "second_fact_pass": result["second_fact_pass"],
+            "classification": result["classification"],
+            "report_writer": result["report_writer"],
+            "qa": result["qa"],
+        },
+        "fact_fields": result.get("fact_fields") or [],
+        "rationale": result.get("rationale") or "",
+    }
+    _persist_execution_plan(project, process_raw)
+    db.flush()
+    _, flags = execution_flags(project)
 
     strategy = _sanitize_strategy(
         project,
         result,
         enable_fact_layer=flags["enable_fact_layer"],
     )
-    return _persist_strategy_queries(db, project, strategy)
+    created = _persist_strategy_queries(db, project, strategy)
+    db.commit()
+    return created
+
+
+def plan_queries_with_llm(db: Session, project: Project) -> list[SearchQuery]:
+    """Backward-compatible API name for the new report planner."""
+    return plan_report_with_llm(db, project)
