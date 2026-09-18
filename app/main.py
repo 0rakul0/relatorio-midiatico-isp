@@ -1,5 +1,4 @@
 from datetime import date
-from threading import Thread
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
@@ -8,22 +7,10 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.cost_tracker import cost_context, set_cost_operation
-from app.database import SessionLocal, get_db
+from app.cost_tracker import cost_context
+from app.database import get_db
 from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report, fact_events_for_report
-from app.execution import (
-    RunCancelled,
-    active_run_for_project,
-    check_cancelled,
-    create_run,
-    mark_run_cancelled,
-    mark_run_completed,
-    mark_run_failed,
-    mark_run_started,
-    request_cancel,
-    run_snapshot,
-    update_stage,
-)
+from app.orchestration import request_cancel, run_snapshot, start_run
 from app.models import (
     Classification,
     FactAssertion,
@@ -43,7 +30,7 @@ from app.services import (
     cached_report_for_topic,
     canonicalize,
     classify_with_llm,
-    collect_tavily,
+    collect_web,
     discover_project_profile,
     draft_report_with_llm,
     export_report_pdf,
@@ -56,7 +43,7 @@ from app.services import (
 from app.topic_profile import requested_topic_window
 
 
-app = FastAPI(title="ISP Repercussão Midiática", version="0.2.8")
+app = FastAPI(title="ISP Repercussão Midiática", version="0.3.1")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
@@ -77,22 +64,25 @@ def health():
     settings = get_settings()
     return {
         "status": "ok",
-        "version": "0.2.8",
+        "version": "0.3.1",
         "search_limits": {
             "max_search_results": settings.max_search_results,
             "max_results_per_query": settings.max_results_per_query,
             "max_search_queries": settings.max_search_queries,
             "max_llm_search_queries": settings.max_llm_search_queries,
-            "max_duckduckgo_fallback_queries": settings.max_duckduckgo_fallback_queries,
             "duckduckgo_region": settings.duckduckgo_region,
             "duckduckgo_safesearch": settings.duckduckgo_safesearch,
             "duckduckgo_fetch_pages": settings.duckduckgo_fetch_pages,
-            "max_profile_discovery_calls": settings.max_profile_discovery_calls,
             "max_youtube_tasks": settings.max_youtube_tasks,
             "max_youtube_results_total": settings.max_youtube_results_total,
             "max_youtube_results_per_task": settings.max_youtube_results_per_task,
             "web_search_provider": "duckduckgo+tavily",
-            "youtube_search_provider": "duckduckgo+tavily+youtube_api",
+            "youtube_search_provider": "duckduckgo_videos+tavily",
+        },
+        "agent": {
+            "name": "ReportAgent",
+            "tool_choice": "model_decides",
+            "tools": ["pesquisar_internet", "pesquisar_videos"],
         },
         "ai_limits": {
             "max_semantic_reviews": settings.max_semantic_reviews,
@@ -285,8 +275,10 @@ def delete_historical_report(project_id: int, db: Session = Depends(get_db)):
     db.execute(delete(Classification).where(Classification.media_item_id.in_(item_ids)))
     db.execute(delete(GeneratedReport).where(GeneratedReport.project_id.in_(matching_project_ids)))
     db.execute(delete(OfficialFact).where(OfficialFact.project_id.in_(matching_project_ids)))
-    db.execute(delete(SearchQuery).where(SearchQuery.project_id.in_(matching_project_ids)))
+    # MediaItem referencia SearchQuery; remova os itens antes das consultas para
+    # funcionar também quando o banco estiver com FKs estritas habilitadas.
     db.execute(delete(MediaItem).where(MediaItem.project_id.in_(matching_project_ids)))
+    db.execute(delete(SearchQuery).where(SearchQuery.project_id.in_(matching_project_ids)))
     db.execute(delete(Project).where(Project.id.in_(matching_project_ids)))
     db.commit()
     return Response(status_code=204)
@@ -384,51 +376,11 @@ def discover_profile(project_id: int, db: Session = Depends(get_db)):
         raise HTTPException(503, str(exc)) from exc
 
 
-def _run_project_worker(run_id: str, project_id: int) -> None:
-    mark_run_started(run_id)
-    db = SessionLocal()
-    try:
-        project = db.get(Project, project_id)
-        if not project:
-            raise RuntimeError("Projeto não encontrado")
-
-        def progress(key: str, status: str, detail: str | None = None) -> None:
-            if status == "RUNNING":
-                set_cost_operation(key)
-            update_stage(run_id, key, status, detail)
-
-        with cost_context(project_id=project_id, run_id=run_id):
-            result = run_full_methodology(
-                db,
-                project,
-                progress_callback=progress,
-                cancel_check=lambda: check_cancelled(run_id),
-            )
-        check_cancelled(run_id)
-        qa_status = (result.get("qa") or {}).get("status", "N/D")
-        mark_run_completed(run_id, f"Relatório concluído. QA: {qa_status}")
-    except RunCancelled:
-        db.rollback()
-        project = db.get(Project, project_id)
-        if project:
-            project.status = "RUN_CANCELLED"
-            db.commit()
-        mark_run_cancelled(run_id)
-    except Exception as exc:
-        db.rollback()
-        project = db.get(Project, project_id)
-        if project:
-            project.status = "RUN_FAILED"
-            db.commit()
-        mark_run_failed(run_id, str(exc))
-    finally:
-        db.close()
-
-
 @app.post("/projects/{project_id}/run")
 def run_project(project_id: int, db: Session = Depends(get_db)):
     try:
-        return run_full_methodology(db, project_or_404(db, project_id))
+        with cost_context(project_id=project_id, operation="run_full_methodology"):
+            return run_full_methodology(db, project_or_404(db, project_id))
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
 
@@ -436,19 +388,7 @@ def run_project(project_id: int, db: Session = Depends(get_db)):
 @app.post("/projects/{project_id}/run-async", status_code=202)
 def run_project_async(project_id: int, db: Session = Depends(get_db)):
     project_or_404(db, project_id)
-    active = active_run_for_project(project_id)
-    if active:
-        return {"run": active}
-
-    state = create_run(project_id)
-    thread = Thread(
-        target=_run_project_worker,
-        args=(state.run_id, project_id),
-        name=f"report-run-{state.run_id[:8]}",
-        daemon=True,
-    )
-    thread.start()
-    return {"run": run_snapshot(state.run_id)}
+    return {"run": start_run(project_id)}
 
 
 @app.get("/runs/{run_id}")
@@ -557,7 +497,7 @@ def searches(project_id: int, db: Session = Depends(get_db)):
 def collect(project_id: int, db: Session = Depends(get_db)):
     project_or_404(db, project_id)
     try:
-        return {"added": collect_tavily(db, project_id)}
+        return {"added": collect_web(db, project_id)}
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
 
@@ -569,6 +509,15 @@ def add_manual_item(project_id: int, payload: ManualMediaItemCreate, db: Session
     canonical = canonicalize(url)
     if db.scalar(select(MediaItem.id).where(MediaItem.project_id == project_id, MediaItem.canonical_url == canonical)):
         raise HTTPException(409, "URL já existe no corpus")
+    if payload.query_id is not None:
+        query = db.scalar(
+            select(SearchQuery).where(
+                SearchQuery.id == payload.query_id,
+                SearchQuery.project_id == project_id,
+            )
+        )
+        if not query:
+            raise HTTPException(422, "query_id não pertence a este projeto")
     row = MediaItem(
         project_id=project_id,
         title=payload.title,

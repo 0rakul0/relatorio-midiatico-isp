@@ -1,7 +1,7 @@
 from datetime import date
 from types import SimpleNamespace
 
-from app.fact_layer import _resolve_assertions, fact_event_exclusion_reason, normalize_person_name
+from app.fact_layer import resolve_assertions, fact_event_exclusion_reason, normalize_person_name
 from app.report_qa import deterministic_report_qa
 
 
@@ -20,7 +20,7 @@ def test_normalize_person_name():
 
 
 def test_two_independent_sources_confirm_same_value():
-    value, status, conflicts = _resolve_assertions(
+    value, status, conflicts = resolve_assertions(
         "event_date",
         [
             assertion("2026-08-08", "https://a.example/x"),
@@ -33,7 +33,7 @@ def test_two_independent_sources_confirm_same_value():
 
 
 def test_conflicting_dates_are_not_silently_resolved():
-    value, status, conflicts = _resolve_assertions(
+    value, status, conflicts = resolve_assertions(
         "event_date",
         [
             assertion("2026-08-29", "https://a.example/x"),
@@ -46,7 +46,7 @@ def test_conflicting_dates_are_not_silently_resolved():
 
 
 def test_official_source_can_confirm_single_assertion():
-    value, status, _ = _resolve_assertions(
+    value, status, _ = resolve_assertions(
         "institution",
         [assertion("PMERJ", "https://sepm.rj.gov.br/nota", source_type="OFFICIAL")],
     )

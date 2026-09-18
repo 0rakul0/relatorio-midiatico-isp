@@ -1,20 +1,26 @@
 """Monitor de custo e consumo de tokens das chamadas OpenAI.
 
-O registro é feito por chamada HTTP única (cada tentativa de retry/fallback
-vira uma linha em ``llm_calls``), com custo estimado em USD a partir de uma
-tabela de preços local.
+O registro é feito por invocação observada pelo ReportAgent, com custo
+estimado em USD a partir de uma tabela de preços local. Retries internos do
+SDK não são necessariamente observáveis como linhas independentes.
 
 O contexto (projeto/operação/run) é propagado via ``contextvars`` para não
 obrigar cada chamador a repassar esses dados; ``llm.py`` apenas registra o
 que a API devolveu.
 """
 
+import logging
+import time
 from contextvars import ContextVar
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 
+from sqlalchemy.exc import OperationalError
+
 from app.database import SessionLocal
 from app.models import LLMCall
+
+logger = logging.getLogger(__name__)
 
 # Preços por 1M de tokens em USD, conforme tabela oficial da OpenAI
 # (últimos valores conferidos em 2026-09). Modelos sem entrada explícita
@@ -45,8 +51,9 @@ _FALLBACK_MODEL_PRICE = {
     "output": Decimal("0.60"),
 }
 
-# Custo por chamada da ferramenta de Web Search (USD), independente do modelo.
-WEB_SEARCH_CALL_PRICE = Decimal("0.010")  # $10 por 1k chamadas
+# Campo legado. A arquitetura atual não usa OpenAI Web Search; as pesquisas
+# externas são DuckDuckGo/Tavily e não entram no custo da chamada LLM.
+WEB_SEARCH_CALL_PRICE = Decimal("0")
 
 
 def _price_for(model: str) -> dict[str, Decimal]:
@@ -73,10 +80,16 @@ def estimate_cost(
     prices = _price_for(model)
     rate = Decimal("0.10")
 
+    # cached_input_tokens normalmente é um subconjunto de input_tokens.
+    # Portanto, cobramos a parte não cacheada na tarifa cheia e a parte
+    # cacheada na tarifa reduzida, evitando dupla contagem.
+    cached = max(0, min(int(cached_input_tokens), int(input_tokens)))
+    uncached = max(0, int(input_tokens) - cached)
+
     total = Decimal("0")
-    total += prices["input"] * Decimal(input_tokens) / Decimal("1000000")
+    total += prices["input"] * Decimal(uncached) / Decimal("1000000")
+    total += prices["input"] * rate * Decimal(cached) / Decimal("1000000")
     total += prices["output"] * Decimal(output_tokens) / Decimal("1000000")
-    total += prices["input"] * rate * Decimal(cached_input_tokens) / Decimal("1000000")
     total += WEB_SEARCH_CALL_PRICE * Decimal(search_calls)
 
     return float(total.quantize(Decimal("0.000000001"), rounding=ROUND_HALF_UP))
@@ -140,6 +153,11 @@ class cost_context:
             token.var.reset(token)
 
 
+def _is_sqlite_busy(exc: OperationalError) -> bool:
+    message = str(exc).lower()
+    return "locked" in message or "busy" in message
+
+
 def record_llm_call(
     *,
     model: str,
@@ -152,7 +170,13 @@ def record_llm_call(
     cached_input_tokens: int = 0,
     search_calls: int = 0,
 ) -> None:
-    """Persiste um registro de chamada usando o contexto corrente."""
+    """Persiste um registro de chamada usando o contexto corrente.
+
+    A gravação abre uma conexão própria e, sob SQLite multithread, pode colidir
+    com a conexão da execução (``database is locked``). Esse registro é somente
+    telemetria: tentamos por alguns instantes e, se ainda assim falhar, seguimos
+    sem derrubar a pipeline que acabou de gastar tokens na chamada LLM.
+    """
     cost = estimate_cost(
         model,
         input_tokens=input_tokens,
@@ -161,28 +185,38 @@ def record_llm_call(
         search_calls=search_calls,
     )
 
-    record = LLMCall(
-        project_id=_context_project_id.get(),
-        run_id=_context_run_id.get(),
-        operation=_context_operation.get(),
-        schema_name=schema_name or _context_schema_name.get(),
-        caller=caller,
-        model=model,
-        success=success,
-        error=((error or "")[:2000] or None),
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        cached_input_tokens=cached_input_tokens,
-        search_calls=search_calls,
-        cost_usd=cost,
-    )
+    def row() -> LLMCall:
+        return LLMCall(
+            project_id=_context_project_id.get(),
+            run_id=_context_run_id.get(),
+            operation=_context_operation.get(),
+            schema_name=schema_name or _context_schema_name.get(),
+            caller=caller,
+            model=model,
+            success=success,
+            error=((error or "")[:2000] or None),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_input_tokens=cached_input_tokens,
+            search_calls=search_calls,
+            cost_usd=cost,
+        )
 
-    db = SessionLocal()
-    try:
-        db.add(record)
-        db.commit()
-    finally:
-        db.close()
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        db = SessionLocal()
+        try:
+            db.add(row())
+            db.commit()
+            return
+        except OperationalError as exc:
+            db.rollback()
+            if attempt >= max_attempts - 1 or not _is_sqlite_busy(exc):
+                logger.warning("Falha ao gravar custo da chamada LLM (%s): %s", caller, exc)
+                return
+            time.sleep(0.5 * (attempt + 1))
+        finally:
+            db.close()
 
 
 # Conveniência para testes: injeta um "sink" alternativo.

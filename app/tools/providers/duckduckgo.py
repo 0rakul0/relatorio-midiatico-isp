@@ -1,3 +1,10 @@
+"""Adapter do provedor DuckDuckGo (texto, notícias e vídeos).
+
+Fala apenas com o pacote externo ``ddgs``/``duckduckgo_search`` e não conhece
+configuração de aplicação, esquemas nem persistência. Deve ser importado
+exclusivamente por ``app.tools.search``.
+"""
+
 from __future__ import annotations
 
 import random
@@ -72,7 +79,6 @@ def search_text(
     max_results: int = 5,
     region: str = "br-pt",
     safesearch: str = "moderate",
-    timelimit: str | None = None,
     retries: int = 2,
     retry_base_seconds: float = 0.8,
 ) -> list[dict[str, Any]]:
@@ -83,7 +89,6 @@ def search_text(
                 query,
                 region=region,
                 safesearch=safesearch,
-                timelimit=timelimit,
                 max_results=max(1, max_results),
             )
         normalized: list[dict[str, Any]] = []
@@ -113,7 +118,6 @@ def search_news(
     max_results: int = 5,
     region: str = "br-pt",
     safesearch: str = "moderate",
-    timelimit: str | None = None,
     retries: int = 2,
     retry_base_seconds: float = 0.8,
 ) -> list[dict[str, Any]]:
@@ -124,7 +128,6 @@ def search_news(
                 query,
                 region=region,
                 safesearch=safesearch,
-                timelimit=timelimit,
                 max_results=max(1, max_results),
             )
         normalized: list[dict[str, Any]] = []
@@ -154,7 +157,6 @@ def search_videos(
     max_results: int = 5,
     region: str = "br-pt",
     safesearch: str = "moderate",
-    timelimit: str | None = None,
     retries: int = 2,
     retry_base_seconds: float = 0.8,
 ) -> list[dict[str, Any]]:
@@ -165,7 +167,6 @@ def search_videos(
                 query,
                 region=region,
                 safesearch=safesearch,
-                timelimit=timelimit,
                 max_results=max(1, max_results),
             )
         normalized: list[dict[str, Any]] = []

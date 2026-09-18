@@ -8,9 +8,10 @@ from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.llm import llm_is_configured, structured_response
+from app.agent import get_report_agent
+from app.llm import llm_is_configured
+from app.schemas import FactExtractionResponse
 from app.models import FactAssertion, FactEvent, MediaItem, Project, SearchQuery
-from app.prompts import FACT_EXTRACTION_PROMPT
 from app.source_registry import OFFICIAL_SECURITY_SOURCES
 from app.topic_profile import normalized_text
 
@@ -81,56 +82,7 @@ def source_type_for_item(item: MediaItem) -> str:
     return "MEDIA"
 
 
-def _field_schema() -> dict:
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "value": {"type": ["string", "null"]},
-            "evidence": {"type": ["string", "null"]},
-            "basis": {
-                "type": "string",
-                "enum": ["EXPLICIT", "RELATIVE_TO_PUBLICATION", "NOT_PRESENT"],
-            },
-        },
-        "required": ["value", "evidence", "basis"],
-    }
-
-
-def _fact_extraction_schema() -> dict:
-    field = _field_schema()
-    event_properties = {name: field for name in RESOLVABLE_FIELDS}
-    event_properties.update(
-        {
-            "related_to_topic": {"type": "boolean"},
-            "event_type": {"type": "string"},
-            "subject_type": {"type": ["string", "null"]},
-            "relation_reason": {"type": "string"},
-        }
-    )
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "events": {
-                "type": "array",
-                "maxItems": 10,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": event_properties,
-                    "required": [
-                        "related_to_topic",
-                        "event_type",
-                        "subject_type",
-                        "relation_reason",
-                        *RESOLVABLE_FIELDS,
-                    ],
-                },
-            }
-        },
-        "required": ["events"],
-    }
+FACT_EXTRACTION_SCHEMA = FactExtractionResponse
 
 
 def extract_fact_events_from_item(project: Project, item: MediaItem) -> list[dict]:
@@ -153,13 +105,16 @@ def extract_fact_events_from_item(project: Project, item: MediaItem) -> list[dic
             "content": (item.content or "")[: settings.max_fact_source_chars],
         },
     }
-    result = structured_response(
-        instructions=FACT_EXTRACTION_PROMPT
-        + " Datas resolvidas devem ser retornadas em AAAA-MM-DD. "
-        + "related_to_topic só pode ser true quando o próprio texto sustenta relação material com o perfil do tema.",
+    result = get_report_agent().run(
+        task="fact_extraction",
+        extra_instructions=(
+            "Datas resolvidas devem ser retornadas em AAAA-MM-DD. "
+            "related_to_topic só pode ser true quando o próprio texto sustenta "
+            "relação material com o perfil do tema."
+        ),
         payload=payload,
         schema_name="fact_events_from_source",
-        schema=_fact_extraction_schema(),
+        response_model=FACT_EXTRACTION_SCHEMA,
         max_output_tokens=7000,
     )
     return [event for event in result.get("events", []) if event.get("related_to_topic")]
@@ -222,7 +177,7 @@ def _get_or_create_event(db: Session, project: Project, extracted: dict) -> Fact
     provisional_city = (extracted.get("city") or {}).get("value")
     event = FactEvent(
         project_id=project.id,
-        event_type=(extracted.get("event_type") or project.topic_profile.get("event_type") or "OTHER")[:100],
+        event_type=(extracted.get("event_type") or (project.topic_profile or {}).get("event_type") or "OTHER")[:100],
         subject_name=name,
         normalized_subject_name=normalize_person_name(name),
         subject_type=extracted.get("subject_type"),
@@ -381,7 +336,7 @@ def extract_project_facts(
     return {"processed": processed, "events_extracted": events_extracted, "errors": errors}
 
 
-def _resolve_assertions(field_name: str, assertions: list[FactAssertion]) -> tuple[str | None, str, list[str]]:
+def resolve_assertions(field_name: str, assertions: list[FactAssertion]) -> tuple[str | None, str, list[str]]:
     usable = [
         assertion
         for assertion in assertions
@@ -458,7 +413,7 @@ def resolve_event(db: Session, project: Project, event: FactEvent) -> None:
 
     for field_name in RESOLVABLE_FIELDS:
         field_assertions = [a for a in assertions if a.field_name == field_name]
-        value, status, conflicts = _resolve_assertions(field_name, field_assertions)
+        value, status, conflicts = resolve_assertions(field_name, field_assertions)
         field_statuses.append(status)
         if status == "SOURCE_CONFLICT":
             conflict_fields.append(field_name)

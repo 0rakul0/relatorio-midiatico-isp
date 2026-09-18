@@ -335,7 +335,7 @@ def build_pdf(data: dict) -> bytes:
     cross_validation = metrics.get("youtube_cross_validation", {})
     compared = sum(int(cross_validation.get(key, 0) or 0) for key in ("confirmed", "partial", "insufficient", "conflicts"))
     if compared or metrics.get("youtube_conflicts_excluded", 0):
-        story.append(Paragraph("VALIDAÇÃO CRUZADA TAVILY × YOUTUBE", heading))
+        story.append(Paragraph("VALIDAÇÃO CRUZADA TAVILY × DUCKDUCKGO VIDEOS", heading))
         story.append(
             Paragraph(
                 "<b>{confirmed}</b> confirmado(s), <b>{partial}</b> parcialmente confirmado(s), "

@@ -7,35 +7,34 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://relatorio:relatorio@localhost:5432/repercussao"
     tavily_api_key: str | None = None
 
-    # A v2.2 usa somente OpenAI. Mantemos um único modelo configurável.
+    # A arquitetura atual usa somente OpenAI como LLM e um único modelo configurável.
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
-    # YouTube Data API e o terceiro nivel da cadeia de video:
-    # DuckDuckGo -> Tavily -> YouTube Data API.
-    youtube_api_key: str | None = None
+    # A coleta externa usa somente DuckDuckGo e Tavily.
+    # A OpenAI permanece apenas para análise estruturada, classificação, redação e QA.
+    youtube_search_max_results: int = 15
 
-    # Compatibilidade: limite bruto que o provedor pode devolver por tarefa.
-    youtube_web_search_max_results: int = 15
+    # Rodadas máximas em que um agente pode decidir chamar tools opcionais.
+    max_agent_tool_rounds: int = 3
+    agent_search_max_results: int = 5
 
     app_env: str = "development"
     # Limite GLOBAL de novos itens coletados pela etapa web.
-    # Ex.: MAX_SEARCH_RESULTS=30 significa no máximo 30 novos itens no total,
-    # e não 30 itens por consulta.
-    max_search_results: int = 30
+    # Ex.: MAX_SEARCH_RESULTS=250 significa no máximo 250 novos itens no total,
+    # e não 250 itens por consulta. Deve comportar o teto de consultas
+    # (max_search_queries) x (max_results_per_query).
+    max_search_results: int = 250
 
     # Evita uma única consulta consumir todo o orçamento da coleta.
     max_results_per_query: int = 5
 
     # Limita quantas consultas o planejador pode criar/executar na primeira coleta.
     # As consultas prioritárias por portal são preservadas antes das complementares.
-    max_search_queries: int = 12
+    max_search_queries: int = 50
 
     # Quantas consultas complementares a IA pode sugerir dentro do limite acima.
     max_llm_search_queries: int = 4
 
-    # Compatibilidade com .env anterior. O DuckDuckGo agora é o provedor
-    # PRIMÁRIO; a coleta usa MAX_SEARCH_QUERIES como teto de intenções.
-    max_duckduckgo_fallback_queries: int = 0
     duckduckgo_region: str = "br-pt"
     duckduckgo_safesearch: str = "moderate"
     duckduckgo_max_retries: int = 2
@@ -43,11 +42,6 @@ class Settings(BaseSettings):
     duckduckgo_fetch_pages: bool = True
     duckduckgo_fetch_max_chars: int = 12000
     duckduckgo_fetch_timeout_seconds: float = 10.0
-
-    # Orçamento total da descoberta inicial: buscas e análise estruturada do
-    # perfil somadas. Com OpenAI configurada, uma chamada fica reservada para
-    # a análise final e as demais para pesquisa.
-    max_profile_discovery_calls: int = 4
 
     max_fact_source_chars: int = 16000
 

@@ -212,9 +212,9 @@ class GeneratedReport(Base):
 class LLMCall(Base):
     """Registro de custo/consumo de uma chamada única à OpenAI.
 
-    Cada tentativa HTTP é registrada por linha (inclusive tentativas que
-    falharam antes de devolver conteúdo, com tokens zerados), para o monitor
-    refletir o custo real de retries e fallbacks.
+    Cada invocação observada pelo ReportAgent é registrada por linha. Retries
+    internos do SDK podem não aparecer como linhas separadas; o monitor usa
+    o consumo reportado pela resposta disponível.
     """
 
     __tablename__ = "llm_calls"
@@ -230,7 +230,7 @@ class LLMCall(Base):
     operation: Mapped[str | None] = mapped_column(String(80), nullable=True)
     schema_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
-    # Função de origem (structured_response), nome exato do modelo chamado e
+    # Função de origem (ReportAgent), nome exato do modelo chamado e
     # se a chamada produziu conteúdo.
     caller: Mapped[str | None] = mapped_column(String(80), nullable=True)
     model: Mapped[str] = mapped_column(String(120))

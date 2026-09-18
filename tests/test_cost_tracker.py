@@ -3,19 +3,23 @@ from app.cost_tracker import cost_context, emit, estimate_cost, set_record_sink
 
 def test_estimate_cost_uses_model_prices():
     # gpt-5-mini: $0.25/M input, $2.00/M output.
+    # cached_input_tokens (500) é subconjunto de input_tokens (1000):
+    # 500 uncached a tarifa cheia + 500 cached a 10% + 500 output.
     cost = estimate_cost(
         "gpt-5-mini",
         input_tokens=1000,
         output_tokens=500,
         cached_input_tokens=500,
     )
-    expected = 0.0010 * 0.25 + 0.0005 * 2.0 + 0.0005 * 0.1 * 0.25
+    expected = 0.0005 * 0.25 + 0.0005 * 0.1 * 0.25 + 0.0005 * 2.0
     assert abs(cost - expected) < 1e-9
 
 
-def test_estimate_cost_charges_web_search_calls():
+def test_estimate_cost_web_search_not_charged_per_call():
+    # Web Search não é mais cobrado por chamada: DuckDuckGo/Tavily são externos
+    # à chamada LLM e não entram na tabela de preço do modelo.
     cost = estimate_cost("gpt-5-nano", input_tokens=0, output_tokens=0, search_calls=1)
-    assert cost == 0.010
+    assert cost == 0.0
 
 
 def test_estimate_cost_falls_back_to_generic_price_for_unknown_model():

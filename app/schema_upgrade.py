@@ -152,7 +152,8 @@ def ensure_schema() -> None:
             connection.execute(
                 text(
                     "UPDATE projects "
-                    "SET fact_grace_days = 10"
+                    "SET fact_grace_days = 10 "
+                    "WHERE fact_grace_days IS NULL"
                 )
             )
             connection.execute(

@@ -3,9 +3,10 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.llm import llm_is_configured, structured_response
+from app.agent import get_report_agent
+from app.llm import llm_is_configured
+from app.schemas import ReportQAResponse
 from app.models import GeneratedReport, Project
-from app.prompts import QA_PROMPT
 
 
 FORBIDDEN_ZERO_CORPUS_PHRASES = [
@@ -155,27 +156,6 @@ def deterministic_report_qa(payload: dict) -> list[dict]:
 def _llm_qa(payload: dict) -> list[dict]:
     if not llm_is_configured():
         return []
-    schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "findings": {
-                "type": "array",
-                "maxItems": 30,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "severity": {"type": "string", "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]},
-                        "code": {"type": "string"},
-                        "message": {"type": "string"},
-                    },
-                    "required": ["severity", "code", "message"],
-                },
-            }
-        },
-        "required": ["findings"],
-    }
     corpus = payload.get("corpus") or []
     compact = {
         "project": payload.get("project"),
@@ -194,11 +174,11 @@ def _llm_qa(payload: dict) -> list[dict]:
         ],
     }
     try:
-        result = structured_response(
-            instructions=QA_PROMPT,
+        result = get_report_agent().run(
+            task="qa",
             payload=compact,
             schema_name="report_qa",
-            schema=schema,
+            response_model=ReportQAResponse,
             max_output_tokens=3500,
         )
     except RuntimeError as exc:
@@ -209,7 +189,7 @@ def _llm_qa(payload: dict) -> list[dict]:
                 "message": str(exc),
             }
         ]
-    return result.get("findings", [])
+    return list(result.get("findings", []))
 
 
 def run_report_qa(db: Session, project: Project, payload: dict) -> dict:

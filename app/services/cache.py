@@ -1,0 +1,61 @@
+from __future__ import annotations
+
+from datetime import date
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report
+from app.models import GeneratedReport, Project
+from app.services.execution_profile import execution_flags
+from app.services.project_profile import project_payload
+from app.services.metrics import corpus_for_project, metrics, split_corpus
+
+
+def hydrate_cached_report(db: Session, project: Project, generated: GeneratedReport) -> dict:
+    payload = dict(generated.body)
+    payload["project"] = project_payload(project, for_report=True)
+    payload["metrics"] = metrics(db, project.id)
+    payload["corpus"] = corpus_for_project(db, project.id)
+    payload["traditional_corpus"], payload["social_corpus"] = split_corpus(payload["corpus"])
+    _, flags = execution_flags(project)
+    payload["fact_events"] = fact_events_for_main_report(db, project.id) if flags["enable_fact_layer"] else []
+    payload["fact_evidence"] = (
+        fact_assertions_for_report(db, project.id, main_report_only=True)
+        if flags["enable_fact_layer"]
+        else []
+    )
+    payload["qa"] = {"status": generated.qa_status, "findings": generated.qa_findings or []}
+    payload["cached_at"] = generated.generated_at.isoformat() if generated.generated_at else None
+    return payload
+
+
+def cached_report_for_topic(
+    db: Session,
+    topic: str,
+    collection_start: date | None = None,
+    collection_end: date | None = None,
+) -> dict | None:
+    statement = (
+        select(Project, GeneratedReport)
+        .join(GeneratedReport, GeneratedReport.project_id == Project.id)
+        .where(func.lower(Project.topic) == topic.strip().casefold())
+        .order_by(GeneratedReport.generated_at.desc())
+    )
+    if collection_start:
+        statement = statement.where(Project.collection_start == collection_start)
+    if collection_end:
+        statement = statement.where(Project.collection_end == collection_end)
+    row = db.execute(statement).first()
+    return hydrate_cached_report(db, *row) if row else None
+
+
+def cached_report_for_project(db: Session, project_id: int) -> dict | None:
+    row = db.execute(
+        select(Project, GeneratedReport)
+        .join(GeneratedReport, GeneratedReport.project_id == Project.id)
+        .where(Project.id == project_id)
+    ).first()
+    return hydrate_cached_report(db, *row) if row else None
+
+

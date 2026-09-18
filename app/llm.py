@@ -1,6 +1,15 @@
-"""Camada OpenAI sem ferramentas: recebe somente o contexto explicitamente fornecido."""
+"""Infraestrutura mínima de acesso ao modelo.
 
-import json
+Este módulo NÃO contém lógica de agente, prompts ou execução de tools.
+Essas responsabilidades pertencem a ``app.agent``. Aqui ficam apenas:
+- verificação de configuração;
+- criação do ChatOpenAI;
+- leitura de usage metadata;
+- registro de custo/telemetria.
+"""
+
+from __future__ import annotations
+
 from typing import Any
 
 from app.config import get_settings
@@ -11,28 +20,62 @@ def llm_is_configured() -> bool:
     return bool(get_settings().openai_api_key)
 
 
-def _usage_counts(usage: Any) -> dict[str, int]:
-    """Extrai contadores de tokens do objeto ``usage`` da Responses API."""
-    if usage is None:
-        return {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cached_input_tokens": 0,
-        }
-    input_details = getattr(usage, "input_tokens_details", None)
-    cached = 0
-    if input_details is not None:
-        cached = int(getattr(input_details, "cached_tokens", 0) or 0)
+def create_chat_model(*, max_output_tokens: int = 50000):
+    settings = get_settings()
+    if not settings.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY não configurada")
+
+    from langchain_openai import ChatOpenAI
+
+    return ChatOpenAI(
+        api_key=settings.openai_api_key,
+        model=settings.openai_model,
+        temperature=0,
+        max_completion_tokens=max_output_tokens,
+    )
+
+
+def usage_counts(message: Any) -> dict[str, int]:
+    usage = getattr(message, "usage_metadata", None) or {}
+    input_tokens = int(usage.get("input_tokens", 0) or 0)
+    output_tokens = int(usage.get("output_tokens", 0) or 0)
+
+    input_details = usage.get("input_token_details") or {}
+    cached_input_tokens = int(
+        input_details.get("cache_read", 0)
+        or input_details.get("cached_tokens", 0)
+        or 0
+    )
+
+    if not input_tokens and not output_tokens:
+        metadata = getattr(message, "response_metadata", None) or {}
+        token_usage = metadata.get("token_usage") or metadata.get("usage") or {}
+        input_tokens = int(
+            token_usage.get("prompt_tokens", 0)
+            or token_usage.get("input_tokens", 0)
+            or 0
+        )
+        output_tokens = int(
+            token_usage.get("completion_tokens", 0)
+            or token_usage.get("output_tokens", 0)
+            or 0
+        )
+        prompt_details = token_usage.get("prompt_tokens_details") or {}
+        cached_input_tokens = int(
+            prompt_details.get("cached_tokens", 0)
+            or cached_input_tokens
+            or 0
+        )
+
     return {
-        "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
-        "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
-        "cached_input_tokens": cached,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_input_tokens": cached_input_tokens,
     }
 
 
-def _record(
+def record_llm_usage(
     *,
-    model: str,
     caller: str,
     success: bool,
     error: str | None = None,
@@ -40,69 +83,10 @@ def _record(
     **counts: int,
 ) -> None:
     emit(
-        model=model,
+        model=get_settings().openai_model,
         caller=caller,
         success=success,
         error=error,
         schema_name=schema_name,
         **counts,
     )
-
-
-def structured_response(
-    *,
-    instructions: str,
-    payload: dict[str, Any],
-    schema_name: str,
-    schema: dict[str, Any],
-    max_output_tokens: int = 5000,
-) -> dict[str, Any]:
-    """Executa uma resposta estruturada JSON Schema usando exclusivamente OpenAI."""
-    settings = get_settings()
-    model = settings.openai_model
-    if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY não configurada")
-
-    from openai import APIStatusError, OpenAI
-
-    client = OpenAI(api_key=settings.openai_api_key)
-    try:
-        response = client.responses.create(
-            model=model,
-            instructions=instructions,
-            input=json.dumps(payload, ensure_ascii=False),
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": schema_name,
-                    "strict": True,
-                    "schema": schema,
-                }
-            },
-            max_output_tokens=max_output_tokens,
-            store=False,
-        )
-    except APIStatusError as exc:
-        _record(
-            model=model,
-            caller="structured_response",
-            success=False,
-            error=exc.message,
-            schema_name=schema_name,
-        )
-        raise RuntimeError(f"Falha na OpenAI: {exc.message}") from exc
-
-    counts = _usage_counts(getattr(response, "usage", None))
-    if response.output_text:
-        _record(model=model, caller="structured_response", success=True, schema_name=schema_name, **counts)
-    else:
-        _record(
-            model=model,
-            caller="structured_response",
-            success=False,
-            error="resposta sem conteúdo estruturado",
-            schema_name=schema_name,
-            **counts,
-        )
-        raise RuntimeError("A OpenAI não retornou conteúdo estruturado")
-    return json.loads(response.output_text)

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
-from app.source_registry import PRIORITY_MEDIA_SOURCES, PRIORITY_YOUTUBE_CHANNELS
+from app.source_registry import (
+    ISP_INSTITUTION_NAME,
+    PRIORITY_MEDIA_SOURCES,
+    PRIORITY_YOUTUBE_CHANNELS,
+)
+from app.topic_profile import product_anchor_from_name
+from app.year_utils import find_year
 
 
 @dataclass(frozen=True)
@@ -13,6 +18,8 @@ class ScoutTask:
     target: str
     rationale: str
     purpose: str = "MEDIA_REPERCUSSION"
+    # Tarefa de veículo/canal prioritário (target nomeado) vs. busca temática.
+    is_priority: bool = False
 
 
 class MediaScout:
@@ -40,9 +47,7 @@ class MediaScout:
         configured = " ".join((self.profile.get("product_anchor") or "").split()).strip()
         if configured:
             return configured
-        without_year = re.sub(r"\b20\d{2}\b", "", self.product_name).strip()
-        without_year = " ".join(without_year.split())
-        return without_year or self.product_name
+        return product_anchor_from_name(self.product_name) or self.product_name
 
     @staticmethod
     def _quote(value: str) -> str:
@@ -58,8 +63,7 @@ class MediaScout:
         if not variants:
             variants = [self.product_name, self._product_anchor()]
 
-        year_match = re.search(r"\b(20\d{2})\b", self.product_name)
-        year = year_match.group(1) if year_match else ""
+        year = find_year(self.product_name) or ""
         anchor = self._product_anchor()
 
         bases: list[str] = []
@@ -73,7 +77,7 @@ class MediaScout:
             bases.append(query.strip())
 
         if anchor:
-            bases.append(f'{self._quote(anchor)} "Instituto de Seguranca Publica"'.strip())
+            bases.append(f'{self._quote(anchor)} "{ISP_INSTITUTION_NAME}"'.strip())
 
         return list(dict.fromkeys(base for base in bases if base))[:3]
 
@@ -95,8 +99,7 @@ class MediaScout:
             if str(value).strip()
         ]
         location = next((value for value in locations if len(value) > 2), "")
-        year_match = re.search(r"\b(20\d{2})\b", self.topic)
-        year = year_match.group(1) if year_match else ""
+        year = find_year(self.topic) or ""
 
         bases: list[str] = []
         for variant in variants[:4]:
@@ -136,8 +139,7 @@ class MediaScout:
             return bases[1] if len(bases) > 1 else bases[0]
 
         anchor = self._product_anchor()
-        year_match = re.search(r"\b(20\d{2})\b", self.product_name)
-        year = year_match.group(1) if year_match else ""
+        year = find_year(self.product_name) or ""
         return f'{self._quote(anchor)} {year}'.strip()
 
     def web_tasks(self) -> list[ScoutTask]:
@@ -160,6 +162,7 @@ class MediaScout:
                     f"site:{domain} {vehicle_base}",
                     label,
                     f"Verificar cobertura no portal {label} mantendo a ancora do objeto monitorado.",
+                    is_priority=True,
                 )
             )
 
@@ -187,6 +190,7 @@ class MediaScout:
                 f"{compact} {channel_query}",
                 label,
                 f"Verificar cobertura no canal {label} mantendo a ancora do objeto monitorado.",
+                is_priority=True,
             )
             for label, channel_query in PRIORITY_YOUTUBE_CHANNELS
         )

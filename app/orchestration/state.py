@@ -1,3 +1,10 @@
+"""Registro de estado das execuções (progresso, estágios e cancelamento).
+
+Este módulo não executa nada: apenas mantém em memória o ``RunState`` de cada
+run, expõe os estágios declarados em ``RUN_STAGES`` e implementa o cancelamento
+cooperativo. Quem efetivamente dispara a pipeline é ``orchestration.executor``.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -11,7 +18,7 @@ RUN_STAGES = [
     ("search_plan", "Planejamento de buscas"),
     ("collection", "Coleta em sites"),
     ("youtube", "Coleta no YouTube"),
-    ("cross_validation", "Validação cruzada Tavily × YouTube"),
+    ("cross_validation", "Validação cruzada Tavily × DuckDuckGo Videos"),
     ("facts_pass_1", "Extração factual - 1ª passagem"),
     ("fact_resolution_1", "Consolidação factual - 1ª passagem"),
     ("nominal_plan", "Planejamento de buscas nominais"),

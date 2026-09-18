@@ -5,8 +5,10 @@ import unicodedata
 from calendar import monthrange
 from datetime import date
 
-from app.llm import llm_is_configured, structured_response
-from app.prompts import TOPIC_PROFILE_PROMPT
+from app.agent import get_report_agent
+from app.llm import llm_is_configured
+from app.schemas import TopicProfileResponse
+from app.year_utils import find_years, strip_year
 
 
 MONTHS_PT = {
@@ -61,7 +63,7 @@ def normalized_terms(text: str) -> set[str]:
 
 def requested_month_window(topic: str) -> tuple[date, date] | None:
     normalized = normalized_text(topic)
-    pattern = re.compile(r"\b(" + "|".join(MONTHS_PT) + r")\s+(?:de\s+)?(20\d{2})\b")
+    pattern = re.compile(r"\b(" + "|".join(MONTHS_PT) + r")\s+(?:de\s+)?(20\d{2})(?!\d)")
     matches: list[tuple[int, int]] = []
     for match in pattern.finditer(normalized):
         month_name, year_text = match.groups()
@@ -89,7 +91,7 @@ def requested_year_window(topic: str) -> tuple[date, date] | None:
     automaticamente uma janela anual só porque contém um ano.
     """
     normalized = normalized_text(topic)
-    years = {int(year) for year in re.findall(r"(?<!\d)(20\d{2})(?!\d)", normalized)}
+    years = {int(year) for year in find_years(normalized)}
     if len(years) != 1:
         return None
     year = years.pop()
@@ -139,8 +141,7 @@ def product_anchor_from_name(product_name: str | None) -> str | None:
     name = _clean_phrase(product_name)
     if not name:
         return None
-    no_year = re.sub(r"\b20\d{2}\b", "", name)
-    no_year = _clean_phrase(no_year)
+    no_year = strip_year(name)
     return no_year or name
 
 
@@ -305,60 +306,12 @@ def build_topic_profile(topic: str) -> dict:
     if not llm_is_configured():
         return fallback
 
-    schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "project_type": {
-                "type": "string",
-                "enum": ["INSTITUTIONAL_PRODUCT", "EVENT_TOPIC", "GENERAL_TOPIC"],
-            },
-            "product_name": {"type": ["string", "null"]},
-            "product_anchor": {"type": ["string", "null"]},
-            "product_search_variants": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
-            "subject_terms": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
-            "event_type": {"type": "string"},
-            "event_anchor": {"type": ["string", "null"]},
-            "event_search_variants": {"type": "array", "items": {"type": "string"}, "maxItems": 12},
-            "fact_discovery_variants": {"type": "array", "items": {"type": "string"}, "maxItems": 16},
-            "actors": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
-            "actions": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
-            "locations": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
-            "organizations": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
-            "search_synonyms": {"type": "array", "items": {"type": "string"}, "maxItems": 30},
-            "requested_fact_fields": {"type": "array", "items": {"type": "string"}, "maxItems": 30},
-            "inclusion_rules": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "professional_status": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
-                    "notes": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
-                },
-                "required": ["professional_status", "notes"],
-            },
-            "exclusion_rules": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "professional_status": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
-                    "notes": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
-                },
-                "required": ["professional_status", "notes"],
-            },
-        },
-        "required": [
-            "project_type", "product_name", "product_anchor", "product_search_variants", "subject_terms",
-            "event_type", "event_anchor", "event_search_variants", "fact_discovery_variants",
-            "actors", "actions", "locations", "organizations", "search_synonyms",
-            "requested_fact_fields", "inclusion_rules", "exclusion_rules",
-        ],
-    }
     try:
-        result = structured_response(
-            instructions=TOPIC_PROFILE_PROMPT,
+        result = get_report_agent().run(
+            task="topic_profile",
             payload={"topic": topic},
             schema_name="topic_profile_v2",
-            schema=schema,
+            response_model=TopicProfileResponse,
         )
     except RuntimeError:
         return fallback
