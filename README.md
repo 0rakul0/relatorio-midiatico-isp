@@ -26,9 +26,9 @@ Planejamento de consultas
 ReportAgent
   ↓
 Tools de pesquisa
-  ↓
-DuckDuckGo → Tavily
-  ↓
+   ↓
+DuckDuckGo (provedor único)
+   ↓
 Persistência e auditoria
   ↓
 Validação do corpus
@@ -73,7 +73,7 @@ A arquitetura segue uma regra central:
 
 > Toda pesquisa externa deve ser solicitada pelo `ReportAgent` através de uma tool.
 
-Services não acessam diretamente DuckDuckGo ou Tavily.
+Services não acessam diretamente o DuckDuckGo.
 
 O fluxo permitido é:
 
@@ -91,69 +91,243 @@ Não deve existir:
 
 ```text
 SERVICE → DuckDuckGo
-SERVICE → Tavily
 SERVICE → provider
 SERVICE → tool.invoke()
 ```
 
-A execução das tools acontece dentro do agente.
+A execução das tools acontece dentro do agente (`app/agent.py:354`).
 
----
+## Visão em camadas
+
+```mermaid
+flowchart TB
+    subgraph UI[Interface]
+        Static["app/static<br/>index.html / app.js"]
+    end
+
+    subgraph API[API - app/main.py]
+        FastAPI["FastAPI<br/>/projects /run-async /runs/{id}<br/>/facts /reports /costs /export.pdf"]
+    end
+
+    subgraph ORCH[Orquestração - app/orchestration/]
+        Executor["executor.py<br/>start_run() + Thread worker"]
+        State["state.py<br/>stages + cancel cooperativo"]
+        ReportRunDB[("ReportRun<br/>status persistido")]
+    end
+
+    subgraph PIPE[Pipeline - app/services/pipeline.py]
+        Pipeline["run_full_methodology()<br/>13 stages"]
+    end
+
+    subgraph SVC[Services determinísticos]
+        Profile["project_profile.py<br/>topic_profile.py"]
+        Plan["search_planning.py<br/>execution_profile.py"]
+        Collect["collection/<br/>web.py youtube.py<br/>orchestrator.py guards.py<br/>persist.py common.py"]
+        Validate["news_validation.py<br/>validation.py<br/>article_hydration.py"]
+        Facts["fact_layer.py"]
+        Classify["classification.py<br/>metrics.py"]
+        Write["reporting.py<br/>report_qa.py<br/>pdf_report.py"]
+        Cache["cache.py<br/>corpus_reuse.py"]
+    end
+
+    subgraph AGENT[Um único agente - app/agent.py]
+        ReportAgent["ReportAgent<br/>12 tasks: topic_profile,<br/>documentalist, collector,<br/>classification, report_writer, qa..."]
+    end
+
+    subgraph TOOLS[Tools - app/tools/]
+        Registry["registry.py<br/>build_agent_tools()"]
+        SearchTools["search.py / hydration.py<br/>pesquisar_internet<br/>pesquisar_videos<br/>executar_buscas_web/videos<br/>hidratar_artigos"]
+    end
+
+    subgraph PROV[Providers - app/tools/providers/]
+        DDG["duckduckgo.py<br/>web + videos (provedor único)"]
+    end
+
+    subgraph DATA[Persistência - app/models.py]
+        DB[("PostgreSQL 16 / SQLite<br/>Project SearchQuery SearchCall<br/>SearchHit MediaItem FactEvent<br/>FactAssertion Classification<br/>GeneratedReport LLMCall<br/>CorpusDocument")]
+    end
+
+    subgraph LLM[LLM - app/llm.py]
+        OpenAI["OpenAI gpt-4.1-mini<br/>+ cost_tracker.py"]
+    end
+
+    Static --> FastAPI
+    FastAPI --> Executor
+    Executor --> State
+    State --> ReportRunDB
+    Executor --> Pipeline
+    Pipeline --> SVC
+    SVC --> ReportAgent
+    ReportAgent --> Registry
+    Registry --> SearchTools
+    SearchTools --> DDG
+    SVC --> DB
+    ReportAgent --> OpenAI
+    ReportAgent --> DB
+```
+
+Em texto:
+
+```text
+app/static (dashboard)
+   ↓ HTTP
+app/main.py (FastAPI)
+   ↓ start_run(project_id)
+app/orchestration/executor.py (Thread) + state.py (stages/cancel)
+   ↓ run_full_methodology()
+app/services/pipeline.py (13 stages, perfil → QA)
+   ↓ prepara contexto / sinks / observers
+app/agent.py (ReportAgent.run task + payload + schema Pydantic)
+   ↓ llm.bind_tools() — a LLM decide se chama
+app/tools/registry.py → search.py / hydration.py
+   ↓
+app/tools/providers/duckduckgo.py (provedor único)
+   ↓ SearchHit / MediaItem / SearchCall / LLMCall
+PostgreSQL (app/models.py) + PDF/QA
+```
+
+## Ciclo de vida de uma execução assíncrona
+
+```mermaid
+sequenceDiagram
+    participant UI as Dashboard
+    participant API as main.py
+    participant EXE as orchestration/executor
+    participant PIPE as services/pipeline
+    participant AG as ReportAgent
+    participant TOOL as Tool + Provider
+    participant DB as Postgres
+
+    UI->>API: POST /projects (tema + janelas)
+    API->>DB: Project(DRAFT/CUSTOM_DATES)
+    UI->>API: POST /projects/{id}/run-async
+    API->>EXE: start_run(project_id)
+    EXE->>DB: ReportRun(PENDING→RUNNING)
+    EXE->>PIPE: run_full_methodology(progress_callback, cancel_check)
+    PIPE->>AG: topic_profile / documentalist / report_planner
+    AG->>DB: Project.topic_profile + execution_plan
+    PIPE->>AG: collector (executar_buscas_web/videos)
+    AG->>TOOL: 1 chamada bulk com plano completo
+    TOOL->>DB: SearchCall + SearchHit + MediaItem + SearchQuery status
+    PIPE->>AG: article_hydrator + media_relevance + fact_extraction...
+    AG->>DB: MediaItem validado + FactEvent/Assertion + Classification
+    PIPE->>AG: report_writer (sem tools) + qa (sem tools)
+    AG->>DB: GeneratedReport + LLMCall (custos)
+    EXE->>DB: ReportRun(DONE/FAILED/CANCELLED)
+    UI->>API: GET /runs/{run_id} (poll stages + costs)
+    UI->>API: GET /projects/{id}/export.pdf
+```
+
+Cancelamento é cooperativo (`POST /runs/{id}/cancel`): o worker checa `check_cancelled()` entre stages e preserva o que já foi persistido para auditoria.
+
+## Pipeline — os 13 stages (`app/services/pipeline.py:24`)
+
+```mermaid
+flowchart LR
+    P["profile<br/>descobre tipo:<br/>INSTITUTIONAL/<br/>EVENT/GENERAL"] --> SP["search_plan<br/>corpus_reuse +<br/>report_planner"]
+    SP --> C["collection<br/>web leve:<br/>hits brutos"] --> Y["youtube<br/>DDG Videos"]
+    Y --> XV["cross_validation<br/>só se YouTube on"]
+    XV --> V["validation<br/>hydrate +<br/>media_relevance"]
+    V --> F1["facts_pass_1<br/>extract"] --> R1["fact_resolution_1<br/>CONFIRMED/CONFLICT"]
+    R1 --> NP["nominal_plan"] --> NC["nominal_collection<br/>2ª coleta"]
+    NC --> F2["facts_pass_2"] --> R2["fact_resolution_2"]
+    R2 --> CL["classification<br/>tema/tom/fidelidade"] --> RP["report<br/>sem tools"] --> QA["qa<br/>determinístico+LLM"]
+```
+
+Stages opcionais recebem `SKIPPED` com razão auditável quando o plano (`execution_plan.processes`) desabilita `youtube_collection`, `fact_extraction`, `nominal_followup`, etc. Ver `app/services/execution_profile.py`.
+
+## Modelo de dados simplificado (`app/models.py`)
+
+```mermaid
+erDiagram
+    Project ||--o{ SearchQuery : planeja
+    Project ||--o{ MediaItem : contém
+    Project ||--o{ FactEvent : estrutura
+    Project ||--o{ GeneratedReport : gera
+    Project ||--o{ ReportRun : executa
+    SearchQuery ||--o{ SearchCall : audita
+    SearchQuery ||--o{ SearchHit : retorna
+    SearchHit }o--|| MediaItem : consolida-por-URL
+    MediaItem ||--o{ Classification : classifica
+    MediaItem ||--o{ FactAssertion : sustenta
+    FactEvent ||--o{ FactAssertion : possui
+    CorpusDocument ||--o{ ProjectCorpusLink : reutiliza
+    ProjectCorpusLink }o--|| MediaItem : vincula
+    Project ||--o{ LLMCall : custa
+```
+
+Principais tabelas: `projects`, `search_queries`, `search_calls`, `search_hits` (bruto imutável + `technical_flags`), `media_items` (consolidado por `canonical_url`), `corpus_documents` (reuso histórico global), `fact_events` + `fact_assertions`, `classifications`, `generated_reports` (snapshot imutável), `report_runs`, `llm_calls`.
 
 ## Estrutura principal
 
 ```text
 app/
-├── agent.py
-├── llm.py
-├── schemas.py
-├── config.py
-├── models.py
+├── main.py                 # FastAPI: projects, run/run-async, facts, reports, costs, PDF
+├── agent.py                # ReportAgent único (12 tasks, bind_tools, saída Pydantic)
+├── llm.py + cost_tracker.py# criação do chat model + registro LLMCall (tokens/custo)
+├── schemas.py              # contratos Pydantic das tasks do agente
+├── config.py               # Settings (limites de busca, lotes LLM, YouTube, corpus reuse)
+├── models.py               # SQLAlchemy: Project, SearchQuery/Call/Hit, MediaItem, Facts...
+├── database.py             # Session/engine (Postgres + SQLite dev)
 │
 ├── tools/
-│   ├── __init__.py
-│   ├── registry.py
-│   ├── search.py
+│   ├── registry.py         # build_agent_tools(enable_web/video/article_fetch, bulk)
+│   ├── search.py           # pesquisar_internet/videos + executar_buscas_web/videos (lote)
+│   ├── hydration.py        # hidratar_artigos (fetch paralelo com anti-SSRF)
 │   └── providers/
-│       ├── duckduckgo.py
-│       └── tavily.py
+│       └── duckduckgo.py   # provedor único (web + videos)
 │
 ├── services/
-│   ├── execution_profile.py
-│   ├── project_profile.py
-│   ├── search_planning.py
-│   ├── validation.py
-│   ├── classification.py
-│   ├── reporting.py
-│   ├── metrics.py
-│   ├── cache.py
-│   ├── pipeline.py
+│   ├── pipeline.py         # run_full_methodology() — orquestra os 13 stages
+│   ├── project_profile.py  # discover_project_profile() (topic_profile + documentalist)
+│   ├── search_planning.py  # plan_report_with_llm() + plan_queries()
+│   ├── execution_profile.py# AUTO → MIDIATICO_SIMPLES / COM_FATOS / COMPLETO_NOMINAL
+│   ├── corpus_reuse.py     # reuse_prior_corpus() — reaproveita CorpusDocument
+│   ├── article_hydration.py# hydrate_media_items() — corpo completo p/ validação
+│   ├── news_validation.py  # validate_news_stage() — triagem media_relevance
+│   ├── validation.py       # validate_and_classify() + validação cruzada de vídeo
+│   ├── classification.py   # classify_with_llm() — tema/enquadramento/tom
+│   ├── reporting.py        # draft_report_with_llm() + export_report_pdf()
+│   ├── metrics.py          # agregações p/ redação e dashboard
+│   ├── cache.py            # cached_report_for_* (snapshot, sem recalcular)
 │   │
 │   └── collection/
-│       ├── common.py
-│       ├── guards.py
-│       ├── orchestrator.py
-│       ├── persist.py
-│       ├── web.py
-│       ├── youtube.py
+│       ├── orchestrator.py # collect_media_sources() — web + youtube
+│       ├── web.py          # collect_web() via agente collector
+│       ├── youtube.py      # coleta de vídeos (DDG Videos)
+│       ├── guards.py       # regras determinísticas (âncora, janela, domínio, dedup)
+│       ├── persist.py      # SearchHit → MediaItem + proveniência + media_origin
+│       ├── media_origin.py # PORTAL_NOTICIAS / REDE_SOCIAL / YOUTUBE
+│       ├── common.py       # canonicalize(), query_window()
 │       └── youtube_helpers.py
 │
 ├── orchestration/
-│   ├── state.py
-│   └── executor.py
+│   ├── executor.py         # start_run() — Thread worker + cost_context
+│   └── state.py            # stages PENDING/RUNNING/DONE/SKIPPED/FAILED/CANCELLED
 │
-├── fact_layer.py
-├── topic_profile.py
-├── media_scout.py
-├── report_qa.py
-├── pdf_report.py
-├── schema_upgrade.py
+├── fact_layer.py           # extract/resolve_project_facts(), plan_nominal_followups()
+├── topic_profile.py        # janelas event_* vs collection_*, âncoras nominais
+├── media_scout.py          # descoberta complementar de mídia
+├── report_qa.py            # QA determinístico + LLM (CRITICAL/HIGH/MEDIUM/LOW)
+├── pdf_report.py           # PDF oficial (só se aprovado) vs rascunho
+├── schema_upgrade.py       # ensure_schema() — migração aditiva (futuro: Alembic)
 │
 └── static/
     ├── index.html
     ├── app.js
     └── styles.css
 ```
+
+| Camada | Pasta | Papel | Não pode fazer |
+|---|---|---|---|
+| API | `app/main.py`, `app/static/` | HTTP, validação de entrada, `cost_context` | chamar provider direto |
+| Orquestração | `app/orchestration/` | threads, stages, cancel | chamar LLM/provider |
+| Metodologia | `app/services/pipeline.py` | ordem dos stages, flags do plano | chamar `tool.invoke()` |
+| Inteligência | `app/agent.py` | único lugar com `bind_tools` + prompts por task | acessar DB direto |
+| Acesso externo | `app/tools/` | tools + `SearchSink/Observer` + SSRF guard | decidir metodologia |
+| Prova | `app/tools/providers/` | SDK DDG isolado | ser chamado por service |
+| Prova factual | `app/fact_layer.py`, `app/report_qa.py` | regras `CONFIRMED/CONFLICT`, QA | inventar datas |
+| Dados | `app/models.py`, `database.py` | proveniência, snapshots, custos | pesquisa externa |
 
 ---
 
@@ -277,64 +451,41 @@ Os SDKs externos ficam isolados em:
 app/tools/providers/
 ```
 
+O DuckDuckGo (`ddgs`) é o provedor único de pesquisa externa, para web
+(`News` → `Text`) e para vídeos (`Videos`).
+
 ## Pesquisa web
 
-Prioridade:
-
 ```text
-DuckDuckGo
+DuckDuckGo News
     ↓
-resultado utilizável?
-    ├── sim → encerra
-    └── não
-         ↓
-      Tavily
+sem resultado?
+    ↓
+DuckDuckGo Text
 ```
-
-O DuckDuckGo é sempre o provedor principal.
-
-Tavily atua como fallback.
-
----
 
 ## Pesquisa de vídeos
 
-A busca de vídeos utiliza:
-
-```text
-DuckDuckGo Videos
-        ↓
-resultado utilizável?
-        ├── sim → encerra
-        └── não
-             ↓
-          Tavily
-```
-
-O Tavily é restringido a resultados compatíveis com YouTube quando utilizado nessa camada.
+A busca de vídeos utiliza `DuckDuckGo Videos`.
 
 A aplicação **não utiliza YouTube Data API**.
 
 ---
 
-# Circuit breaker do Tavily
+# Origem da mídia (portal / redes / YouTube)
 
-Falhas graves do Tavily, como problemas de quota ou rate limit, abrem um circuit breaker.
-
-Exemplos:
+Todo link capturado recebe um `media_origin` determinístico em
+`SearchHit`/`MediaItem` (`app/services/collection/media_origin.py`):
 
 ```text
-429
-quota exceeded
-usage limit
-rate limit
+YOUTUBE         → youtube.com / youtu.be
+REDE_SOCIAL     → facebook, instagram, x, tiktok, threads, linkedin...
+PORTAL_NOTICIAS → todo o restante (portais, blogs, sites institucionais)
 ```
 
-Após a abertura do breaker, novas tentativas de Tavily na execução são evitadas e o sistema continua priorizando DuckDuckGo.
-
-O estado e os contadores do breaker também são incorporados às estatísticas da coleta.
-
----
+A classificação acontece na persistência (`persist.py`), nunca descarta o
+item e alimenta `metrics.media_origin_counts`, `corpus_by_origin`
+(`portal_noticias` / `redes_sociais` / `youtube`) e o snapshot do relatório.
 
 # Auditoria das pesquisas
 
@@ -997,34 +1148,34 @@ Também existe suporte de desenvolvimento com SQLite.
 
 ---
 
-## Criar ambiente
+## Criar ambiente e instalar dependências (recomendado, `uv`)
 
 No PowerShell:
 
 ```powershell
+uv sync
+```
+
+Isso cria `.venv` e instala as dependências de `pyproject.toml` + `uv.lock`.
+Para incluir as dependências de desenvolvimento (pytest):
+
+```powershell
+uv sync --group dev
+```
+
+Comandos passam a rodar no env do projeto:
+
+```powershell
+uv run --group dev pytest
+uv run uvicorn app.main:app --reload
+```
+
+Alternativa sem `uv`:
+
+```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-```
-
-Ou utilizando `uv`:
-
-```powershell
-uv venv
-.\.venv\Scripts\Activate.ps1
-```
-
----
-
-## Instalar dependências
-
-```powershell
 pip install -r requirements.txt
-```
-
-ou:
-
-```powershell
-uv pip install -r requirements.txt
 ```
 
 ---
@@ -1056,13 +1207,9 @@ DATABASE_URL=postgresql+psycopg://relatorio:relatorio@localhost:5432/repercussao
 
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4.1-mini
-
-TAVILY_API_KEY=
 ```
 
-DuckDuckGo não exige chave.
-
-Tavily é opcional e atua como fallback.
+DuckDuckGo não exige chave e é o provedor único de pesquisa externa.
 
 ---
 
@@ -1074,6 +1221,12 @@ Exemplo:
 MAX_SEARCH_RESULTS=250
 MAX_SEARCH_QUERIES=50
 MAX_RESULTS_PER_QUERY=5
+
+# Teto de custo LLM: maximo de URLs NOVAS consolidadas por projeto.
+# Hits excedentes viram SearchHit com flag OVER_NEW_ITEM_BUDGET
+# (auditoria preservada, sem seguir para validacao/classificacao).
+# Itens REUSED do historico nao consomem esse teto.
+MAX_NEW_MEDIA_ITEMS=40
 
 MAX_FACT_SOURCE_CHARS=16000
 
@@ -1301,8 +1454,8 @@ Os testes atuais cobrem áreas como:
 coleta executada pelo agente
 busca em lote
 auditoria de consultas
-fallback de providers
-circuit breaker Tavily
+provedor único DuckDuckGo
+separação portal/redes/YouTube
 segurança SSRF
 perfil temático
 janelas temporais
@@ -1350,13 +1503,12 @@ Provider
 
 ---
 
-## 2. DuckDuckGo primeiro
+## 2. DuckDuckGo como provedor único
 
 ```text
-DuckDuckGo → Tavily
+DuckDuckGo News → DuckDuckGo Text
+DuckDuckGo Videos
 ```
-
-Tavily é fallback.
 
 ---
 
@@ -1430,12 +1582,10 @@ possuem validações determinísticas.
 
 A arquitetura atual já implementa o núcleo do MVP auditável, mas ainda existem melhorias planejadas:
 
-* circuit breaker do Tavily isolado por execução;
 * bloqueio transacional de runs simultâneos em múltiplos workers;
 * recuperação ou marcação de runs interrompidos após restart;
 * auditoria `SearchCall` também para buscas opcionais do documentalista;
 * política rígida de consultas permitidas nas tools;
-* validação mais forte de canal prioritário em fallback Tavily;
 * versionamento real de múltiplos relatórios para o mesmo projeto;
 * fingerprint completo para cache;
 * exposição da auditoria de buscas na interface;

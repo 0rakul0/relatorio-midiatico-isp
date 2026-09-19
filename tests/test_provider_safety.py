@@ -29,26 +29,15 @@ def test_ssrf_allows_public_ip():
     assert _url_is_public("https://1.1.1.1/path") is True
 
 
-def test_tavily_circuit_breaker_opens_on_hard_failure(monkeypatch):
-    tools_search.reset_tavily_circuit_breaker()
-    calls = {"count": 0}
+def test_duckduckgo_only_provider_without_fallback(monkeypatch):
+    monkeypatch.setattr(tools_search, "duckduckgo_news", lambda *_a, **_k: [])
+    monkeypatch.setattr(tools_search, "duckduckgo_text", lambda *_a, **_k: [])
+    monkeypatch.setattr(tools_search, "duckduckgo_videos", lambda *_a, **_k: [])
 
-    def fake_tavily(*_args, **_kwargs):
-        calls["count"] += 1
-        raise RuntimeError("usage limit exceeded")
+    provider, rows = tools_search._search_web("consulta")
+    assert (provider, rows) == ("duckduckgo", [])
 
-    monkeypatch.setattr(tools_search, "tavily_search", fake_tavily)
-    try:
-        provider, rows = tools_search._search_web("consulta", providers=("tavily",))
-        assert (provider, rows) == ("none", [])
-        assert tools_search.tavily_is_disabled() is True
-        assert calls["count"] == 1
+    provider, rows = tools_search._search_videos("consulta")
+    assert (provider, rows) == ("duckduckgo", [])
 
-        # Depois de aberto, o breaker impede novas tentativas.
-        tools_search._search_web("outra consulta", providers=("tavily",))
-        assert calls["count"] == 1
-        snapshot = tools_search.tavily_circuit_breaker_snapshot()
-        assert snapshot["trips"] == 1
-        assert snapshot["hard_failures"] == 1
-    finally:
-        tools_search.reset_tavily_circuit_breaker()
+    assert tools_search.search_providers_available() == tools_search.duckduckgo_available()

@@ -22,8 +22,6 @@ def _new_video_counters() -> dict[str, int]:
         "tasks_failed": 0,
         "duckduckgo_attempts": 0,
         "duckduckgo_added": 0,
-        "tavily_attempts": 0,
-        "tavily_added": 0,
     }
 
 
@@ -57,7 +55,6 @@ def _web_result(state: CollectionState) -> dict[str, object]:
         "error": None,
         "provider": _providers_label(
             ("duckduckgo", int(counters.get("duckduckgo_queries", 0)) > 0),
-            ("tavily", int(counters.get("tavily_queries", 0)) > 0),
         ),
         "stats": counters,
     }
@@ -90,7 +87,6 @@ def _video_result(state: CollectionState | None) -> dict[str, object]:
         "error": None,
         "provider": _providers_label(
             ("duckduckgo_video", int(counters.get("duckduckgo_attempts", 0)) > 0),
-            ("tavily", int(counters.get("tavily_attempts", 0)) > 0),
         ),
         "stats": counters,
     }

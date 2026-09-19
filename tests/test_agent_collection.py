@@ -76,10 +76,10 @@ class _FakeAgent:
 
 
 def _patch_search(monkeypatch, session_factory, fake_agent):
-    def fake_search_web(query, *, providers=("duckduckgo", "tavily"), **_kwargs):
+    def fake_search_web(query, *, providers=("duckduckgo",), **_kwargs):
         return "duckduckgo", [_web_row()]
 
-    def fake_search_videos(query, *, providers=("duckduckgo", "tavily"), **_kwargs):
+    def fake_search_videos(query, *, providers=("duckduckgo",), **_kwargs):
         if "duckduckgo" in providers:
             return "duckduckgo", [_video_row()]
         return "none", []
@@ -87,7 +87,7 @@ def _patch_search(monkeypatch, session_factory, fake_agent):
     monkeypatch.setattr(orchestrator, "SessionLocal", session_factory)
     monkeypatch.setattr(orchestrator, "get_report_agent", lambda: fake_agent)
     monkeypatch.setattr(
-        orchestrator, "get_settings", lambda: Settings(tavily_api_key=None)
+        orchestrator, "get_settings", lambda: Settings()
     )
     monkeypatch.setattr(orchestrator, "search_providers_available", lambda: True)
     monkeypatch.setattr(collection_web, "search_providers_available", lambda: True)

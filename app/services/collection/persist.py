@@ -7,8 +7,7 @@ single ``MediaItem`` per canonical URL so downstream LLM stages do not pay to
 process the same article repeatedly.
 
 Technical checks may add flags and may decide whether a provider result is
-usable to stop the DuckDuckGo -> Tavily fallback, but they never delete the raw
-hit from the audit trail.
+usable, but they never delete the raw hit from the audit trail.
 """
 
 from __future__ import annotations
@@ -20,6 +19,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.cost_tracker import current_run_id
 from app.models import MediaItem, Project, SearchHit, SearchQuery
 from app.services.collection.common import (
@@ -30,6 +30,7 @@ from app.services.collection.common import (
     result_publication_date,
 )
 from app.services.collection.guards import collection_guard
+from app.services.collection.media_origin import PORTAL_NOTICIAS, classify_media_origin
 from app.services.collection.youtube_helpers import (
     is_youtube_url,
     matches_priority_youtube_channel,
@@ -43,6 +44,7 @@ _HARD_USABILITY_FLAGS = {
     "PRIORITY_CHANNEL_MISMATCH",
     "OUTSIDE_COLLECTION_WINDOW",
     "COLLECTION_GUARD_MISMATCH",
+    "OVER_NEW_ITEM_BUDGET",
 }
 
 
@@ -75,6 +77,22 @@ def _provider_usable(flags: list[str]) -> bool:
     return not _HARD_USABILITY_FLAGS.intersection(flags)
 
 
+def _new_item_budget(existing_items: dict[str, MediaItem]) -> tuple[int, int]:
+    """Return ``(remaining, cap)`` for NEW search items in this project.
+
+    Only items consolidated from search (``corpus_origin == "SEARCH"``)
+    consume the budget. Duplicates of an already consolidated URL and items
+    reused from the historical corpus (``"REUSED"``) are exempt.
+    """
+    cap = max(1, int(get_settings().max_new_media_items))
+    used = sum(
+        1
+        for item in existing_items.values()
+        if (item.corpus_origin or "SEARCH") == "SEARCH"
+    )
+    return max(0, cap - used), cap
+
+
 def _persist_search_hit(
     db: Session,
     *,
@@ -91,6 +109,7 @@ def _persist_search_hit(
     media_item_id: int | None,
     target: str | None = None,
     view_count: int | None = None,
+    media_origin: str = PORTAL_NOTICIAS,
 ) -> SearchHit:
     hit = SearchHit(
         project_id=project.id,
@@ -99,6 +118,7 @@ def _persist_search_hit(
         media_item_id=media_item_id,
         provider=provider,
         purpose=purpose,
+        media_origin=media_origin,
         query=query.query if query else None,
         target=target,
         title=str(row.get("title") or "").strip() or None,
@@ -137,6 +157,7 @@ def _consolidate_media_item(
     purpose: str,
     view_count: int | None = None,
     target: str | None = None,
+    media_origin: str = PORTAL_NOTICIAS,
 ) -> tuple[MediaItem, bool]:
     """Return ``(media_item, is_duplicate)`` after deterministic URL consolidation."""
     snippet = row.get("snippet")
@@ -169,6 +190,8 @@ def _consolidate_media_item(
             existing.source_name = source_name
         if existing.view_count is None and view_count is not None:
             existing.view_count = view_count
+        if not existing.media_origin:
+            existing.media_origin = media_origin
         return existing, True
 
     item = MediaItem(
@@ -184,6 +207,7 @@ def _consolidate_media_item(
         source_name=source_name,
         view_count=view_count,
         search_source=provider,
+        media_origin=media_origin,
         source_provenance=[
             {
                 "source": provider,
@@ -235,12 +259,15 @@ def persist_web_rows(
         "flagged": 0,
         "invalid": 0,
         "usable": 0,
+        "over_budget": 0,
         "rejected": 0,  # backward-compatible field: collection no longer discards hits
     }
     site_domain = _site_domain_from_query(query.query) if query else None
     is_youtube_query = bool(query and query.kind == "youtube")
     purpose = str(query.purpose if query else "MEDIA_REPERCUSSION")
     usable_rows: list[dict[str, Any]] = []
+    budget_remaining, budget_cap = _new_item_budget(existing_items)
+    counters["new_item_budget"] = budget_cap
 
     for row in rows:
         url = str(row.get("url") or "").strip()
@@ -248,6 +275,7 @@ def persist_web_rows(
         flags: list[str] = []
         canonical: str | None = None
         host: str | None = None
+        media_origin = PORTAL_NOTICIAS
         published_at = result_publication_date(row.get("published_at"))
 
         if not _valid_http_url(url):
@@ -256,6 +284,7 @@ def persist_web_rows(
         else:
             host = urlparse(url).netloc.lower().split(":")[0]
             canonical = canonicalize(url)
+            media_origin = classify_media_origin(url, host)
 
             if site_domain and not (host == site_domain or host.endswith("." + site_domain)):
                 flags.append("DOMAIN_MISMATCH")
@@ -276,7 +305,12 @@ def persist_web_rows(
 
         source_name = str(row.get("source_name") or host or "Fonte nao identificada")
         media_item: MediaItem | None = None
-        if canonical and host:
+        if canonical and host and canonical not in existing_items and budget_remaining <= 0:
+            # Teto de custo atingido: o hit bruto continua auditado abaixo,
+            # mas nenhuma URL nova vira MediaItem (logo, nada segue para a LLM).
+            flags.append("OVER_NEW_ITEM_BUDGET")
+            counters["over_budget"] += 1
+        elif canonical and host:
             media_item, duplicate = _consolidate_media_item(
                 db,
                 project=project,
@@ -289,12 +323,14 @@ def persist_web_rows(
                 source_name=source_name,
                 provider=provider,
                 purpose=purpose,
+                media_origin=media_origin,
             )
             if duplicate:
                 counters["duplicates"] += 1
                 flags.append("DUPLICATE_URL")
             else:
                 counters["added"] += 1
+                budget_remaining -= 1
 
         _persist_search_hit(
             db,
@@ -309,6 +345,7 @@ def persist_web_rows(
             published_at=published_at,
             source_name=source_name,
             media_item_id=media_item.id if media_item else None,
+            media_origin=media_origin,
         )
         counters["persisted"] += 1
         if flags:
@@ -353,10 +390,13 @@ def persist_video_rows(
         "flagged": 0,
         "invalid": 0,
         "usable": 0,
+        "over_budget": 0,
         "rejected": 0,
     }
     purpose = "MEDIA_REPERCUSSION"
     usable_rows: list[dict[str, Any]] = []
+    budget_remaining, budget_cap = _new_item_budget(existing_items)
+    counters["new_item_budget"] = budget_cap
 
     for row in rows:
         url = str(row.get("url") or "").strip()
@@ -368,6 +408,7 @@ def persist_video_rows(
         flags: list[str] = []
         canonical: str | None = None
         host: str | None = None
+        media_origin = PORTAL_NOTICIAS
 
         raw_view_count = row.get("view_count")
         view_count = (
@@ -384,6 +425,7 @@ def persist_video_rows(
         else:
             host = urlparse(url).netloc.lower().split(":")[0]
             canonical = canonicalize(url)
+            media_origin = classify_media_origin(url, host)
             if not is_youtube_url(url):
                 flags.append("NON_YOUTUBE_RESULT")
             if (
@@ -405,7 +447,10 @@ def persist_video_rows(
         source_name = channel or host or "Fonte de video nao identificada"
         media_item: MediaItem | None = None
         normalized_row = {**row, "title": title, "content": description, "snippet": description}
-        if canonical and host:
+        if canonical and host and canonical not in existing_items and budget_remaining <= 0:
+            flags.append("OVER_NEW_ITEM_BUDGET")
+            counters["over_budget"] += 1
+        elif canonical and host:
             media_item, duplicate = _consolidate_media_item(
                 db,
                 project=project,
@@ -420,12 +465,14 @@ def persist_video_rows(
                 purpose=purpose,
                 view_count=view_count,
                 target=task.target,
+                media_origin=media_origin,
             )
             if duplicate:
                 counters["duplicates"] += 1
                 flags.append("DUPLICATE_URL")
             else:
                 counters["added"] += 1
+                budget_remaining -= 1
 
         _persist_search_hit(
             db,
@@ -442,6 +489,7 @@ def persist_video_rows(
             media_item_id=media_item.id if media_item else None,
             target=task.target,
             view_count=view_count,
+            media_origin=media_origin,
         )
         counters["persisted"] += 1
         if flags:

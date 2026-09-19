@@ -22,14 +22,6 @@ def new_web_counters(global_limit: int, target_media_items: int | None = None) -
         "duckduckgo_added": 0,
         "duckduckgo_rejected": 0,
         "duckduckgo_zero_usable": 0,
-        "tavily_attempts": 0,
-        "tavily_queries": 0,
-        "tavily_results": 0,
-        "tavily_added": 0,
-        "tavily_rejected": 0,
-        "tavily_zero_usable": 0,
-        "tavily_hard_failures": 0,
-        "tavily_circuit_breaker_trips": 0,
         "failed_queries": 0,
         # Compatibilidade: o valor continua exposto nas estatisticas, mas a
         # coleta nao interrompe resultados por esse teto. O volume real e
@@ -61,7 +53,7 @@ def collect_web(
     settings = get_settings()
     if not search_providers_available():
         raise RuntimeError(
-            "Nenhum provedor de pesquisa esta disponivel. Instale ddgs ou configure TAVILY_API_KEY."
+            "Nenhum provedor de pesquisa esta disponivel. Instale ddgs."
         )
 
     project = db.get(Project, project_id)

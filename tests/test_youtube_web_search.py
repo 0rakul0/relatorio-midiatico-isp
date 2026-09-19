@@ -86,77 +86,46 @@ def test_video_persistence_rejects_external_urls_and_records_provenance(monkeypa
 
     record_source_provenance(
         item,
-        source="tavily",
+        source="duckduckgo_video",
         title="Vídeo encontrado",
         url=item.url,
         published_at="2026-08-12",
         snippet="Descrição do vídeo",
     )
     session.commit()
-    monkeypatch.setattr(services_validation, "llm_is_configured", lambda: True)
-    monkeypatch.setattr(
-        services_validation,
-        "get_settings",
-        lambda: SimpleNamespace(max_cross_validations=5),
-    )
-    monkeypatch.setattr(
-        services_validation,
-        "get_report_agent",
-        lambda: SimpleNamespace(
-            run=lambda **_kwargs: {
-                "status": "PARTIALLY_CONFIRMED",
-                "matching_fields": ["url", "title", "published_at"],
-                "conflicting_fields": [],
-                "detail": "URL, título e data coincidem; Tavily não informou o canal.",
-            }
-        ),
-    )
     result = services_validation.validate_video_metadata_cross_source(session, project)
-    assert result["validated"] == 1
-    assert result["skipped"] is False
-    assert item.cross_validation_status == "PARTIALLY_CONFIRMED"
+    assert result["validated"] == 0
+    assert result["skipped"] is True
     session.close()
 
 
-def test_video_capability_tavily_accepts_only_youtube_urls(monkeypatch):
+def test_duckduckgo_video_search_returns_only_provider_results(monkeypatch):
     from app.config import Settings
 
-    class FakeTavilyClient:
-        def __init__(self, api_key=None):
-            self.api_key = api_key
-
-        def search(self, **_kwargs):
-            return {
-                "results": [
-                    {
-                        "title": "Vídeo Tavily",
-                        "url": "https://www.youtube.com/watch?v=tav123",
-                        "content": "Descrição do vídeo",
-                        "published_date": "2026-08-20",
-                        "source": "YouTube",
-                    },
-                    {
-                        "title": "Resultado externo",
-                        "url": "https://example.com/video",
-                        "content": "externo",
-                        "published_date": "2026-08-20",
-                        "source": "Blog",
-                    },
-                ]
-            }
-
-    import tavily
-
-    monkeypatch.setattr(tavily, "TavilyClient", FakeTavilyClient)
     monkeypatch.setattr(
-        tools_search, "get_settings", lambda: Settings(tavily_api_key="teste")
+        tools_search, "get_settings", lambda: Settings()
+    )
+    monkeypatch.setattr(
+        tools_search,
+        "duckduckgo_videos",
+        lambda *args, **kwargs: [
+            {
+                "title": "Vídeo DDG",
+                "url": "https://www.youtube.com/watch?v=ddg123",
+                "description": "Descrição do vídeo",
+                "published_at": "2026-08-20",
+                "channel": "YouTube",
+                "view_count": 10,
+                "provider": "duckduckgo_video",
+            }
+        ],
     )
 
-    provider, rows = tools_search._search_videos("consulta", providers=("tavily",))
+    provider, rows = tools_search._search_videos("consulta", providers=("duckduckgo",))
 
-    assert provider == "tavily"
-    assert [row["url"] for row in rows] == ["https://www.youtube.com/watch?v=tav123"]
-    assert rows[0]["provider"] == "tavily"
+    assert provider == "duckduckgo"
+    assert [row["url"] for row in rows] == ["https://www.youtube.com/watch?v=ddg123"]
+    assert rows[0]["provider"] == "duckduckgo_video"
 
 
 def test_youtube_metrics_list_all_priority_channels_and_exclude_conflicts():

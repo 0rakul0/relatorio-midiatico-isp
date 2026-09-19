@@ -6,9 +6,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://relatorio:relatorio@localhost:5432/repercussao"
-    tavily_api_key: str | None = None
 
-    # OpenAI is used only as the LLM. External search remains DuckDuckGo -> Tavily.
+    # Pool do SQLAlchemy. Banco gerenciado (ex.: Supabase) limita conexões;
+    # 5 + 10 comporta o app com alguns runs paralelos. SQLite ignora.
+    db_pool_size: int = Field(default=5, ge=1, le=50)
+    db_max_overflow: int = Field(default=10, ge=0, le=100)
+    db_pool_timeout: int = Field(default=30, ge=1, le=300)
+
+    # OpenAI is used only as the LLM. External search is DuckDuckGo only.
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
     youtube_search_max_results: int = 15
@@ -40,6 +45,14 @@ class Settings(BaseSettings):
     # Search providers execute every approved query and every returned hit is
     # preserved before later validation decides what belongs to the corpus.
     target_media_items: int = Field(default=27, ge=1, le=200)
+
+    # Hard cap on NEW items consolidated from search per project. Every
+    # provider hit is still preserved as SearchHit for audit, but once the
+    # budget is exhausted no new MediaItem is created, so nothing else flows
+    # into the LLM stages (validation, facts, classification). Items reused
+    # from the historical corpus (corpus_origin == "REUSED") never consume
+    # this budget.
+    max_new_media_items: int = Field(default=40, ge=1, le=500)
 
     # Compatibility/safety statistic. Raw collection is bounded primarily by
     # query count x per-query limits and no longer discards hits at this value.
@@ -86,6 +99,14 @@ class Settings(BaseSettings):
     corpus_reuse_min_project_score: float = Field(default=0.30, ge=0.0, le=1.0)
     corpus_reuse_min_document_score: float = Field(default=0.22, ge=0.0, le=1.0)
     corpus_reuse_sufficient_items: int = Field(default=18, ge=1, le=200)
+
+    # Time-to-live do corpus historico em dias. Documentos mais antigos que
+    # isso (pela data de publicacao, ou pela primeira coleta quando a data
+    # e desconhecida) nao sao reaproveitados: custariam LLM para revalidar
+    # conteudo provavelmente desatualizado. Projetos com janela de datas
+    # explicita continuam reaproveitando documentos dentro da janela pedida.
+    # 0 desliga a validade.
+    corpus_reuse_max_age_days: int = Field(default=180, ge=0, le=3650)
 
     max_fact_source_chars: int = Field(default=16000, ge=1000, le=100000)
 

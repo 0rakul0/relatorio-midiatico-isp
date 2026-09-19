@@ -12,7 +12,7 @@ from app.report_qa import run_report_qa
 from app.schemas import StructuredMediaReportResponse
 from app.services.execution_profile import execution_flags
 from app.services.project_profile import project_payload
-from app.services.metrics import corpus_for_project, metrics, split_corpus
+from app.services.metrics import corpus_for_project, metrics, split_corpus, split_corpus_by_origin
 from app.services.cache import hydrate_cached_report
 
 
@@ -98,6 +98,7 @@ def draft_report_with_llm(db: Session, project: Project) -> dict:
         "corpus": corpus,
         "traditional_corpus": traditional,
         "social_corpus": social,
+        "corpus_by_origin": split_corpus_by_origin(corpus),
         "fact_events": fact_events,
         "fact_evidence": fact_evidence,
         "project": project_payload(project, for_report=True),

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -194,6 +194,7 @@ def sync_media_item_to_corpus(
             source_name=item.source_name,
             view_count=item.view_count,
             search_source=item.search_source,
+            media_origin=item.media_origin or "PORTAL_NOTICIAS",
             source_provenance=list(item.source_provenance or []),
             first_seen_at=now,
             last_seen_at=now,
@@ -216,6 +217,8 @@ def sync_media_item_to_corpus(
             document.content = item.content
         if not document.source_name and item.source_name:
             document.source_name = item.source_name
+        if not document.media_origin and item.media_origin:
+            document.media_origin = item.media_origin
         if item.view_count is not None:
             document.view_count = item.view_count
         document.source_provenance = _merge_provenance(
@@ -279,6 +282,45 @@ def _in_requested_window(project: Project, document: CorpusDocument) -> bool:
     return project.collection_start <= document.published_at <= project.collection_end
 
 
+def _document_reference_date(document: CorpusDocument) -> date | None:
+    """Data que define a idade do documento: publicacao, ou primeira coleta."""
+    if document.published_at:
+        return document.published_at
+    first_seen = getattr(document, "first_seen_at", None)
+    if isinstance(first_seen, datetime):
+        return first_seen.date()
+    if isinstance(first_seen, date):
+        return first_seen
+    return None
+
+
+def _document_expired(
+    document: CorpusDocument,
+    project: Project,
+    today: date,
+    max_age_days: int,
+) -> bool:
+    """True quando o documento passou da validade para reuso.
+
+    Documentos dentro de uma janela de datas explicitamente pedida nunca
+    expiram: o usuario pediu aquele periodo. Sem data determinavel, o
+    documento e considerado novo (ausencia de evidencia nao e evidencia
+    de antiguidade).
+    """
+    if not max_age_days:
+        return False
+    if (
+        project.has_custom_date_window
+        and document.published_at is not None
+        and project.collection_start <= document.published_at <= project.collection_end
+    ):
+        return False
+    ref = _document_reference_date(document)
+    if ref is None:
+        return False
+    return (today - ref).days > max_age_days
+
+
 def reuse_prior_corpus(
     db: Session,
     project: Project,
@@ -291,6 +333,7 @@ def reuse_prior_corpus(
             "enabled": False, "reused": 0, "candidate_documents": 0,
             "source_projects": 0, "exact_topic_match": False,
             "covered_domains": [], "coverage_start": None, "coverage_end": None,
+            "expired_documents": 0,
         }
 
     indexed = backfill_global_corpus(db)
@@ -336,6 +379,9 @@ def reuse_prior_corpus(
     ranked = ranked[: settings.corpus_reuse_max_candidates]
 
     reused = 0
+    expired = 0
+    today = date.today()
+    max_age_days = max(0, int(settings.corpus_reuse_max_age_days or 0))
     domains: set[str] = set()
     dates = []
     source_project_ids: set[int] = set()
@@ -343,6 +389,9 @@ def reuse_prior_corpus(
 
     for _score, previous, document in ranked:
         if document.canonical_url in existing:
+            continue
+        if _document_expired(document, project, today, max_age_days):
+            expired += 1
             continue
         source_project_ids.add(previous.id)
         exact_topic_match = exact_topic_match or (
@@ -398,6 +447,7 @@ def reuse_prior_corpus(
     summary = {
         "enabled": True,
         "reused": reused,
+        "expired_documents": expired,
         "candidate_documents": len(ranked),
         "source_projects": len(source_project_ids),
         "source_project_ids": sorted(source_project_ids),

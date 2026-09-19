@@ -54,13 +54,11 @@ def test_zero_result_query_is_recorded_as_executed(monkeypatch):
 
     monkeypatch.setattr(orchestrator, "SessionLocal", session_factory)
     monkeypatch.setattr(orchestrator, "get_report_agent", lambda: _BulkAgent())
-    monkeypatch.setattr(orchestrator, "get_settings", lambda: Settings(tavily_api_key=None))
+    monkeypatch.setattr(orchestrator, "get_settings", lambda: Settings())
     monkeypatch.setattr(orchestrator, "search_providers_available", lambda: True)
-    monkeypatch.setattr(tools_search, "get_settings", lambda: Settings(tavily_api_key=None))
+    monkeypatch.setattr(tools_search, "get_settings", lambda: Settings())
     monkeypatch.setattr(tools_search, "duckduckgo_news", lambda *_a, **_k: [])
     monkeypatch.setattr(tools_search, "duckduckgo_text", lambda *_a, **_k: [])
-    monkeypatch.setattr(tools_search, "tavily_search", lambda *_a, **_k: [])
-    tools_search.reset_tavily_circuit_breaker()
 
     orchestrator.run_agent_collection(
         project_id=project.id,
@@ -76,7 +74,7 @@ def test_zero_result_query_is_recorded_as_executed(monkeypatch):
     assert len(calls) >= 1
     assert all(call.success is True for call in calls)
     assert all(call.results_returned == 0 for call in calls)
-    assert {call.provider for call in calls} == {"duckduckgo", "tavily"}
+    assert {call.provider for call in calls} == {"duckduckgo"}
 
 
 def test_canonicalize_strips_only_tracking_and_keeps_semantics():

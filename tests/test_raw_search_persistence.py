@@ -122,7 +122,7 @@ def test_duplicate_discoveries_remain_as_two_hits_but_one_media_item(monkeypatch
         "content": "B",
         "published_at": "2026-08-10",
         "source_name": "News",
-        "provider": "tavily",
+        "provider": "duckduckgo",
     }]
 
     persist.persist_web_rows(

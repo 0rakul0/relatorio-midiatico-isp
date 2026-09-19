@@ -137,6 +137,8 @@ class SearchHit(Base):
 
     provider: Mapped[str] = mapped_column(String(40), index=True)
     purpose: Mapped[str] = mapped_column(String(50), default="MEDIA_REPERCUSSION")
+    # Origem do link: PORTAL_NOTICIAS | REDE_SOCIAL | YOUTUBE.
+    media_origin: Mapped[str] = mapped_column(String(30), default="PORTAL_NOTICIAS")
     query: Mapped[str | None] = mapped_column(Text, nullable=True)
     target: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
@@ -176,6 +178,8 @@ class CorpusDocument(Base):
     view_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     search_source: Mapped[str] = mapped_column(String(50), default="unknown")
     source_provenance: Mapped[list] = mapped_column(JSON, default=list)
+    # Origem do link: PORTAL_NOTICIAS | REDE_SOCIAL | YOUTUBE.
+    media_origin: Mapped[str] = mapped_column(String(30), default="PORTAL_NOTICIAS")
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), server_default=func.now()
     )
@@ -235,6 +239,8 @@ class MediaItem(Base):
     source_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
     view_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     search_source: Mapped[str] = mapped_column(String(50), default="manual")
+    # Origem do link: PORTAL_NOTICIAS | REDE_SOCIAL | YOUTUBE.
+    media_origin: Mapped[str] = mapped_column(String(30), default="PORTAL_NOTICIAS")
     # Metadados mínimos preservados por coletor para validação cruzada.
     source_provenance: Mapped[list] = mapped_column(JSON, default=list)
     cross_validation_status: Mapped[str] = mapped_column(String(40), default="NOT_APPLICABLE")

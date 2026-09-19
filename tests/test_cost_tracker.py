@@ -16,7 +16,7 @@ def test_estimate_cost_uses_model_prices():
 
 
 def test_estimate_cost_web_search_not_charged_per_call():
-    # Web Search não é mais cobrado por chamada: DuckDuckGo/Tavily são externos
+    # Web Search não é mais cobrado por chamada: DuckDuckGo é externo
     # à chamada LLM e não entram na tabela de preço do modelo.
     cost = estimate_cost("gpt-5-nano", input_tokens=0, output_tokens=0, search_calls=1)
     assert cost == 0.0

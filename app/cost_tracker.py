@@ -52,7 +52,7 @@ _FALLBACK_MODEL_PRICE = {
 }
 
 # Campo legado. A arquitetura atual não usa OpenAI Web Search; as pesquisas
-# externas são DuckDuckGo/Tavily e não entram no custo da chamada LLM.
+# externas são DuckDuckGo e não entram no custo da chamada LLM.
 WEB_SEARCH_CALL_PRICE = Decimal("0")
 
 

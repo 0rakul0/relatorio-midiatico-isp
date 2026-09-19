@@ -9,7 +9,7 @@ from app.fact_layer import fact_assertions_for_report, fact_events_for_main_repo
 from app.models import GeneratedReport, Project
 from app.services.execution_profile import execution_flags
 from app.services.project_profile import project_payload
-from app.services.metrics import corpus_for_project, metrics, split_corpus
+from app.services.metrics import corpus_for_project, metrics, split_corpus, split_corpus_by_origin
 
 
 def hydrate_cached_report(db: Session, project: Project, generated: GeneratedReport) -> dict:
@@ -29,6 +29,8 @@ def hydrate_cached_report(db: Session, project: Project, generated: GeneratedRep
         payload["traditional_corpus"], payload["social_corpus"] = split_corpus(corpus)
     payload.setdefault("traditional_corpus", [])
     payload.setdefault("social_corpus", [])
+    if "corpus_by_origin" not in payload and "corpus" in payload:
+        payload["corpus_by_origin"] = split_corpus_by_origin(payload["corpus"])
     _, flags = execution_flags(project)
     if "fact_events" not in payload:
         payload["fact_events"] = (

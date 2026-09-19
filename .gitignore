@@ -12,3 +12,7 @@ output/
 tmp/
 /repercussao.db-shm
 /repercussao.db-wal
+/.agents
+/.idea
+*.xml
+/.idea

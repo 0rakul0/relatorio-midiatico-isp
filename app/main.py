@@ -75,8 +75,8 @@ def health():
             "max_youtube_tasks": settings.max_youtube_tasks,
             "max_youtube_results_total": settings.max_youtube_results_total,
             "max_youtube_results_per_task": settings.max_youtube_results_per_task,
-            "web_search_provider": "duckduckgo+tavily",
-            "youtube_search_provider": "duckduckgo_videos+tavily",
+            "web_search_provider": "duckduckgo",
+            "youtube_search_provider": "duckduckgo_videos",
         },
         "agent": {
             "name": "ReportAgent",

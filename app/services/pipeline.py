@@ -111,11 +111,19 @@ def run_full_methodology(
         )
         if bool((processes.get(key) or {}).get("enabled"))
     ]
+    expired_docs = int(reuse_summary.get("expired_documents", 0) or 0)
     stage(
         "search_plan",
         "DONE",
         f"Plano {execution_profile}: {reuse_summary.get('reused', 0)} documento(s) historico(s) reutilizado(s) "
-        f"de {reuse_summary.get('source_projects', 0)} projeto(s); 1 consulta principal, "
+        f"de {reuse_summary.get('source_projects', 0)} projeto(s)"
+        + (
+            f"; {expired_docs} expirado(s) "
+            f"(>{settings.corpus_reuse_max_age_days} dias) ignorado(s)"
+            if expired_docs
+            else ""
+        )
+        + f"; 1 consulta principal, "
         f"{complementary_count} complementar(es), {media_count} midiaticas, "
         f"{fact_count} factual(is), {official_count} oficial(is). "
         f"Opcionais ativos: {', '.join(enabled_optional) if enabled_optional else 'nenhum'}.",
@@ -146,7 +154,7 @@ def run_full_methodology(
         "Executando buscas aprovadas em modo leve: metadados/snippets e hits brutos auditaveis",
     )
     if flags["enable_youtube"]:
-        stage("youtube", "RUNNING", "Pesquisando videos: DuckDuckGo Videos -> Tavily")
+        stage("youtube", "RUNNING", "Pesquisando videos: DuckDuckGo Videos")
     else:
         reason = (processes.get("youtube_collection") or {}).get("reason") or "Desativado pelo plano"
         stage("youtube", "SKIPPED", reason)
@@ -164,14 +172,22 @@ def run_full_methodology(
     web_stats = web.get("stats") or {}
     raw_hits = int(web_stats.get("raw_hits", 0))
     flagged_hits = int(web_stats.get("flagged_hits", 0))
+    over_budget = int(web_stats.get("over_budget", 0))
+    budget_cap = int(web_stats.get("new_item_budget", 0) or settings.max_new_media_items)
 
     if web["status"] in {"COMPLETED", "PARTIAL"}:
         provider_label = str(web.get("provider") or "duckduckgo")
+        budget_note = (
+            f" {over_budget} hit(s) fora do teto de {budget_cap} item(ns) novo(s)"
+            " (preservados p/ auditoria, sem custo LLM)."
+            if over_budget
+            else f" Teto de itens novos: {budget_cap}."
+        )
         stage(
             "collection",
             "DONE",
             f"{raw_hits} hit(s) bruto(s) preservado(s); {collected} URL(s) unica(s) nova(s); "
-            f"{flagged_hits} hit(s) sinalizado(s). Provedores: {provider_label}. "
+            f"{flagged_hits} hit(s) sinalizado(s). Provedores: {provider_label}." + budget_note + " "
             "O corpo completo das paginas sera obtido somente na validacao.",
         )
     else:

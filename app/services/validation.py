@@ -11,7 +11,7 @@ from app.agent import get_report_agent
 from app.config import get_settings
 from app.llm import llm_is_configured
 from app.models import Classification, MediaItem, Project
-from app.schemas import MediaRelevanceBatchResponse, YouTubeCrossValidationResponse
+from app.schemas import MediaRelevanceBatchResponse
 from app.source_registry import ISP_INSTITUTION_NAME
 from app.topic_profile import (
     GENERIC_PRODUCT_TERMS,
@@ -34,54 +34,17 @@ def validate_video_metadata_cross_source(
     cancel_check: Callable[[], None] | None = None,
     progress_detail: Callable[[str], None] | None = None,
 ) -> dict[str, int | bool]:
-    """Compara metadados do mesmo video obtidos por dois coletores independentes."""
-    if not llm_is_configured():
-        return {"validated": 0, "skipped": True}
+    """Validação cruzada de metadados de vídeo.
 
-
-    candidates = []
-    for item in db.scalars(select(MediaItem).where(MediaItem.project_id == project.id)).all():
-        sources = {row.get("source"): row for row in (item.source_provenance or [])}
-        secondary_name = None
-        if "duckduckgo_video" in sources:
-            secondary_name = "duckduckgo_video"
-        if "tavily" in sources and secondary_name:
-            candidates.append((item, sources["tavily"], sources[secondary_name], secondary_name))
-
-    if not candidates:
-        return {
-            "validated": 0,
-            "skipped": True,
-            "reason": "NO_COMPARABLE_ITEMS",
-        }
-
-    settings = get_settings()
-    validation_cap = max(1, settings.max_cross_validations)
-    validated = 0
-    for index, (item, tavily, secondary, secondary_name) in enumerate(candidates, start=1):
-        if validated >= validation_cap:
-            break
-        if cancel_check:
-            cancel_check()
-        if progress_detail:
-            progress_detail(f"Video {index}/{len(candidates)}: {item.title[:90]}")
-        result = get_report_agent().run(
-            task="cross_validation",
-            payload={
-                "canonical_url": item.canonical_url,
-                "tavily": tavily,
-                "secondary_provider": secondary_name,
-                "secondary": secondary,
-            },
-            schema_name="youtube_cross_validation",
-            response_model=YouTubeCrossValidationResponse,
-            max_output_tokens=700,
-        )
-        item.cross_validation_status = result["status"]
-        item.cross_validation_detail = result["detail"][:1000]
-        validated += 1
-    db.commit()
-    return {"validated": validated, "skipped": False, "reason": None}
+    Com provedor único (DuckDuckGo), não há segundo coletor independente
+    para comparar a mesma URL. A etapa é registrada como pulada para não
+    interpretar ausência de segundo coletor como divergência.
+    """
+    return {
+        "validated": 0,
+        "skipped": True,
+        "reason": "SINGLE_PROVIDER",
+    }
 
 
 def _topic_overlap_score(project: Project, body: str) -> int:

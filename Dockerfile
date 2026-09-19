@@ -1,9 +1,29 @@
 FROM python:3.13-slim
 
+# Binário do uv (pinado na mesma versão usada para gerar o uv.lock)
+COPY --from=ghcr.io/astral-sh/uv:0.5.22 /uv /uvx /bin/
+
 WORKDIR /app
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+
+# Instala no Python do sistema: o compose monta .:/app por cima,
+# o que esconderia um .venv dentro de /app. Assim o `uvicorn`
+# do `command:` continua no PATH.
+ENV UV_SYSTEM_PYTHON=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Dependências primeiro (layer em cache; rebuild só se pyproject/uv.lock mudar).
+# README.md acompanha porque o pyproject o declara como readme do pacote.
+COPY pyproject.toml uv.lock README.md ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
+
+# Código da aplicação
 COPY app ./app
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

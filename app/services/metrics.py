@@ -12,6 +12,12 @@ from app.models import Classification, MediaItem, Project, SearchQuery
 from app.source_registry import PRIORITY_PORTALS, PRIORITY_YOUTUBE_CHANNELS
 from app.services.execution_profile import EXECUTION_PROFILE_DEFAULTS, execution_flags
 from app.services.collection.common import inferred_publication_date, publication_year, source_label
+from app.services.collection.media_origin import (
+    PORTAL_NOTICIAS,
+    REDE_SOCIAL,
+    YOUTUBE,
+    classify_media_origin,
+)
 from app.services.collection.youtube_helpers import is_youtube_host, matches_priority_youtube_channel, youtube_tasks_for_execution
 from app.services.validation import low_information_title
 
@@ -28,6 +34,7 @@ def corpus_for_project(db: Session, project_id: int) -> list[dict]:
             "title": item.title,
             "url": item.url,
             "domain": item.domain,
+            "media_origin": item.media_origin or classify_media_origin(item.url, item.domain),
             "theme": classification.theme if classification else None,
             "evidence": classification.evidence if classification else item.relevance_evidence,
             "relation_type": item.relation_type,
@@ -44,14 +51,36 @@ def corpus_for_project(db: Session, project_id: int) -> list[dict]:
 
 
 def split_corpus(corpus: list[dict]) -> tuple[list[dict], list[dict]]:
-    social_hosts = ("youtube.com", "youtu.be", "instagram.com", "x.com", "twitter.com")
     traditional: list[dict] = []
     social: list[dict] = []
     for item in corpus:
-        domain = (item.get("domain") or "").lower()
-        target = social if any(domain == host or domain.endswith("." + host) for host in social_hosts) else traditional
+        origin = item.get("media_origin")
+        if not origin:
+            domain = (item.get("domain") or "").lower()
+            origin = classify_media_origin(None, domain)
+        target = traditional if origin == PORTAL_NOTICIAS else social
         target.append(item)
     return traditional, social
+
+
+def split_corpus_by_origin(corpus: list[dict]) -> dict[str, list[dict]]:
+    """Separa o corpus em portal de notícias, redes sociais e YouTube."""
+    buckets: dict[str, list[dict]] = {
+        PORTAL_NOTICIAS: [],
+        REDE_SOCIAL: [],
+        YOUTUBE: [],
+    }
+    for item in corpus:
+        origin = item.get("media_origin")
+        if origin not in buckets:
+            domain = (item.get("domain") or "").lower()
+            origin = classify_media_origin(item.get("url"), domain)
+        buckets[origin].append(item)
+    return {
+        "portal_noticias": buckets[PORTAL_NOTICIAS],
+        "redes_sociais": buckets[REDE_SOCIAL],
+        "youtube": buckets[YOUTUBE],
+    }
 
 
 def metrics(db: Session, project_id: int) -> dict:
@@ -80,6 +109,20 @@ def metrics(db: Session, project_id: int) -> dict:
         .group_by(Classification.theme)
         .order_by(func.count(Classification.id).desc())
     ).all()
+
+    origin_rows = db.execute(
+        select(MediaItem.media_origin, func.count(MediaItem.id).label("items"))
+        .where(MediaItem.project_id == project_id, MediaItem.status == "VALID")
+        .group_by(MediaItem.media_origin)
+    ).all()
+    media_origin_counts = {
+        PORTAL_NOTICIAS: 0,
+        REDE_SOCIAL: 0,
+        YOUTUBE: 0,
+    }
+    for origin, count in origin_rows:
+        key = origin if origin in media_origin_counts else classify_media_origin(None, None)
+        media_origin_counts[key] = media_origin_counts.get(key, 0) + int(count or 0)
 
     domains = [
         domain.lower()
@@ -333,6 +376,7 @@ def metrics(db: Session, project_id: int) -> dict:
         "valid_items": valid,
         "discarded_items": total - valid,
         "unique_vehicles": vehicles,
+        "media_origin_counts": media_origin_counts,
         "collection_days": collection_days,
         "isp_mentioned_items": isp,
         "isp_mention_percent": round((isp / valid * 100), 1) if valid else 0,

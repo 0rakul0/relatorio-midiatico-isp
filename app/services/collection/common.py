@@ -58,7 +58,7 @@ def canonicalize(url: str) -> str:
 
 
 def parse_provider_date(value: object) -> date | None:
-    """Interpreta datas heterogêneas de provedores (DDG/Tavily).
+    """Interpreta datas heterogêneas de provedores (DDG).
 
     Aceita ``date``/``datetime`` nativos, ISO 8601 (com ou sem ``Z``), datas
     simples ``YYYY-MM-DD``, o formato RFC 2822 usado por feeds de notícia e
@@ -175,9 +175,7 @@ def query_window(project: Project, query: SearchQuery) -> tuple[date | None, dat
 
 
 def _valid_search_window(start: date | None, end: date | None) -> bool:
-    """APIs como Tavily rejeitam ``start_date == end_date``.
-
-    Só consideramos uma janela apta a ser enviada ao provedor quando existem
+    """Só consideramos uma janela apta a ser enviada ao provedor quando existem
     duas datas e o início é estritamente anterior ao fim.
     """
     return bool(start and end and start < end)

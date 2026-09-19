@@ -1,6 +1,6 @@
 """Mandatory collection orchestration executed through ReportAgent tools.
 
-Structural invariant: services never call DuckDuckGo/Tavily or tool.invoke().
+Structural invariant: services never call DuckDuckGo or tool.invoke().
 The ReportAgent invokes the bulk tools; this module only supplies approved
 queries, deterministic context, sinks, guards, budgets and audit observers.
 """
@@ -29,11 +29,7 @@ from app.services.collection.common import (
 from app.services.collection.persist import persist_video_rows, persist_web_rows
 from app.services.collection.youtube_helpers import youtube_tasks_for_execution
 from app.tools import SearchObserver, build_agent_tools
-from app.tools.search import (
-    reset_tavily_circuit_breaker,
-    search_providers_available,
-    tavily_circuit_breaker_snapshot,
-)
+from app.tools.search import search_providers_available
 
 
 class CollectionState:
@@ -375,11 +371,6 @@ def _make_web_sink(
             counters["duckduckgo_results"] = counters.get("duckduckgo_results", 0) + len(rows)
             counters["duckduckgo_added"] = counters.get("duckduckgo_added", 0) + int(local.get("added", 0))
             counters["duckduckgo_rejected"] = counters.get("duckduckgo_rejected", 0)
-        elif provider == "tavily":
-            counters["tavily_queries"] = counters.get("tavily_queries", 0) + 1
-            counters["tavily_results"] = counters.get("tavily_results", 0) + len(rows)
-            counters["tavily_added"] = counters.get("tavily_added", 0) + int(local.get("added", 0))
-            counters["tavily_rejected"] = counters.get("tavily_rejected", 0)
 
         added = int(local.get("added", 0))
         state.added += added
@@ -393,7 +384,7 @@ def _make_web_sink(
         ):
             counters["media_target_reached"] = 1
 
-        if provider in {"duckduckgo", "tavily"}:
+        if provider == "duckduckgo":
             counters["queries_successful"] = counters.get("queries_successful", 0) + 1
         else:
             counters["failed_queries"] = counters.get("failed_queries", 0) + 1
@@ -428,8 +419,6 @@ def _make_video_sink(
 
         if provider == "duckduckgo":
             counters["duckduckgo_attempts"] = counters.get("duckduckgo_attempts", 0) + 1
-        elif provider == "tavily":
-            counters["tavily_attempts"] = counters.get("tavily_attempts", 0) + 1
         else:
             return []
 
@@ -450,8 +439,6 @@ def _make_video_sink(
         counters["flagged_hits"] = counters.get("flagged_hits", 0) + int(local.get("flagged", 0))
         if provider == "duckduckgo":
             counters["duckduckgo_added"] = counters.get("duckduckgo_added", 0) + int(local.get("added", 0))
-        else:
-            counters["tavily_added"] = counters.get("tavily_added", 0) + int(local.get("added", 0))
         state.added += int(local.get("added", 0))
         if usable_rows or int(local.get("duplicates", 0)) > 0:
             state.resolved.add(query)
@@ -478,7 +465,6 @@ def run_agent_collection(
     video_progress: Callable[[str], None] | None = None,
     cancel_check: Callable[[], None] | None = None,
 ) -> tuple[CollectionState, CollectionState | None]:
-    reset_tavily_circuit_breaker()
     web_state = CollectionState(
         project_id=project_id,
         counters=web_counters if web_counters is not None else {},
@@ -500,7 +486,7 @@ def run_agent_collection(
         return web_state, video_state
 
     if not search_providers_available():
-        message = "No search provider is available. Install ddgs or configure TAVILY_API_KEY."
+        message = "No search provider is available. Install ddgs."
         if web_queries:
             web_state.unavailable = message
         if video_state and video_state.expect_queries:
@@ -615,13 +601,6 @@ def run_agent_collection(
             resolved = len([query for query in planned_video if query in video_state.resolved])
             video_state.counters["tasks_resolved"] = resolved
             video_state.counters["tasks_failed"] = max(0, len(planned_video) - resolved)
-
-        breaker = tavily_circuit_breaker_snapshot()
-        for state in (web_state, video_state):
-            if state is None:
-                continue
-            state.counters["tavily_hard_failures"] = int(breaker["hard_failures"])
-            state.counters["tavily_circuit_breaker_trips"] = int(breaker["trips"])
 
         session.commit()
     finally:

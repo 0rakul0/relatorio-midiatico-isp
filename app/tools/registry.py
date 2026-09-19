@@ -36,8 +36,8 @@ def build_agent_tools(
     video_context: SearchContextResolver | None = None,
     web_observer: SearchObserver | None = None,
     video_observer: SearchObserver | None = None,
-    web_providers: tuple[str, ...] = ("duckduckgo", "tavily"),
-    video_providers: tuple[str, ...] = ("duckduckgo", "tavily"),
+    web_providers: tuple[str, ...] = ("duckduckgo",),
+    video_providers: tuple[str, ...] = ("duckduckgo",),
     bulk: bool = False,
 ) -> list[BaseTool]:
     tools: list[BaseTool] = []

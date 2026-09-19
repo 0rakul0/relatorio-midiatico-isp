@@ -47,6 +47,7 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     "media_items": {
         "corpus_document_id": "INTEGER",
         "corpus_origin": "VARCHAR(30) DEFAULT 'SEARCH'",
+        "media_origin": "VARCHAR(30) DEFAULT 'PORTAL_NOTICIAS'",
         "relation_type": "VARCHAR(50)",
         "relevance_evidence": "TEXT",
         "source_name": "VARCHAR(300)",
@@ -63,6 +64,12 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     "generated_reports": {
         "qa_status": "VARCHAR(30) DEFAULT 'PENDING'",
         "qa_findings": "JSON",
+    },
+    "search_hits": {
+        "media_origin": "VARCHAR(30) DEFAULT 'PORTAL_NOTICIAS'",
+    },
+    "corpus_documents": {
+        "media_origin": "VARCHAR(30) DEFAULT 'PORTAL_NOTICIAS'",
     },
     "fact_events": {
         "death_place_name": "VARCHAR(300)",
@@ -135,6 +142,13 @@ def ensure_schema() -> None:
             connection.execute(text("UPDATE media_items SET cross_validation_status = 'NOT_APPLICABLE' WHERE cross_validation_status IS NULL"))
             connection.execute(text("UPDATE media_items SET corpus_origin = 'HISTORICAL' WHERE corpus_origin IS NULL"))
             connection.execute(text("UPDATE media_items SET retrieved_at = CURRENT_TIMESTAMP WHERE retrieved_at IS NULL"))
+            connection.execute(text("UPDATE media_items SET media_origin = 'PORTAL_NOTICIAS' WHERE media_origin IS NULL"))
+
+        if "search_hits" in existing_tables:
+            connection.execute(text("UPDATE search_hits SET media_origin = 'PORTAL_NOTICIAS' WHERE media_origin IS NULL"))
+
+        if "corpus_documents" in existing_tables:
+            connection.execute(text("UPDATE corpus_documents SET media_origin = 'PORTAL_NOTICIAS' WHERE media_origin IS NULL"))
 
         if "generated_reports" in existing_tables:
             connection.execute(text("UPDATE generated_reports SET qa_status = 'PENDING' WHERE qa_status IS NULL"))

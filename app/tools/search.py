@@ -1,8 +1,8 @@
 """Search tools exposed to ReportAgent.
 
-Provider priority:
-- web: DuckDuckGo News/Text -> Tavily
-- video: DuckDuckGo Videos -> Tavily restricted to YouTube
+DuckDuckGo is the only search provider:
+- web: DuckDuckGo News/Text
+- video: DuckDuckGo Videos
 
 Provider SDK adapters live only in app.tools.providers. Services never call
 providers or LangChain tool.invoke() directly.
@@ -11,7 +11,6 @@ providers or LangChain tool.invoke() directly.
 from __future__ import annotations
 
 from collections.abc import Callable
-from threading import Lock
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -31,7 +30,6 @@ from app.tools.providers import (
     search_news as duckduckgo_news,
     search_text as duckduckgo_text,
     search_videos as duckduckgo_videos,
-    tavily_search,
 )
 
 
@@ -71,45 +69,8 @@ class SearchObserver:
         pass
 
 
-_tavily_lock = Lock()
-_tavily_disabled = False
-_tavily_hard_failures = 0
-_tavily_trips = 0
-
-
-def reset_tavily_circuit_breaker() -> None:
-    global _tavily_disabled, _tavily_hard_failures, _tavily_trips
-    with _tavily_lock:
-        _tavily_disabled = False
-        _tavily_hard_failures = 0
-        _tavily_trips = 0
-
-
-def tavily_circuit_breaker_snapshot() -> dict[str, int | bool]:
-    with _tavily_lock:
-        return {
-            "disabled": _tavily_disabled,
-            "hard_failures": _tavily_hard_failures,
-            "trips": _tavily_trips,
-        }
-
-
-def tavily_is_disabled() -> bool:
-    with _tavily_lock:
-        return _tavily_disabled
-
-
-def _trip_tavily_circuit_breaker() -> None:
-    global _tavily_disabled, _tavily_hard_failures, _tavily_trips
-    with _tavily_lock:
-        _tavily_hard_failures += 1
-        if not _tavily_disabled:
-            _tavily_disabled = True
-            _tavily_trips += 1
-
-
 def search_providers_available() -> bool:
-    return duckduckgo_available() or bool(get_settings().tavily_api_key)
+    return duckduckgo_available()
 
 
 def _normalize_limit(value: int) -> int:
@@ -120,7 +81,7 @@ def _search_web(
     query: str,
     *,
     max_results: int = 5,
-    providers: tuple[str, ...] = ("duckduckgo", "tavily"),
+    providers: tuple[str, ...] = ("duckduckgo",),
     window_start: str | None = None,
     window_end: str | None = None,
     purpose: str = "MEDIA_REPERCUSSION",
@@ -132,7 +93,6 @@ def _search_web(
         _normalize_limit(max_results),
         max(1, int(settings.agent_search_max_results)),
     )
-    attempted: str | None = None
 
     if "duckduckgo" in providers:
         if observer is not None:
@@ -159,7 +119,6 @@ def _search_web(
                     retries=settings.duckduckgo_max_retries,
                     retry_base_seconds=settings.duckduckgo_retry_base_seconds,
                 )
-            attempted = "duckduckgo"
             if rows:
                 normalized: list[dict[str, Any]] = []
                 for row in rows[:limit]:
@@ -182,6 +141,7 @@ def _search_web(
                     )
                 if normalized:
                     return "duckduckgo", normalized
+            return "duckduckgo", []
         except DuckDuckGoUnavailable as exc:
             if observer is not None:
                 observer.provider_error(
@@ -190,45 +150,16 @@ def _search_web(
                     tool_name=tool_name,
                     error=str(exc),
                 )
+            return "duckduckgo", []
 
-    if "tavily" in providers and not tavily_is_disabled():
-        if observer is not None:
-            observer.provider_attempted(
-                query=query,
-                provider="tavily",
-                tool_name=tool_name,
-            )
-        try:
-            tavily = tavily_search(
-                query,
-                max_results=limit,
-                window_start=window_start,
-                window_end=window_end,
-                purpose=purpose,
-            )
-        except RuntimeError as exc:
-            _trip_tavily_circuit_breaker()
-            if observer is not None:
-                observer.provider_error(
-                    query=query,
-                    provider="tavily",
-                    tool_name=tool_name,
-                    error=str(exc),
-                )
-            tavily = []
-        else:
-            attempted = "tavily"
-        if tavily:
-            return "tavily", tavily
-
-    return (attempted or "none"), []
+    return "none", []
 
 
 def _search_videos(
     query: str,
     *,
     max_results: int = 5,
-    providers: tuple[str, ...] = ("duckduckgo", "tavily"),
+    providers: tuple[str, ...] = ("duckduckgo",),
     window_start: str | None = None,
     window_end: str | None = None,
     observer: SearchObserver | None = None,
@@ -239,7 +170,6 @@ def _search_videos(
         _normalize_limit(max_results),
         max(1, int(settings.agent_search_max_results)),
     )
-    attempted: str | None = None
 
     if "duckduckgo" in providers:
         if observer is not None:
@@ -257,7 +187,6 @@ def _search_videos(
                 retries=settings.duckduckgo_max_retries,
                 retry_base_seconds=settings.duckduckgo_retry_base_seconds,
             )
-            attempted = "duckduckgo"
             if rows:
                 normalized: list[dict[str, Any]] = []
                 for row in rows[:limit]:
@@ -278,6 +207,7 @@ def _search_videos(
                     )
                 if normalized:
                     return "duckduckgo", normalized
+            return "duckduckgo", []
         except DuckDuckGoUnavailable as exc:
             if observer is not None:
                 observer.provider_error(
@@ -286,38 +216,9 @@ def _search_videos(
                     tool_name=tool_name,
                     error=str(exc),
                 )
+            return "duckduckgo", []
 
-    if "tavily" in providers and not tavily_is_disabled():
-        if observer is not None:
-            observer.provider_attempted(
-                query=query,
-                provider="tavily",
-                tool_name=tool_name,
-            )
-        try:
-            tavily = tavily_search(
-                query,
-                max_results=limit,
-                video_only=True,
-                window_start=window_start,
-                window_end=window_end,
-            )
-        except RuntimeError as exc:
-            _trip_tavily_circuit_breaker()
-            if observer is not None:
-                observer.provider_error(
-                    query=query,
-                    provider="tavily",
-                    tool_name=tool_name,
-                    error=str(exc),
-                )
-            tavily = []
-        else:
-            attempted = "tavily"
-        if tavily:
-            return "tavily", tavily
-
-    return (attempted or "none"), []
+    return "none", []
 
 
 def _validated_response(
@@ -410,7 +311,7 @@ def make_web_search_tool(
     *,
     sink: SearchSink | None = None,
     context: SearchContextResolver | None = None,
-    providers: tuple[str, ...] = ("duckduckgo", "tavily"),
+    providers: tuple[str, ...] = ("duckduckgo",),
     observer: SearchObserver | None = None,
 ) -> StructuredTool:
     def pesquisar_internet(query: str, max_results: int = 5) -> dict[str, Any]:
@@ -452,8 +353,8 @@ def make_web_search_tool(
         args_schema=AgentWebSearchArgs,
         name="pesquisar_internet",
         description=(
-            "Pesquisa informacoes atuais na internet. DuckDuckGo e o provedor principal; "
-            "Tavily e usado apenas quando necessario."
+            "Pesquisa informacoes atuais na internet usando DuckDuckGo "
+            "(noticias e texto)."
         ),
         return_direct=False,
     )
@@ -463,7 +364,7 @@ def make_video_search_tool(
     *,
     sink: SearchSink | None = None,
     context: SearchContextResolver | None = None,
-    providers: tuple[str, ...] = ("duckduckgo", "tavily"),
+    providers: tuple[str, ...] = ("duckduckgo",),
     observer: SearchObserver | None = None,
 ) -> StructuredTool:
     def pesquisar_videos(query: str, max_results: int = 5) -> dict[str, Any]:
@@ -503,10 +404,7 @@ def make_video_search_tool(
         func=pesquisar_videos,
         args_schema=AgentVideoSearchArgs,
         name="pesquisar_videos",
-        description=(
-            "Pesquisa videos relevantes. DuckDuckGo Videos e o provedor principal; "
-            "Tavily e usado apenas quando necessario."
-        ),
+        description="Pesquisa videos relevantes usando DuckDuckGo Videos.",
         return_direct=False,
     )
 
@@ -515,7 +413,7 @@ def make_bulk_web_search_tool(
     *,
     sink: SearchSink | None = None,
     context: SearchContextResolver | None = None,
-    providers: tuple[str, ...] = ("duckduckgo", "tavily"),
+    providers: tuple[str, ...] = ("duckduckgo",),
     observer: SearchObserver | None = None,
 ) -> StructuredTool:
     """Execute the complete approved plan in one agent tool call.
@@ -607,9 +505,9 @@ def make_bulk_web_search_tool(
         args_schema=AgentBulkSearchArgs,
         name="executar_buscas_web",
         description=(
-            "Executa em lote todas as consultas web do plano aprovado, sem criar, "
-            "renomear ou omitir consultas. A meta de corpus nao interrompe buscas "
-            "aprovadas; SKIPPED e reservado a guardrails de integridade do plano."
+            "Executa em lote todas as consultas web do plano aprovado no DuckDuckGo, "
+            "sem criar, renomear ou omitir consultas. A meta de corpus nao interrompe "
+            "buscas aprovadas; SKIPPED e reservado a guardrails de integridade do plano."
         ),
         return_direct=False,
     )
@@ -619,7 +517,7 @@ def make_bulk_video_search_tool(
     *,
     sink: SearchSink | None = None,
     context: SearchContextResolver | None = None,
-    providers: tuple[str, ...] = ("duckduckgo", "tavily"),
+    providers: tuple[str, ...] = ("duckduckgo",),
     observer: SearchObserver | None = None,
 ) -> StructuredTool:
     def executar_buscas_videos(queries: list[str]) -> dict[str, Any]:
@@ -678,8 +576,8 @@ def make_bulk_video_search_tool(
         args_schema=AgentBulkSearchArgs,
         name="executar_buscas_videos",
         description=(
-            "Executa em lote todas as consultas de video do plano aprovado, sem "
-            "criar, renomear ou omitir consultas."
+            "Executa em lote todas as consultas de video do plano aprovado no "
+            "DuckDuckGo Videos, sem criar, renomear ou omitir consultas."
         ),
         return_direct=False,
     )
