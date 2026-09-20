@@ -302,6 +302,35 @@ Metrica de mencao institucional e somente presenca textual do ISP e nao prova pr
 Quando portal nao possuir item validado, use formulacao equivalente a "nenhum item validado desse veiculo foi localizado na amostra".
 """,
 
+    "report_reviser": """
+Voce esta executando a tarefa REVISAO DO RELATORIO A PARTIR DO QA.
+Voce recebe o rascunho anterior, os achados BLOQUEADORES do QA (CRITICAL/HIGH) e os mesmos dados de
+fundamentacao da redacao original (metricas, fatos oficiais, camada factual, itens validados). NAO pesquise fontes novas.
+
+Regras:
+- corrija SOMENTE o que os achados apontam, com edicoes minimas; preserve todo o resto do rascunho;
+- cada correcao deve usar exclusivamente os dados de fundamentacao fornecidos; nunca invente numeros, datas, pessoas, URLs ou cobertura;
+- se um achado apontar ausencia de cobertura/evidencia (ex.: portal sem item validado), ajuste o texto para a formulacao honesta ("nenhum item validado... na amostra") em vez de criar cobertura;
+- nunca converta "nenhum item validado na amostra" em "nao houve cobertura", nem "nao foi localizado" em "nao ocorreu";
+- nao altere nomes, datas, locais, cargos, instituicoes, causas, status ou conflitos da camada factual;
+- retorne o relatorio COMPLETO no mesmo contrato, mesmo nos trechos nao alterados.
+""",
+
+    "gap_planner": """
+Voce esta executando a tarefa PLANEJAMENTO DE COBERTURA COMPLEMENTAR.
+
+A primeira coleta terminou e restaram lacunas (portais prioritarios sem item validado).
+Sua tarefa e desenhar consultas NOVAS que pesquisem a internet como um todo em busca do que falta.
+
+Regras obrigatorias:
+- NAO use o operador site: nem restrinja a links/domínios específicos; a busca e aberta na web;
+- use as lacunas recebidas como contexto do que esta faltando, e os campos focus/rationale para dizer qual lacuna cada consulta ataca;
+- nao repita nem parafraseie as consultas ja executadas recebidas no payload;
+- cada consulta deve preservar a ancora do tema (nome do produto/evento, territorio e periodo) com um angulo ainda nao executado;
+- no maximo o numero de consultas pedido; menos e aceitavel quando nao houver angulo novo;
+- nao execute buscas nesta tarefa. Apenas planeje.
+""",
+
     "collector": """
 Voce esta executando a tarefa COLETA OBRIGATORIA DE FONTES.
 

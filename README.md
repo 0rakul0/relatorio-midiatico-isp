@@ -36,11 +36,13 @@ Validação do corpus
 Camada factual opcional
   ↓
 Classificação
-  ↓
+   ↓
+Cobertura complementar (fase 2, se houver lacuna)
+   ↓
 Redação do relatório
-  ↓
-QA
-  ↓
+   ↓
+QA (+ revisão automática)
+   ↓
 PDF / relatório aprovado
 ```
 
@@ -231,7 +233,7 @@ flowchart LR
     V --> F1["facts_pass_1<br/>extract"] --> R1["fact_resolution_1<br/>CONFIRMED/CONFLICT"]
     R1 --> NP["nominal_plan"] --> NC["nominal_collection<br/>2ª coleta"]
     NC --> F2["facts_pass_2"] --> R2["fact_resolution_2"]
-    R2 --> CL["classification<br/>tema/tom/fidelidade"] --> RP["report<br/>sem tools"] --> QA["qa<br/>determinístico+LLM"]
+    R2 --> CL["classification<br/>tema/tom/fidelidade"] --> GF["gap_fill (fase 2)<br/>lacunas → gap_planner → web aberta"] --> RP["report<br/>sem tools"] --> QA["qa<br/>determinístico+LLM+revisão"]
 ```
 
 Stages opcionais recebem `SKIPPED` com razão auditável quando o plano (`execution_plan.processes`) desabilita `youtube_collection`, `fact_extraction`, `nominal_followup`, etc. Ver `app/services/execution_profile.py`.
@@ -950,8 +952,9 @@ Extração factual - 2ª passagem
 Consolidação factual - 2ª passagem
 Validação do corpus
 Análise e classificação
+Cobertura complementar
 Redação do relatório
-Auditoria QA final
+Auditoria QA final (+ revisão automática)
 ```
 
 ---
@@ -1059,6 +1062,17 @@ O QA verifica, entre outros:
 O PDF oficial só deve ser liberado quando o relatório estiver aprovado.
 
 Caso contrário, pode ser gerado apenas como rascunho para revisão interna.
+
+## Refinamento automático (QA → revisão)
+
+Quando o QA reprova com achados bloqueadores (`CRITICAL`/`HIGH`), o pipeline
+não para na reclamação: o task `report_reviser` reescreve o rascunho guiado
+pelos achados (correções mínimas, sem inventar dados) e o QA roda de novo —
+até `MAX_QA_REFINEMENTS=2` rodadas (cada uma custa 1 redação + 1 QA; `0`
+desliga). O que sobrar vai para revisão humana.
+
+`ENABLE_LLM_QA=false` desliga só a camada narrativa (modo econômico);
+o determinístico continua obrigatório.
 
 ---
 
@@ -1227,6 +1241,9 @@ MAX_RESULTS_PER_QUERY=5
 # (auditoria preservada, sem seguir para validacao/classificacao).
 # Itens REUSED do historico nao consomem esse teto.
 MAX_NEW_MEDIA_ITEMS=40
+
+# Consultas web abertas da cobertura complementar (fase 2; 1 rodada por projeto)
+MAX_GAP_FILL_QUERIES=4
 
 MAX_FACT_SOURCE_CHARS=16000
 

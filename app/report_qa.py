@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agent import get_report_agent
+from app.config import get_settings
 from app.llm import llm_is_configured
 from app.schemas import ReportQAResponse
 from app.models import GeneratedReport, Project
@@ -179,7 +180,9 @@ def _llm_qa(payload: dict) -> list[dict]:
             payload=compact,
             schema_name="report_qa",
             response_model=ReportQAResponse,
-            max_output_tokens=3500,
+            # Achados (até 30) + trilha de reasoning dos modelos gpt-5/o-series
+            # precisam caber juntos no teto de completion.
+            max_output_tokens=8000,
         )
     except RuntimeError as exc:
         return [
@@ -194,7 +197,16 @@ def _llm_qa(payload: dict) -> list[dict]:
 
 def run_report_qa(db: Session, project: Project, payload: dict) -> dict:
     findings = deterministic_report_qa(payload)
-    findings.extend(_llm_qa(payload))
+    if get_settings().enable_llm_qa:
+        findings.extend(_llm_qa(payload))
+    else:
+        findings.append(
+            {
+                "severity": "LOW",
+                "code": "LLM_QA_DISABLED",
+                "message": "Auditoria narrativa por LLM desligada (ENABLE_LLM_QA=false); vale só o QA determinístico.",
+            }
+        )
     blocking = [finding for finding in findings if finding.get("severity") in {"CRITICAL", "HIGH"}]
     approved = not blocking
 

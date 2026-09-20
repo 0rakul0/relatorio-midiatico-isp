@@ -63,20 +63,23 @@ def test_document_expired_respects_window_exemption_and_unknown_dates():
     assert _document_expired(old, WindowedProject(), today, 180) is True
 
 
-def _seed_previous(session, published_at):
+def _seed_previous(session, published_at, url="https://news.example.com/dossie",
+                   canonical="https://news.example.com/dossie", domain="news.example.com",
+                   media_origin=None):
     previous = _project(session)
     session.add(
         MediaItem(
             project_id=previous.id,
             title="dossie mulher: materia sobre o tema",
-            url="https://news.example.com/dossie",
-            canonical_url="https://news.example.com/dossie",
-            domain="news.example.com",
+            url=url,
+            canonical_url=canonical,
+            domain=domain,
             published_at=published_at,
             snippet="dossie mulher em pauta",
             content="dossie mulher em pauta",
             source_name="Portal",
             search_source="duckduckgo",
+            media_origin=media_origin,
             status="VALID",
             fact_status="PENDING",
         )
@@ -107,4 +110,28 @@ def test_reuse_keeps_documents_within_validity():
 
     assert summary["reused"] == 1
     assert summary["expired_documents"] == 0
+    session.close()
+
+
+def test_reused_item_keeps_youtube_origin():
+    from sqlalchemy import select
+
+    session = _db()
+    _seed_previous(
+        session,
+        published_at=date.today() - timedelta(days=10),
+        url="https://www.youtube.com/watch?v=abc123",
+        canonical="https://www.youtube.com/watch?v=abc123",
+        domain="www.youtube.com",
+        media_origin="YOUTUBE",
+    )
+    current = _project(session)
+
+    summary = reuse_prior_corpus(session, current)
+
+    assert summary["reused"] == 1
+    item = session.scalar(
+        select(MediaItem).where(MediaItem.project_id == current.id)
+    )
+    assert item.media_origin == "YOUTUBE"
     session.close()

@@ -13,6 +13,20 @@ function scopeLabel(v){return v===true?'núcleo principal':v===false?'caso relac
 function relationLabel(v){const map={DIRECT_PRODUCT:'Direto ao produto',ATTRIBUTED_FINDING:'Achado atribuído',DERIVED_COVERAGE:'Cobertura derivada',DIRECT_EVENT:'Direto ao evento',THEMATIC_CONTEXT:'Contexto temático',THEMATIC_ONLY:'Apenas semelhante',UNRELATED:'Não relacionado'};return map[v]||v||'Relacionado ao tema'}
 function originLabel(v){return String(v||'SEARCH').toUpperCase()==='REUSED'?'Corpus reutilizado':'Nova coleta'}
 function originClass(v){return String(v||'SEARCH').toUpperCase()==='REUSED'?'reused':'new'}
+function viewLabel(v){return Number.isInteger(v)?v.toLocaleString('pt-BR'):'N/D'}
+const SOCIAL_HOSTS=['facebook.com','instagram.com','x.com','twitter.com','tiktok.com','threads.net','threads.com','linkedin.com','pinterest.com','pin.it','reddit.com','t.me','telegram.me','whatsapp.com','wa.me','kwai.com','bsky.app','mastodon.social'];
+function bucketByOrigin(items){
+  const b={portal_noticias:[],redes_sociais:[],youtube:[]};
+  for(const x of (items||[])){
+    let o=String(x.media_origin||'').toUpperCase();
+    if(o!=='YOUTUBE'&&o!=='REDE_SOCIAL'&&o!=='PORTAL_NOTICIAS'){
+      const h=String(x.domain||'').toLowerCase();
+      o=(h==='youtube.com'||h.endsWith('.youtube.com')||h==='youtu.be')?'YOUTUBE':SOCIAL_HOSTS.some(s=>h===s||h.endsWith('.'+s))?'REDE_SOCIAL':'PORTAL_NOTICIAS';
+    }
+    b[o==='YOUTUBE'?'youtube':o==='REDE_SOCIAL'?'redes_sociais':'portal_noticias'].push(x);
+  }
+  return b;
+}
 function render(result){
   const d=result.report,p=result.project,m=result.metrics,qa=result.qa||{};
   const facts=result.fact_events||[];
@@ -29,30 +43,24 @@ function render(result){
   const risks=(d.risk_assessment||[]).map(x=>[esc(x.dimension),esc(x.assessment),esc(x.evidence)]);
   const kit=(d.press_kit||[]).map(x=>[esc(x.product),esc(x.purpose)]);
   const rawCorpus=result.corpus||[];
-  const corpus=rawCorpus.map((x,i)=>[String(i+1),esc(x.published_at||x.published_year||'N/D'),esc(x.source||x.domain||'Fonte aberta'),esc(x.title),esc(relationLabel(x.relation_type)),esc(originLabel(x.corpus_origin)),`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">Abrir</a>`]);
-  const relatedPreview=rawCorpus.slice(0,10);
-  const relatedCards=relatedPreview.length?`
-    <div class="related-items">
-      ${relatedPreview.map((x,i)=>`
-        <article class="related-item">
-          <div class="related-item-top">
-            <span class="related-index">${i+1}</span>
-            <div>
-              <div class="related-source">${esc(x.source||x.domain||'Fonte aberta')} · ${esc(x.published_at||x.published_year||'Data não localizada')}</div>
-              <a class="related-title" href="${esc(x.url)}" target="_blank" rel="noreferrer">${esc(x.title||'Sem título')}</a>
-            </div>
-          </div>
-          <div class="related-badges">
-            <span class="relation-badge">${esc(relationLabel(x.relation_type))}</span>
-            <span class="origin-badge ${originClass(x.corpus_origin)}">${esc(originLabel(x.corpus_origin))}</span>
-            ${x.isp_mentioned?'<span class="isp-badge">Menciona ISP</span>':''}
-          </div>
-          ${x.relation_evidence?`<p class="related-evidence">${esc(x.relation_evidence)}</p>`:''}
-        </article>
-      `).join('')}
-    </div>
-    ${rawCorpus.length>relatedPreview.length?`<p class="related-more">Exibindo 10 de ${rawCorpus.length} itens relacionados. O corpus auditável completo está ao final do relatório.</p>`:''}
-  `:'<p>Nenhum item relacionado foi validado na amostra.</p>';
+  const buckets=result.corpus_by_origin||bucketByOrigin(rawCorpus);
+  const socialItems=buckets.redes_sociais||[];
+  const youtubeItems=buckets.youtube||[];
+  const portalItems=buckets.portal_noticias||[];
+  const corpusRow=(x,i)=>[String(i+1),esc(x.published_at||x.published_year||'N/D'),esc(x.source||x.domain||'Fonte aberta'),esc(x.title),x.url?`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">Abrir</a>`:'N/D'];
+  const annexTable=(rows)=>rows.length?table(['#','Data','Fonte','Título','URL'],rows.map(corpusRow)):'<p>Nenhum item validado nesta categoria para a janela observada.</p>';
+  const relatedSummary=`<p class="related-intro">${rawCorpus.length} item(ns) validado(s) como materialmente relacionados ao tema: ${socialItems.length} em mídias sociais, ${youtubeItems.length} no YouTube e ${portalItems.length} em portais de notícias. O detalhamento item a item está nos anexos.</p>`;
+  const linkCell=u=>u?`<a href="${esc(u)}" target="_blank" rel="noreferrer">Abrir</a>`:'N/D';
+  const coveredPortals=(m.portal_checks||[]).filter(x=>x.result==='com cobertura auditável');
+  const portalSection=coveredPortals.length?`<h2>Checagem de portais prioritários</h2>${table(['Portal','Resultado','Evidência'],coveredPortals.map(x=>[esc(x.portal),esc(x.result),esc(x.evidence)]))}`:'';
+  const coveredChannels=(m.youtube_priority_channel_checks||[]).filter(x=>x.result==='com cobertura auditável');
+  const channelSection=coveredChannels.length?`<h2>Checagem de canais prioritários no YouTube</h2>${table(['Canal','Resultado','Vídeos','Visualizações','Link do vídeo de maior alcance'],coveredChannels.map(x=>[esc(x.channel),esc(x.result),esc(x.videos??0),esc(viewLabel(x.views)),linkCell(x.lead_url)]))}`:'';
+  const topChannels=(m.top_youtube_channels||[]);
+  const topChannelsSection=topChannels.length?`<h2>Top 5 canais no YouTube</h2>${table(['#','Canal','Vídeos validados','Visualizações','Link do vídeo de maior alcance'],topChannels.map((x,i)=>[String(i+1),esc(x.channel),esc(x.videos??0),esc(viewLabel(x.views)),linkCell(x.lead_url)]))}`:'';
+  const topReach=(m.top_reach_contents||[]);
+  const topReachSection=topReach.length?`<h2>Top 5 conteúdos por alcance disponível</h2><p class="related-intro">Ranking considera apenas itens validados com métrica numérica de alcance disponível no corpus.</p>${table(['#','Plataforma','Fonte','Título','Alcance','URL'],topReach.map((x,i)=>[String(i+1),esc(x.platform),esc(x.source),esc(x.title),esc(viewLabel(x.reach)),linkCell(x.url)]))}`:'';
+  const annexBase=!!p.execution_flags?.enable_fact_layer?2:1;
+  const annexLetter=i=>String.fromCharCode(65+annexBase+i);
   const windowLabel=(a,b,empty='Não delimitado')=>a&&b?`${esc(a)} a ${esc(b)}`:a?esc(a):b?esc(b):empty;
   const factLayerEnabled=!!p.execution_flags?.enable_fact_layer;
   const factSection=factLayerEnabled?`<h2>Camada de Fatos Verificados</h2><p>${esc(d.fact_layer_intro||'')}</p>${facts.length?table(['Pessoa','Vínculo','Data','Fato / causa','Local do fato','Local da morte','Situação'],factRows):'<p>Nenhum fato individual foi suficientemente estruturado na amostra factual.</p>'}`:'';
@@ -64,12 +72,15 @@ function render(result){
     <div class="report-meta"><div><b>Instituição</b><br>${esc(p.institution)}</div>${contextMeta}<div><b>Janela de repercussão</b><br>${windowLabel(p.collection_start,p.collection_end,'Busca temática')}</div><div><b>QA</b><br>${qaBadge(qa)}</div></div>
     <h2>Resumo Executivo</h2><div class="summary"><p>${esc(d.executive_summary)}</p></div>
     <h2>Itens relacionados encontrados</h2>
-    <p class="related-intro">Notícias e conteúdos encontrados pela coleta ou reaproveitados do corpus histórico que foram validados como materialmente relacionados ao tema.</p>
-    ${relatedCards}
+    ${relatedSummary}
     ${factSection}
     <h2>Abertura</h2><p>${esc(d.opening)}</p>
     <h2>I. Panorama da Repercussão</h2><p>${esc(d.panorama)}</p>
     <div class="table-wrap"><table><tbody><tr><th>Itens validados</th><td>${esc(m.valid_items)}</td><th>Veículos</th><td>${esc(m.unique_vehicles)}</td><th>Eventos factuais</th><td>${esc(m.facts?.events||0)}</td></tr></tbody></table></div>
+    ${portalSection}
+    ${channelSection}
+    ${topChannelsSection}
+    ${topReachSection}
     <h2>II. Enquadramento Dominante</h2><p>${esc(d.dominant_framing)}</p>
     <h2>III. Um Estudo, Muitas Pautas</h2>${table(['Eixo temático','Dado-âncora','Cobertura'],axes)}
     <h2>IV. Recorte de Maior Rendimento Jornalístico</h2><p>${esc(d.highest_yield)}</p>
@@ -78,7 +89,9 @@ function render(result){
     <h2>VII. Recomendações e Kit de Imprensa</h2><ul>${(d.recommendations||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul>${table(['Produto','Finalidade'],kit)}
     <h2>VIII. Síntese</h2><p>${esc(d.synthesis)}</p>
     <h2>Anexo A - Nota Metodológica</h2><p>${esc(d.methodological_note)}</p>
-    <h2>Corpus Auditável</h2>${corpus.length?table(['#','Data','Fonte','Título','Relação','Origem','URL'],corpus):'<p>Nenhum item validado na amostra para a janela de repercussão.</p>'}
+    <h2>Anexo ${annexLetter(0)} - Mídias Sociais</h2><p class="related-intro">Itens validados na janela de repercussão.</p>${annexTable(socialItems)}
+    <h2>Anexo ${annexLetter(1)} - YouTube</h2><p class="related-intro">Itens validados na janela de repercussão.</p>${annexTable(youtubeItems)}
+    <h2>Anexo ${annexLetter(2)} - Portais de Notícias</h2><p class="related-intro">Itens validados na janela de repercussão.</p>${annexTable(portalItems)}
     ${qa.findings?.length?`<h2>Achados de QA</h2>${table(['Severidade','Código','Mensagem'],qa.findings.map(x=>[esc(x.severity),esc(x.code),esc(x.message)]))}`:''}
     <div class="footer-note">Fato, fonte factual e item de repercussão são tratados como objetos distintos. Fontes posteriores podem confirmar um fato sem aumentar a repercussão do mês.</div>`;
   buildToc();
@@ -172,8 +185,9 @@ const STAGE_GROUPS = [
   { number: 9, label: 'Extração complementar', keys: ['facts_pass_2'] },
   { number: 10, label: 'Consolidação final', keys: ['fact_resolution_2'] },
   { number: 11, label: 'Análise e classificação', keys: ['classification'] },
-  { number: 12, label: 'Redação do relatório', keys: ['report'] },
-  { number: 13, label: 'Auditoria QA final', keys: ['qa'] }
+  { number: 12, label: 'Cobertura complementar', keys: ['gap_fill'] },
+  { number: 13, label: 'Redação do relatório', keys: ['report'] },
+  { number: 14, label: 'Auditoria QA final', keys: ['qa'] }
 ];
 
 function normalizeGroupStatus(children){

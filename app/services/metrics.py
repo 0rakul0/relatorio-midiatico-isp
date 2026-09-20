@@ -298,8 +298,12 @@ def metrics(db: Session, project_id: int) -> dict:
 
     top_youtube_channels = [
         {
-            **row,
+            "channel": row["channel"],
+            "videos": row["videos"],
             "views": row["views"] if row["view_count_items"] else None,
+            "lead_title": row["lead_title"],
+            "lead_url": row["lead_url"],
+            "lead_views": row["lead_views"] if row["lead_views"] >= 0 else None,
         }
         for row in sorted(
             channels.values(),

@@ -16,7 +16,7 @@ from app.services.corpus_reuse import reuse_prior_corpus
 from app.services.execution_profile import execution_flags
 from app.services.news_validation import validate_news_stage
 from app.services.project_profile import discover_project_profile, project_payload, trusted_launch_date
-from app.services.reporting import draft_report_with_llm
+from app.services.reporting import draft_report_with_llm, refine_report_with_qa
 from app.services.search_planning import plan_report_with_llm
 from app.services.validation import validate_video_metadata_cross_source
 
@@ -343,6 +343,72 @@ def run_full_methodology(
     else:
         stage("classification", "SKIPPED", (processes.get("classification") or {}).get("reason") or "Nao necessaria")
 
+    # 11b. Gap fill (fase 2) ------------------------------------------
+    # Uma única rodada complementar por projeto: lacunas de cobertura
+    # viram consultas abertas (web como um todo, sem site:).
+    from app.services.search_planning import detect_coverage_gaps, plan_gap_fill_queries
+
+    gap_fill: dict = {"created": 0, "collected": 0, "validated": 0, "status": "SKIPPED", "reason": ""}
+    check()
+    gap_state = (project.execution_plan or {}).get("gap_fill") or {}
+    if gap_state.get("completed"):
+        gap_fill["reason"] = "Cobertura complementar já executada neste projeto"
+        stage("gap_fill", "SKIPPED", gap_fill["reason"])
+    elif not flags.get("enable_web_collection", True):
+        gap_fill["reason"] = "Coleta web desativada pelo plano"
+        stage("gap_fill", "SKIPPED", gap_fill["reason"])
+    else:
+        gaps = detect_coverage_gaps(db, project)
+        if not gaps["needs_fill"]:
+            gap_fill["reason"] = "Sem lacunas de portais prioritários"
+            stage("gap_fill", "SKIPPED", gap_fill["reason"])
+        else:
+            portals = ", ".join(entry["portal"] for entry in gaps["uncovered_portals"])
+            stage("gap_fill", "RUNNING", f"Lacunas em: {portals[:180]}")
+            created = plan_gap_fill_queries(db, project, gaps)
+            gap_fill["created"] = len(created)
+            if not created:
+                gap_fill["reason"] = "Nenhuma consulta complementar válida para as lacunas"
+                stage("gap_fill", "SKIPPED", gap_fill["reason"])
+            else:
+                completed_ok = False
+                try:
+                    gap_fill["collected"] = collect_web(
+                        db, project.id, cancel_check=check,
+                        progress_detail=detail_for("gap_fill"),
+                    )
+                    gap_validation = validate_news_stage(
+                        db, project, cancel_check=check,
+                        progress_detail=detail_for("gap_fill"),
+                    )
+                    gap_fill["validated"] = int(gap_validation.get("valid", 0))
+                    classify_with_llm(
+                        db, project, cancel_check=check,
+                        progress_detail=detail_for("gap_fill"),
+                    )
+                    completed_ok = True
+                    stage(
+                        "gap_fill", "DONE",
+                        f"{len(created)} consulta(s) complementar(es); "
+                        f"{gap_fill['collected']} URL(s) nova(s); "
+                        f"{gap_fill['validated']} validada(s)",
+                    )
+                except RuntimeError as exc:
+                    from app.orchestration.state import RunCancelled
+
+                    if isinstance(exc, RunCancelled):
+                        raise
+                    # Best-effort: falha na coleta complementar não derruba o run
+                    # e permite nova tentativa numa próxima execução.
+                    gap_fill["reason"] = f"Coleta complementar indisponível: {str(exc)[:150]}"
+                    stage("gap_fill", "DONE", gap_fill["reason"])
+                if completed_ok:
+                    plan_state = dict(project.execution_plan or {})
+                    plan_state["gap_fill"] = {"completed": True, "created": gap_fill["created"]}
+                    project.execution_plan = plan_state
+                    db.commit()
+                    gap_fill["status"] = "DONE"
+
     # 12. Report -------------------------------------------------------
     check()
     if not flags["enable_report_writer"]:
@@ -351,13 +417,21 @@ def run_full_methodology(
     drafted = draft_report_with_llm(db, project)
     stage("report", "DONE", "Relatorio estruturado e persistido")
 
-    # 13. QA -----------------------------------------------------------
+    # 13. QA + refinement loop -----------------------------------------
     check()
     if not flags["enable_qa"]:
         raise RuntimeError("O plano desativou QA, mas esta etapa e obrigatoria")
     stage("qa", "RUNNING", "Executando verificacoes deterministicas e auditoria final")
     qa = run_report_qa(db, project, drafted)
-    stage("qa", "DONE", f"QA {qa['status']}")
+    refinements = 0
+    if not qa["approved"]:
+        drafted, qa, refinements = refine_report_with_qa(
+            db, project, drafted, qa,
+            progress_detail=detail_for("report"),
+        )
+    if refinements:
+        stage("report", "DONE", f"Relatorio revisado {refinements}x a partir dos achados do QA")
+    stage("qa", "DONE", f"QA {qa['status']}" + (f" apos {refinements} revisao(oes)" if refinements else ""))
 
     project.status = "REPORT_READY" if qa["approved"] else "REPORT_NEEDS_REVIEW"
     db.commit()
@@ -380,6 +454,8 @@ def run_full_methodology(
         "fact_resolution_2": fact_resolution_2,
         "validation": validation,
         "classification": classification,
+        "gap_fill": gap_fill,
+        "refinements": refinements,
         "qa": qa,
         **drafted,
     }

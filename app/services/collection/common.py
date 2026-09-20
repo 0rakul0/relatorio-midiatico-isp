@@ -42,6 +42,11 @@ def canonicalize(url: str) -> str:
         video_id = parsed.path.strip("/").split("/")[0]
         if video_id:
             return urlunparse(("https", "www.youtube.com", "/watch", "", urlencode({"v": video_id}), ""))
+    if is_youtube_host(host):
+        # /shorts/<id> e /watch?v=<id> são o mesmo vídeo.
+        short_match = re.fullmatch(r"/shorts/([^/?#]+)", parsed.path.rstrip("/"))
+        if short_match and short_match.group(1):
+            return urlunparse(("https", "www.youtube.com", "/watch", "", urlencode({"v": short_match.group(1)}), ""))
     query = ""
     if is_youtube_host(host) and parsed.path.rstrip("/") == "/watch":
         video_id = next((value for key, value in parse_qsl(parsed.query) if key == "v"), "")

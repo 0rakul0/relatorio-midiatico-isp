@@ -16,6 +16,25 @@ class Settings(BaseSettings):
     # OpenAI is used only as the LLM. External search is DuckDuckGo only.
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
+    # Reasoning effort for reasoning models (gpt-5/o-series). Our tasks are
+    # constrained JSON extractions: "low" keeps quality while preventing the
+    # reasoning trace from eating the whole output budget (which used to
+    # abort structured finalization with "length limit was reached").
+    # Ignored for non-reasoning models. Empty/null disables.
+    openai_reasoning_effort: str | None = "low"
+
+    # QA por LLM (camada narrativa). O QA determinístico é sempre
+    # obrigatório e gratuito; este flag desliga só a auditoria por LLM
+    # (modo econômico para rodadas de teste).
+    enable_llm_qa: bool = True
+
+    # Refinamentos automáticos redação -> QA. Cada rodada custa 1 redação
+    # + 1 QA; 0 desliga o loop (vale o primeiro rascunho).
+    max_qa_refinements: int = Field(default=2, ge=0, le=5)
+
+    # Cobertura complementar (fase 2): consultas direcionadas aos portais
+    # prioritários sem item validado. Uma única rodada por projeto.
+    max_gap_fill_queries: int = Field(default=4, ge=0, le=12)
     youtube_search_max_results: int = 15
 
     # Optional agent-tool rounds. Collector normally uses one bulk call per medium.

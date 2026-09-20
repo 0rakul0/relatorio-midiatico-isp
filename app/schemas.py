@@ -52,6 +52,8 @@ class ManualMediaItemCreate(BaseModel):
     published_at: date | None = None
     snippet: str | None = None
     content: str | None = None
+    source_name: str | None = None
+    view_count: int | None = Field(default=None, ge=0)
     query_id: int | None = None
     purpose: Literal[
         "MEDIA_REPERCUSSION",
@@ -272,6 +274,21 @@ class SearchPlanItem(StrictLLMOutput):
 
 class SearchPlanResponse(StrictLLMOutput):
     queries: list[SearchPlanItem] = Field(max_length=50)
+
+
+# ---------------------------------------------------------------------------
+# Cobertura complementar (fase 2: lacunas -> planejador -> coleta direcionada)
+# ---------------------------------------------------------------------------
+
+
+class GapFillQuery(StrictLLMOutput):
+    query: str
+    focus: str
+    rationale: str
+
+
+class GapFillResponse(StrictLLMOutput):
+    queries: list[GapFillQuery] = Field(default_factory=list, max_length=12)
 
 
 # ---------------------------------------------------------------------------

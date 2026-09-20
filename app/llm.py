@@ -20,6 +20,11 @@ def llm_is_configured() -> bool:
     return bool(get_settings().openai_api_key)
 
 
+def _is_reasoning_model(model: str) -> bool:
+    name = (model or "").strip().lower()
+    return name.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
 def create_chat_model(*, max_output_tokens: int = 50000):
     settings = get_settings()
     if not settings.openai_api_key:
@@ -27,12 +32,20 @@ def create_chat_model(*, max_output_tokens: int = 50000):
 
     from langchain_openai import ChatOpenAI
 
-    return ChatOpenAI(
-        api_key=settings.openai_api_key,
-        model=settings.openai_model,
-        temperature=0,
-        max_completion_tokens=max_output_tokens,
-    )
+    base_kwargs: dict = {
+        "api_key": settings.openai_api_key,
+        "model": settings.openai_model,
+        "temperature": 0,
+        "max_completion_tokens": max_output_tokens,
+    }
+    effort = (settings.openai_reasoning_effort or "").strip().lower()
+    if effort and _is_reasoning_model(settings.openai_model):
+        try:
+            return ChatOpenAI(**base_kwargs, reasoning_effort=effort)
+        except TypeError:
+            # Versões antigas do langchain-openai sem o parâmetro dedicado.
+            base_kwargs["model_kwargs"] = {"reasoning_effort": effort}
+    return ChatOpenAI(**base_kwargs)
 
 
 def usage_counts(message: Any) -> dict[str, int]:

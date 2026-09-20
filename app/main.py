@@ -40,6 +40,7 @@ from app.services import (
     run_full_methodology,
     validate_and_classify,
 )
+from app.services.collection.media_origin import classify_media_origin
 from app.topic_profile import requested_topic_window
 
 
@@ -501,8 +502,11 @@ def add_manual_item(project_id: int, payload: ManualMediaItemCreate, db: Session
         published_at=payload.published_at,
         snippet=payload.snippet,
         content=payload.content,
+        source_name=payload.source_name,
+        view_count=payload.view_count,
         query_id=payload.query_id,
         search_source="manual",
+        media_origin=classify_media_origin(url, payload.url.host),
         discovery_purposes=[payload.purpose],
     )
     db.add(row)

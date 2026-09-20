@@ -87,6 +87,12 @@ def test_canonicalize_strips_only_tracking_and_keeps_semantics():
     )
 
 
+def test_canonicalize_unifies_shorts_and_watch_urls():
+    assert canonicalize("https://www.youtube.com/shorts/DsYCyZ2K5gI") == canonicalize(
+        "https://www.youtube.com/watch?v=DsYCyZ2K5gI"
+    )
+
+
 def test_parse_provider_date_handles_common_formats():
     assert parse_provider_date("2026-08-12") == date(2026, 8, 12)
     assert parse_provider_date("2026-08-12T10:30:00Z") == date(2026, 8, 12)

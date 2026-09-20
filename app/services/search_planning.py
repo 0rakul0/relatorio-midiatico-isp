@@ -11,7 +11,7 @@ from app.config import get_settings
 from app.llm import llm_is_configured
 from app.media_scout import MediaScout, ScoutTask
 from app.models import OfficialFact, Project, SearchQuery
-from app.schemas import ReportPlanResponse
+from app.schemas import GapFillResponse, ReportPlanResponse
 from app.source_registry import OFFICIAL_SECURITY_SOURCES, PRIORITY_MEDIA_SOURCES
 from app.topic_profile import build_topic_profile, normalized_text
 from app.services.collection.guards import query_preserves_project_anchor
@@ -486,3 +486,178 @@ def plan_report_with_llm(db: Session, project: Project) -> list[SearchQuery]:
 def plan_queries_with_llm(db: Session, project: Project) -> list[SearchQuery]:
     """Backward-compatible API name for the new report planner."""
     return plan_report_with_llm(db, project)
+
+
+# ---------------------------------------------------------------------------
+# Fase 2: cobertura complementar direcionada a lacunas
+# ---------------------------------------------------------------------------
+
+# Resultados de portal_checks que justificam uma segunda tentativa direcionada.
+# "coleta desativada/indisponível" e cobertura confirmada ficam de fora.
+_GAP_FILLABLE_RESULTS = {
+    "sem item validado na amostra",
+    "não consultado individualmente nesta execução",
+}
+
+
+def detect_coverage_gaps(db: Session, project: Project) -> dict[str, Any]:
+    """Lacunas acionáveis: portais prioritários sem item validado (ordem fixa).
+
+    YouTube fica de fora: os canais prioritários já passam por auditoria
+    dedicada na primeira coleta e repetí-los não traz cobertura nova.
+    """
+    from app.services.metrics import metrics as project_metrics
+
+    settings = get_settings()
+    data = project_metrics(db, project.id)
+    checks = {
+        str(item.get("portal")): str(item.get("result") or "")
+        for item in (data.get("portal_checks") or [])
+    }
+    uncovered = [
+        {"portal": label, "domain": domain, "result": checks.get(label, "")}
+        for label, domain in PRIORITY_MEDIA_SOURCES
+        if checks.get(label, "") in _GAP_FILLABLE_RESULTS
+    ]
+    return {
+        "uncovered_portals": uncovered,
+        "valid_items": int(data.get("valid_items") or 0),
+        "target_items": int(settings.target_media_items),
+        "needs_fill": bool(uncovered),
+    }
+
+
+def _has_site_operator(query: str) -> bool:
+    return bool(re.search(r"(?:^|\s)site:[^\s]+", query or "", flags=re.IGNORECASE))
+
+
+def _gap_fallback_angles(
+    project: Project, executed: list[str], cap: int
+) -> list[tuple[str, str]]:
+    """Ângulos abertos ainda não executados, minerados das listas do perfil.
+
+    O round 1 já consumiu a estratégia compacta do scout; aqui varremos as
+    variantes restantes (descoberta factual, assunto, sinônimos, âncoras)
+    em busca de formulações semanticamente novas para a web como um todo.
+    """
+    profile = project.topic_profile or {}
+    pools: list[str] = []
+    for key in (
+        "event_search_variants",
+        "fact_discovery_variants",
+        "product_search_variants",
+        "subject_terms",
+        "search_synonyms",
+        "event_anchor",
+        "product_anchor",
+    ):
+        value = profile.get(key)
+        if isinstance(value, list):
+            pools.extend(str(item) for item in value if str(item).strip())
+        elif value:
+            pools.append(str(value))
+    pools.append(project.topic)
+
+    seen: set[str] = set()
+    phrases: list[str] = []
+    for phrase in pools:
+        compact = " ".join(str(phrase).split()).strip()
+        key = normalized_text(compact)
+        if compact and key not in seen:
+            seen.add(key)
+            phrases.append(compact)
+
+    selected = list(executed)
+    output: list[tuple[str, str]] = []
+    for phrase in phrases:
+        if len(output) >= max(0, cap):
+            break
+        if not _media_query_is_acceptable(project, phrase):
+            continue
+        if _is_redundant(phrase, selected):
+            continue
+        output.append((phrase, "Ângulo do perfil ainda não executado na web aberta."))
+        selected.append(phrase)
+    return output
+
+
+def plan_gap_fill_queries(
+    db: Session,
+    project: Project,
+    gaps: dict[str, Any],
+    *,
+    max_queries: int | None = None,
+) -> list[SearchQuery]:
+    """Planeja (LLM + guardas) consultas abertas para as lacunas. Idempotente.
+
+    As consultas pesquisam a web como um todo — sem operador site: nem
+    restrição a links. As lacunas entram como contexto do que falta cobrir.
+    """
+    settings = get_settings()
+    cap = max(0, int(settings.max_gap_fill_queries if max_queries is None else max_queries))
+    uncovered = list(gaps.get("uncovered_portals") or [])
+    if cap <= 0 or not uncovered:
+        return []
+
+    executed = [
+        row.query for row in db.scalars(
+            select(SearchQuery).where(SearchQuery.project_id == project.id)
+        ).all()
+    ]
+    existing = _existing_queries(db, project.id)
+    selected = list(executed)
+    candidates: list[tuple[str, str]] = []
+
+    if llm_is_configured():
+        try:
+            result = get_report_agent().run(
+                task="gap_planner",
+                payload={
+                    "topic": project.topic,
+                    "project_type": project.project_type,
+                    "topic_profile": project.topic_profile,
+                    "uncovered_portals": uncovered,
+                    "executed_queries": executed,
+                    "max_queries": cap,
+                },
+                schema_name="gap_fill_v1",
+                response_model=GapFillResponse,
+                max_output_tokens=2500,
+            )
+        except RuntimeError:
+            result = {"queries": []}
+        for item in (result.get("queries") or [])[:cap]:
+            query = " ".join(str(item.get("query") or "").split()).strip()
+            if not query or _has_site_operator(query):
+                continue
+            if not _media_query_is_acceptable(project, query):
+                continue
+            if query in existing or _is_redundant(query, selected):
+                continue
+            candidates.append((query, str(item.get("rationale") or "")))
+            selected.append(query)
+
+    # Fallback determinístico: ângulos do perfil ainda não executados.
+    if len(candidates) < cap:
+        for query, rationale in _gap_fallback_angles(project, selected, cap - len(candidates)):
+            if query in existing:
+                continue
+            candidates.append((query, rationale))
+            selected.append(query)
+
+    created: list[SearchQuery] = []
+    for query, rationale in candidates[:cap]:
+        row = _add_query(
+            db,
+            project,
+            existing,
+            query=query,
+            kind="media_complementary",
+            purpose="MEDIA_REPERCUSSION",
+            rationale=f"[cobertura complementar] {rationale}"[:1000],
+            priority=3,
+        )
+        if row:
+            created.append(row)
+    db.commit()
+    return created

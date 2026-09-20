@@ -5,10 +5,11 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.22 /uv /uvx /bin/
 
 WORKDIR /app
 
-# Instala no Python do sistema: o compose monta .:/app por cima,
-# o que esconderia um .venv dentro de /app. Assim o `uvicorn`
-# do `command:` continua no PATH.
-ENV UV_SYSTEM_PYTHON=1 \
+# venv fora de /app: o compose monta .:/app por cima, o que esconderia
+# um .venv dentro de /app. Com PATH ajustado, o `uvicorn` do `command:`
+# continua funcionando.
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
+    PATH=/opt/venv/bin:$PATH \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     PYTHONDONTWRITEBYTECODE=1 \

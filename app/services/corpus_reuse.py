@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import CorpusDocument, MediaItem, Project, ProjectCorpusLink
+from app.services.collection.media_origin import classify_media_origin
 from app.topic_profile import normalized_text
 from app.year_utils import find_years
 
@@ -194,7 +195,8 @@ def sync_media_item_to_corpus(
             source_name=item.source_name,
             view_count=item.view_count,
             search_source=item.search_source,
-            media_origin=item.media_origin or "PORTAL_NOTICIAS",
+            media_origin=item.media_origin
+            or classify_media_origin(item.url, item.domain),
             source_provenance=list(item.source_provenance or []),
             first_seen_at=now,
             last_seen_at=now,
@@ -219,6 +221,8 @@ def sync_media_item_to_corpus(
             document.source_name = item.source_name
         if not document.media_origin and item.media_origin:
             document.media_origin = item.media_origin
+        if not document.media_origin:
+            document.media_origin = classify_media_origin(item.url, item.domain)
         if item.view_count is not None:
             document.view_count = item.view_count
         document.source_provenance = _merge_provenance(
@@ -431,6 +435,8 @@ def reuse_prior_corpus(
             source_name=document.source_name,
             view_count=document.view_count,
             search_source="corpus_reuse",
+            media_origin=document.media_origin
+            or classify_media_origin(document.url, document.domain),
             source_provenance=provenance,
             discovery_purposes=["MEDIA_REPERCUSSION", "CORPUS_REUSE"],
             status="PENDING",

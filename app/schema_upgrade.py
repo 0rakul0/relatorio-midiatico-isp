@@ -98,6 +98,28 @@ def ensure_schema() -> None:
     dialect_name = engine.dialect.name
 
     with engine.begin() as connection:
+        if dialect_name == "postgresql":
+            # Defesa em profundidade no Supabase/bancos gerenciados: RLS
+            # ativado em todas as tabelas do app. Sem policies, anon e
+            # authenticated são negados por padrão; o backend acessa via
+            # role postgres/service_role, que bypassa RLS. Idempotente.
+            unprotected = connection.execute(
+                text(
+                    "SELECT tablename FROM pg_tables "
+                    "WHERE schemaname = 'public' AND rowsecurity = false"
+                )
+            ).scalars().all()
+            for table_name in unprotected:
+                if table_name in Base.metadata.tables:
+                    connection.execute(text(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY"))
+            # O app nunca usa a Data API: remove GRANTs de anon/authenticated
+            # (auto-exposição do Supabase) nas tabelas do app. Idempotente.
+            api_roles = connection.execute(
+                text("SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated')")
+            ).scalars().all()
+            for table_name in Base.metadata.tables:
+                for role in api_roles:
+                    connection.execute(text(f"REVOKE ALL ON TABLE {table_name} FROM {role}"))
         for table_name, columns in ADDITIVE_COLUMNS.items():
             if table_name not in existing_tables:
                 continue

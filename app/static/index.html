@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Relatório de Repercussão Midiática</title>
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=2">
 </head>
 <body>
 <header class="top screen-only">
@@ -17,7 +17,7 @@
       <h2>Gerar relatório</h2>
       <p class="note">A execução agora é acompanhada etapa por etapa: <b>cinza</b> = ainda não iniciada, <b>laranja</b> = em execução e <b>verde</b> = concluída. O relatório pode ser interrompido entre operações seguras.</p>
       <form id="report-form">
-        <div class="field topic-row"><label for="topic">Tema</label><input id="topic" value="policiais mortos em agosto de 2026 no Rio de Janeiro" required minlength="3"></div>
+        <div class="field topic-row"><label for="topic">Tema</label><input id="topic" placeholder="pesquise seu Tema" required minlength="3"></div>
         <div class="date-grid">
           <div class="field"><label for="collection-start">Repercussão - início</label><input id="collection-start" type="date"></div>
           <div class="field"><label for="collection-end">Repercussão - fim</label><input id="collection-end" type="date"></div>
@@ -72,6 +72,7 @@
     <article id="report" class="report-doc"></article>
   </div>
 </main>
-<script src="/static/app.js"></script>
+<!-- bump ?v= a cada mudanca em app.js/styles.css para furar o cache do navegador -->
+<script src="/static/app.js?v=2"></script>
 </body>
 </html>

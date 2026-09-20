@@ -34,6 +34,7 @@ RUN_STAGES = [
     ("facts_pass_2", "Extração factual complementar"),
     ("fact_resolution_2", "Consolidação factual final"),
     ("classification", "Análise e classificação"),
+    ("gap_fill", "Cobertura complementar"),
     ("report", "Redação do relatório"),
     ("qa", "Auditoria QA final"),
 ]

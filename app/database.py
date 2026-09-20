@@ -15,6 +15,10 @@ def _engine_kwargs() -> dict:
         "pool_size": settings.db_pool_size,
         "max_overflow": settings.db_max_overflow,
         "pool_timeout": settings.db_pool_timeout,
+        # Pooler (Supavisor/pgbouncer) multiplexa sessoes: prepared
+        # statements server-side colidem ("_pg3_0 already exists").
+        # Desliga o prepare do psycopg; custo irrelevante p/ a carga.
+        "connect_args": {"prepare_threshold": None},
     }
 
 
