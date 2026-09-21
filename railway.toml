@@ -1,0 +1,11 @@
+[build]
+builder = "DOCKERFILE"
+
+[deploy]
+# Railway injeta PORT em tempo de execução. O shell é necessário para
+# expandi-la quando o serviço é iniciado a partir de uma imagem Docker.
+startCommand = "/bin/sh -c 'exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}'"
+healthcheckPath = "/health"
+healthcheckTimeout = 90
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
