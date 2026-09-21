@@ -71,6 +71,7 @@ def build_pdf(data: dict) -> bytes:
     facts = data.get("fact_events", [])
     fact_evidence = data.get("fact_evidence", [])
     academic_papers = data.get("academic_papers", [])
+    word_cloud = data.get("word_cloud") or {}
     by_origin = data.get("corpus_by_origin") or _split_by_origin(corpus)
     social_items = by_origin.get("redes_sociais", [])
     youtube_items = by_origin.get("youtube", [])
@@ -212,6 +213,46 @@ def build_pdf(data: dict) -> bytes:
                     Paragraph(name, heading),
                     Paragraph(escape(_text(content)).replace("\n", "<br/>"), body),
                 ]
+            )
+        )
+
+    story.append(Paragraph("Nuvem de palavras", heading))
+    cloud_words = list(word_cloud.get("words") or [])
+    if cloud_words:
+        cloud_markup = []
+        for item in cloud_words[:45]:
+            weight = max(0.0, min(1.0, float(item.get("weight") or 0.0)))
+            size = 7.5 + (weight * 8.5)
+            label = escape(_text(item.get("word")))
+            cloud_markup.append(f'<font size="{size:.1f}"><b>{label}</b></font>')
+        story.append(
+            Paragraph(
+                " &nbsp;&nbsp; ".join(cloud_markup),
+                ParagraphStyle(
+                    "WordCloud",
+                    parent=body,
+                    alignment=1,
+                    leading=18,
+                    backColor=colors.HexColor("#f4f8fb"),
+                    borderColor=colors.HexColor("#dbe4ec"),
+                    borderWidth=0.5,
+                    borderPadding=10,
+                    spaceAfter=4,
+                ),
+            )
+        )
+        story.append(
+            Paragraph(
+                f"{word_cloud.get('documents', 0)} notícia(s) validada(s) de portais; "
+                "stopwords e nomes de sites removidos.",
+                small,
+            )
+        )
+    else:
+        story.append(
+            Paragraph(
+                "Nenhuma palavra relevante disponível no corpus jornalístico validado.",
+                small,
             )
         )
 
