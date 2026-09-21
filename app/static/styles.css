@@ -484,6 +484,13 @@ button:disabled {
     font-size: 11px;
 }
 
+.annex-table th:nth-child(1),
+.annex-table td:nth-child(1),
+.annex-table th:nth-child(2),
+.annex-table td:nth-child(2) {
+    white-space: nowrap;
+}
+
 .annex-duplicate-badge {
     display: inline-flex;
     align-items: center;
