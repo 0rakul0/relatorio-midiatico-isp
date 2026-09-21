@@ -447,7 +447,6 @@ def build_pdf(data: dict) -> bytes:
         story.append(
             KeepTogether(
                 [
-                    Paragraph("Nuvem de palavras", heading),
                     cloud_visual,
                     Spacer(1, 4),
                     Paragraph(cloud_note, cloud_note_style),
@@ -458,7 +457,6 @@ def build_pdf(data: dict) -> bytes:
         story.append(
             KeepTogether(
                 [
-                    Paragraph("Nuvem de palavras", heading),
                     Paragraph(
                         "Nenhuma palavra relevante disponível no corpus jornalístico validado.",
                         small,
