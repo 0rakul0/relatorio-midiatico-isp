@@ -30,7 +30,7 @@ class ProjectCreate(BaseModel):
     enable_youtube: bool | None = None
     enable_fact_layer: bool | None = None
     enable_nominal_followup: bool | None = None
-    enable_cross_validation: bool | None = None
+    enable_academic_research: bool | None = None
 
 
 class OfficialFactCreate(BaseModel):
@@ -132,6 +132,55 @@ class AgentBulkSearchResponse(StrictLLMOutput):
 class CollectorExecutionResponse(StrictLLMOutput):
     status: Literal["COMPLETED", "PARTIAL", "UNAVAILABLE"]
     detail: str
+
+
+class AgentAcademicSearchArgs(BaseModel):
+    queries: list[str] = Field(
+        min_length=1,
+        max_length=3,
+        description="One to three scientific literature queries for arXiv",
+    )
+    max_results_per_query: int = Field(default=6, ge=1, le=10)
+
+
+class AcademicToolPaper(StrictLLMOutput):
+    provider: Literal["arxiv"]
+    external_id: str
+    arxiv_id: str | None = None
+    doi: str | None = None
+    title: str
+    authors: list[str] = Field(default_factory=list, max_length=50)
+    abstract: str | None = None
+    published_at: str | None = None
+    updated_at: str | None = None
+    categories: list[str] = Field(default_factory=list, max_length=30)
+    url: str
+    pdf_url: str | None = None
+    journal_reference: str | None = None
+    is_preprint: bool = True
+
+
+class AcademicSearchToolResponse(StrictLLMOutput):
+    queries: list[str] = Field(default_factory=list, max_length=3)
+    provider: Literal["arxiv"]
+    status: Literal["OK", "NO_RESULTS", "ERROR"]
+    results: list[AcademicToolPaper] = Field(default_factory=list, max_length=20)
+    errors: list[str] = Field(default_factory=list, max_length=10)
+
+
+class AcademicPaperSelection(StrictLLMOutput):
+    provider: Literal["arxiv"]
+    external_id: str
+    title: str
+    relevance_score: float = Field(ge=0, le=1)
+    relation_to_topic: str = Field(min_length=3, max_length=4000)
+
+
+class AcademicResearchResponse(StrictLLMOutput):
+    searched: bool
+    queries: list[str] = Field(default_factory=list, max_length=3)
+    papers: list[AcademicPaperSelection] = Field(default_factory=list, max_length=10)
+    summary: str | None = Field(default=None, max_length=5000)
 
 
 class AgentBulkArticleFetchArgs(BaseModel):
@@ -243,7 +292,7 @@ class ReportPlanResponse(StrictLLMOutput):
 
     web_collection: ProcessDecision
     youtube_collection: ProcessDecision
-    cross_validation: ProcessDecision
+    academic_research: ProcessDecision
     media_validation: ProcessDecision
     fact_extraction: ProcessDecision
     fact_resolution: ProcessDecision
