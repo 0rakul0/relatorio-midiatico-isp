@@ -11,6 +11,7 @@ from app.services.academic_research import academic_papers_for_project
 from app.services.execution_profile import execution_flags
 from app.services.project_profile import project_payload
 from app.services.metrics import corpus_for_project, metrics, split_corpus, split_corpus_by_origin
+from app.services.word_cloud import word_cloud_for_project
 from app.report_fingerprint import request_fingerprint
 
 
@@ -50,6 +51,8 @@ def hydrate_cached_report(db: Session, project: Project, generated: GeneratedRep
             if flags.get("enable_academic_research")
             else []
         )
+    if "word_cloud" not in payload:
+        payload["word_cloud"] = word_cloud_for_project(db, project.id)
     payload["qa"] = {"status": generated.qa_status, "findings": generated.qa_findings or []}
     payload["version_no"] = generated.version_no or 1
     payload["content_hash"] = generated.content_hash
