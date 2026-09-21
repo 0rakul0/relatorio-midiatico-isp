@@ -65,6 +65,90 @@ def _document_text(item: MediaItem) -> str:
     return f"{item.title or ''}\n{body}".strip()
 
 
+def _variant_candidates(value: str) -> list[str]:
+    """Variantes morfologicas conservadoras para reduzir repeticao visual.
+
+    Nao e stemming geral: so gera transformacoes frequentes e reversiveis do
+    portugues. A fusao so acontece quando a forma candidata existe de fato no
+    corpus, evitando aproximar palavras apenas por semelhanca semantica.
+    """
+    candidates: list[str] = []
+    length = len(value)
+
+    if length >= 6:
+        # operacoes -> operacao; intervencoes -> intervencao
+        if value.endswith("oes"):
+            candidates.append(value[:-3] + "ao")
+        # policiais/sociais -> policial/social
+        if value.endswith("ais"):
+            candidates.append(value[:-3] + "al")
+        # homens -> homem
+        if value.endswith("ens"):
+            candidates.append(value[:-3] + "em")
+        # autores/trabalhadores -> autor/trabalhador (quando a forma existe)
+        if value.endswith("res"):
+            candidates.append(value[:-2])
+        # plural regular: mulheres -> mulher, crimes -> crime etc.
+        if value.endswith("es"):
+            candidates.append(value[:-2])
+        if value.endswith("s") and not value.endswith(("ss", "us")):
+            candidates.append(value[:-1])
+
+    # Genero gramatical: criminoso/criminos a, armado/armada etc.
+    # So funde se a outra forma estiver presente no corpus.
+    if length >= 6 and value[-1:] in {"a", "o"}:
+        candidates.append(value[:-1] + ("o" if value.endswith("a") else "a"))
+
+    return list(dict.fromkeys(candidate for candidate in candidates if len(candidate) >= 3))
+
+
+def _merge_term_variants(
+    counts: Counter[str],
+    surfaces: dict[str, Counter[str]],
+) -> tuple[Counter[str], dict[str, Counter[str]], int]:
+    """Agrupa variantes morfologicas sem alterar termos semanticamente distintos."""
+    merged_counts: Counter[str] = Counter(counts)
+    merged_surfaces: dict[str, Counter[str]] = {
+        key: Counter(value) for key, value in surfaces.items()
+    }
+    merged_variants = 0
+
+    # Formas mais frequentes viram representantes naturais. Em empate, a forma
+    # mais curta tende a ser o singular/base e recebe prioridade.
+    representatives = sorted(
+        merged_counts,
+        key=lambda key: (-merged_counts[key], len(key), key),
+    )
+    available = set(merged_counts)
+
+    for value in sorted(list(available), key=lambda key: (len(key), key), reverse=True):
+        if value not in available:
+            continue
+
+        candidates = [
+            candidate for candidate in _variant_candidates(value)
+            if candidate in available and candidate != value
+        ]
+        if not candidates:
+            continue
+
+        target = min(
+            candidates,
+            key=lambda candidate: (
+                -merged_counts[candidate],
+                len(candidate),
+                representatives.index(candidate) if candidate in representatives else 10_000,
+            ),
+        )
+
+        merged_counts[target] += merged_counts.pop(value)
+        merged_surfaces[target].update(merged_surfaces.pop(value, Counter()))
+        available.remove(value)
+        merged_variants += 1
+
+    return merged_counts, merged_surfaces, merged_variants
+
+
 def word_cloud_for_project(
     db: Session,
     project_id: int,
@@ -110,14 +194,19 @@ def word_cloud_for_project(
             surfaces[normalized][display] += 1
             total_tokens += 1
 
-    top = counts.most_common(max(1, min(int(max_words or 45), 80)))
+    normalized_counts, normalized_surfaces, merged_variants = _merge_term_variants(
+        counts,
+        surfaces,
+    )
+
+    top = normalized_counts.most_common(max(1, min(int(max_words or 45), 80)))
     max_count = top[0][1] if top else 0
     min_count = top[-1][1] if top else 0
     spread = max(1, max_count - min_count)
 
     words = []
     for normalized, count in top:
-        display = surfaces[normalized].most_common(1)[0][0]
+        display = normalized_surfaces[normalized].most_common(1)[0][0]
         weight = 1.0 if max_count == min_count else (count - min_count) / spread
         words.append(
             {
@@ -132,7 +221,9 @@ def word_cloud_for_project(
         "media_origin": PORTAL_NOTICIAS,
         "documents": len(items),
         "total_tokens": total_tokens,
-        "unique_tokens": len(counts),
+        "unique_tokens": len(normalized_counts),
+        "raw_unique_tokens": len(counts),
+        "merged_variants": merged_variants,
         "excluded_site_tokens": len(excluded_sites),
         "words": words,
     }
