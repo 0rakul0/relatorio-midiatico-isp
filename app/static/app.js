@@ -65,6 +65,16 @@ function render(result){
   const risks=(d.risk_assessment||[]).map(x=>[x.dimension,x.assessment,x.evidence]);
   const kit=(d.press_kit||[]).map(x=>[x.product,x.purpose]);
   const rawCorpus=result.corpus||[];
+  const academicPapers=result.academic_papers||[];
+  const academicSection=academicPapers.length?`<h2>Literatura científica relacionada</h2>
+    <p class="related-intro">Estes trabalhos foram recuperados no arXiv para contextualização científica. Eles não são contados como repercussão midiática e não confirmam automaticamente fatos noticiados.</p>
+    ${table(['Ano','Autores','Artigo','Relação com o tema','Fonte'],academicPapers.map(x=>[
+      x.published_at?String(x.published_at).slice(0,4):'N/D',
+      (x.authors||[]).slice(0,4).join(', ')+((x.authors||[]).length>4?' et al.':''),
+      x.title||'Sem título',
+      x.relation_to_topic||'Contexto científico relacionado',
+      x.url?raw(`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">arXiv</a>`):'N/D'
+    ]))}`:'';
   const buckets=result.corpus_by_origin||bucketByOrigin(rawCorpus);
   const socialItems=buckets.redes_sociais||[];
   const youtubeItems=buckets.youtube||[];
@@ -93,6 +103,7 @@ function render(result){
     <h1>${esc(d.title)}</h1><p class="interpretive">${esc(d.interpretive_title)}</p><p class="subtitle">${esc(d.subtitle)}</p>
     <div class="report-meta"><div><b>Instituição</b><br>${esc(p.institution)}</div>${contextMeta}<div><b>Janela de repercussão</b><br>${windowLabel(p.collection_start,p.collection_end,'Busca temática')}</div><div><b>QA</b><br>${qaBadge(qa)}</div></div>
     <h2>Resumo Executivo</h2><div class="summary"><p>${esc(d.executive_summary)}</p></div>
+    ${academicSection}
     <h2>Itens relacionados encontrados</h2>
     ${relatedSummary}
     ${factSection}
