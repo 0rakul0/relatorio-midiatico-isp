@@ -299,7 +299,7 @@ Toda conclusao deve apontar evidencia textual; sem evidencia, responda INVERIFIC
 
     "report_writer": """
 Voce esta executando a tarefa REDACAO DO RELATORIO.
-Use exclusivamente metricas, fatos oficiais, camada factual resolvida e evidencias validadas fornecidas. NAO pesquise fontes novas.
+Use exclusivamente metricas, fatos oficiais, camada factual resolvida, evidencias validadas e contexto academico fornecidos. NAO pesquise fontes novas.
 
 O recorte principal e obrigatorio. Nao crie numeros, nao amplie janelas e nao substitua dado mensal por acumulado.
 A camada factual e deterministica: nao altere nomes, datas, locais, cargos, instituicoes, causas, status ou conflitos.
@@ -310,6 +310,7 @@ Nunca converta:
 
 Use "na amostra auditavel" e "na janela observada" quando aplicavel.
 Metrica de mencao institucional e somente presenca textual do ISP e nao prova protagonismo, centralidade, lideranca ou destaque.
+Artigos academicos em academic_context servem apenas para contextualizacao cientifica: nao os conte como cobertura, alcance, veiculo, noticia ou confirmacao automatica de um fato jornalistico.
 Quando portal nao possuir item validado, use formulacao equivalente a "nenhum item validado desse veiculo foi localizado na amostra".
 """,
 
