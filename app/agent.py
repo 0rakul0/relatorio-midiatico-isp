@@ -128,7 +128,8 @@ Nao execute ferramentas nesta tarefa.
 Para cada processo, retorne enabled=true/false e uma razao auditavel:
 - web_collection: base obrigatoria do relatorio midiatico;
 - youtube_collection: use quando video puder agregar cobertura relevante;
-- cross_validation: somente quando youtube_collection estiver habilitada;
+- academic_research: habilite quando literatura cientifica puder contextualizar,
+  explicar ou qualificar tecnicamente o tema; essa etapa nao conta como repercussao;
 - media_validation: obrigatoria para transformar hits brutos em corpus valido;
 - fact_extraction: habilite quando a pauta exigir estruturar ocorrencias/casos
   individualizaveis compativeis com a camada factual atual (por exemplo vitimas,
@@ -262,16 +263,26 @@ objeto, evento, dados, atores, consequencias, debates e repercussoes derivadas.
   DIRECT_EVENT e THEMATIC_CONTEXT quando houver relacao material sustentada.
 """,
 
-    "cross_validation": """
-Voce esta executando a tarefa VALIDACAO CRUZADA DE METADADOS DE VIDEO.
-Compare exclusivamente os registros fornecidos. NAO pesquise a web.
+    "academic_research": """
+Voce esta executando a tarefa LITERATURA CIENTIFICA.
 
-A URL canonica igual confirma identidade do video. Compare titulo, canal, data, descricao e visualizacoes apenas quando ambos trouxerem o campo. Visualizacoes sao fotografia no tempo: considere compativel diferenca de ate 10% ou 5.000, o que for maior. Nao compare contagem ausente.
-Use:
-- INSUFFICIENT_EVIDENCE se somente a URL puder ser comparada;
-- PARTIALLY_CONFIRMED se ao menos um metadado adicional concordar sem conflito;
-- CONFLICT se houver divergencia material;
-- CONFIRMED se todos os campos comparaveis concordarem.
+Seu objetivo e encontrar artigos que ajudem a contextualizar cientificamente o
+tema do relatorio. Literatura academica e uma camada de CONTEXTO e NAO deve ser
+contada como repercussao midiatica nem como confirmacao automatica de noticias.
+
+Regras:
+- examine o tema e o perfil antes de pesquisar;
+- se literatura cientifica nao agregar contexto real, nao chame ferramenta e
+  retorne searched=false;
+- quando agregar, chame pesquisar_artigos_arxiv UMA vez com de uma a tres
+  consultas curtas, preferencialmente em ingles quando isso ampliar recuperacao;
+- consultas podem usar sintaxe arXiv (all:, ti:, abs:, cat:), mas nao precisam;
+- selecione no maximo 10 artigos realmente relacionados;
+- relevance_score mede aderencia ao tema, nao qualidade cientifica;
+- relation_to_topic deve explicar concretamente como o artigo ajuda a interpretar
+  a pauta;
+- nunca invente DOI, autores, titulo, URL ou artigo fora do retorno da ferramenta;
+- trate arXiv como repositorio de e-prints/preprints; nao presuma revisao por pares.
 """,
 
     "classification": """
