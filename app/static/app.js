@@ -196,20 +196,21 @@ const STAGE_GROUPS = [
   {
     number: 3,
     label: 'Coleta',
-    keys: ['collection', 'youtube', 'cross_validation'],
+    keys: ['collection', 'youtube'],
     vertical: true
   },
-  { number: 4, label: 'Validação das notícias', keys: ['validation'] },
-  { number: 5, label: 'Extração factual', keys: ['facts_pass_1'] },
-  { number: 6, label: 'Consolidação factual', keys: ['fact_resolution_1'] },
-  { number: 7, label: 'Planejamento nominal', keys: ['nominal_plan'] },
-  { number: 8, label: 'Coleta nominal', keys: ['nominal_collection'] },
-  { number: 9, label: 'Extração complementar', keys: ['facts_pass_2'] },
-  { number: 10, label: 'Consolidação final', keys: ['fact_resolution_2'] },
-  { number: 11, label: 'Análise e classificação', keys: ['classification'] },
-  { number: 12, label: 'Cobertura complementar', keys: ['gap_fill'] },
-  { number: 13, label: 'Redação do relatório', keys: ['report'] },
-  { number: 14, label: 'Auditoria QA final', keys: ['qa'] }
+  { number: 4, label: 'Literatura científica', keys: ['academic_research'] },
+  { number: 5, label: 'Validação das notícias', keys: ['validation'] },
+  { number: 6, label: 'Extração factual', keys: ['facts_pass_1'] },
+  { number: 7, label: 'Consolidação factual', keys: ['fact_resolution_1'] },
+  { number: 8, label: 'Planejamento nominal', keys: ['nominal_plan'] },
+  { number: 9, label: 'Coleta nominal', keys: ['nominal_collection'] },
+  { number: 10, label: 'Extração complementar', keys: ['facts_pass_2'] },
+  { number: 11, label: 'Consolidação final', keys: ['fact_resolution_2'] },
+  { number: 12, label: 'Análise e classificação', keys: ['classification'] },
+  { number: 13, label: 'Cobertura complementar', keys: ['gap_fill'] },
+  { number: 14, label: 'Redação do relatório', keys: ['report'] },
+  { number: 15, label: 'Auditoria QA final', keys: ['qa'] }
 ];
 
 function normalizeGroupStatus(children){
