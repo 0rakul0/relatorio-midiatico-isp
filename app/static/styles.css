@@ -364,7 +364,19 @@ button:disabled {
 }
 
 .report-doc p {
-    margin: 0 0 14px
+    margin: 0 0 14px;
+    text-align: justify;
+    text-justify: inter-word;
+}
+
+.report-doc li {
+    text-align: justify;
+    text-justify: inter-word;
+}
+
+/* A nota técnica da nuvem permanece centralizada. */
+.report-doc .word-cloud-note {
+    text-align: center;
 }
 
 .summary {
