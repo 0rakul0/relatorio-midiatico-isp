@@ -22,8 +22,17 @@ from app.cost_tracker import emit
 logger = logging.getLogger("app.llm")
 
 
+def _fallback_is_configured() -> bool:
+    settings = get_settings()
+    return bool(
+        (settings.openai_fallback_base_url or "").strip()
+        and (settings.openai_fallback_model or "").strip()
+    )
+
+
 def llm_is_configured() -> bool:
-    return bool(get_settings().openai_api_key)
+    settings = get_settings()
+    return bool(settings.openai_api_key) or _fallback_is_configured()
 
 
 def _is_retryable_openai_error(exc: Exception) -> bool:
@@ -47,8 +56,25 @@ def _is_reasoning_model(model: str) -> bool:
 
 def create_chat_model(*, max_output_tokens: int = 50000):
     settings = get_settings()
+
+    fallback_model: ChatOpenAI | None = _build_fallback_model(
+        max_output_tokens=max_output_tokens
+    )
+
+    # Permite operar 100% local quando nao houver chave OpenAI. Quando a chave
+    # existir, OpenAI continua primaria e o modelo local e usado somente como
+    # fallback para indisponibilidade/credito/429/conexao/5xx.
     if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY não configurada")
+        if fallback_model is not None:
+            logger.info(
+                "OPENAI_API_KEY ausente - usando LLM local %s",
+                settings.openai_fallback_model,
+            )
+            return fallback_model
+        raise RuntimeError(
+            "Nenhuma LLM configurada. Defina OPENAI_API_KEY ou "
+            "OPENAI_FALLBACK_BASE_URL + OPENAI_FALLBACK_MODEL."
+        )
 
     base_kwargs: dict = {
         "api_key": settings.openai_api_key,
@@ -58,10 +84,6 @@ def create_chat_model(*, max_output_tokens: int = 50000):
     }
     if settings.openai_base_url:
         base_kwargs["base_url"] = settings.openai_base_url
-
-    fallback_model: ChatOpenAI | None = _build_fallback_model(
-        max_output_tokens=max_output_tokens
-    )
 
     effort = (settings.openai_reasoning_effort or "").strip().lower()
     if effort and _is_reasoning_model(settings.openai_model):
@@ -84,7 +106,7 @@ def _build_fallback_model(*, max_output_tokens: int):
     if fallback_base == (settings.openai_base_url or "").strip():
         return None
     return ChatOpenAI(
-        api_key=settings.openai_api_key,
+        api_key=settings.openai_fallback_api_key or "ollama",
         model=fallback_model,
         temperature=0,
         max_completion_tokens=max_output_tokens,
