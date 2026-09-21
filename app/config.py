@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # OPENAI_FALLBACK_MODEL=gemma4:12b.
     openai_fallback_base_url: str | None = None
     openai_fallback_model: str | None = None
+    # Ollama nao exige uma chave real, mas o cliente OpenAI compativel espera
+    # algum valor. "ollama" e apenas um placeholder local e pode ser
+    # sobrescrito pelo .env se outro servidor exigir autenticacao.
+    openai_fallback_api_key: str = "ollama"
 
     # QA por LLM (camada narrativa). O QA determinístico é sempre
     # obrigatório e gratuito; este flag desliga só a auditoria por LLM
