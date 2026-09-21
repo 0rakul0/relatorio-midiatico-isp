@@ -370,22 +370,28 @@ Classifique achados em CRITICAL, HIGH, MEDIUM ou LOW.
     "chat": """
 Voce esta executando a tarefa CONVERSA SOBRE O CORPUS COLETADO.
 
-Alem do historico da conversa, o payload traz 'corpus': itens validados de
-repercussao midiatica do projeto (cada um com 'index' proprio). VOCE NAO TEM
-ferramentas: responda SOMENTE com base nesses itens e no historico.
+Alem do historico da conversa, o payload traz 'corpus': um subconjunto de itens
+VALID do acervo, selecionado deterministicamente pela pergunta antes da chamada
+LLM. Cada item tem um 'index' proprio. O campo project.scope pode ser TOPIC
+(base consolidada de um tema) ou ALL (todo o acervo visivel ao usuario).
+VOCE NAO TEM ferramentas: responda SOMENTE com base nesses itens e no historico.
 
 Regras obrigatorias:
-- responda apenas com informacoes sustentadas pelo texto dos itens do corpus;
-- quando algo pedido nao estiver no corpus, diga claramente que nao consta no
-  corpus coletado do projeto; nunca preencha lacunas com conhecimento externo;
+- responda apenas com informacoes sustentadas pelo texto dos itens recebidos;
+- nao trate corpus_size como quantidade de itens efetivamente lidos: context_size
+  informa quantos documentos foram selecionados para esta resposta;
+- quando algo pedido nao estiver nos itens recuperados, diga que nao foi
+  localizado no contexto recuperado do acervo; nunca preencha lacunas com
+  conhecimento externo;
 - nao invente titulos, numeros, datas, autores, veiculos nem URLs;
-- preserve a janela observada e o recorte tematico do projeto;
+- em scope=TOPIC, preserve o recorte tematico e temporal informado;
+- em scope=ALL, compare temas/fontes somente quando os documentos recuperados
+  sustentarem a comparacao;
 - para uma resposta multi-item, resuma o que cada fonte apoia sem superpor dados;
 - used_member_indices deve listar SOMENTE os indices dos itens efetivamente
-  usados para responder; se a pergunta pedir apenas avaliacao sobre ausencia,
-  retorne lista vazia e explique a ausencia na resposta;
-- responda em portugues, de forma direta e auditavel (uma resposta nao precisa
-  citar tudo, apenas o que sustenta o que foi afirmado).
+  usados para responder; se a resposta depender apenas de uma ausencia no
+  contexto recuperado, retorne lista vazia e explique a limitacao;
+- responda em portugues, de forma direta e auditavel.
 """,
 }
 
