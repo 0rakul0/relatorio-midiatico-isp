@@ -64,6 +64,7 @@ def build_pdf(data: dict) -> bytes:
     corpus = data.get("corpus", [])
     facts = data.get("fact_events", [])
     fact_evidence = data.get("fact_evidence", [])
+    academic_papers = data.get("academic_papers", [])
     by_origin = data.get("corpus_by_origin") or _split_by_origin(corpus)
     social_items = by_origin.get("redes_sociais", [])
     youtube_items = by_origin.get("youtube", [])
@@ -209,6 +210,39 @@ def build_pdf(data: dict) -> bytes:
         )
 
     add_section("Resumo Executivo", report["executive_summary"])
+
+    if academic_papers:
+        story.append(Paragraph("Literatura científica relacionada", heading))
+        story.append(
+            Paragraph(
+                "Trabalhos recuperados no arXiv para contextualização científica. "
+                "Eles não são contados como repercussão midiática e não confirmam "
+                "automaticamente fatos noticiados.",
+                small,
+            )
+        )
+        rows = [["Ano", "Autores", "Artigo", "Relação com o tema", "Fonte"]]
+        for paper in academic_papers:
+            authors = list(paper.get("authors") or [])
+            author_text = ", ".join(authors[:4]) + (" et al." if len(authors) > 4 else "")
+            published = _text(paper.get("published_at"))
+            rows.append(
+                [
+                    published[:4] if published else "N/D",
+                    author_text or "N/D",
+                    paper.get("title") or "Sem título",
+                    paper.get("relation_to_topic") or "Contexto científico relacionado",
+                    paper.get("url") or "",
+                ]
+            )
+        story.append(
+            _table(
+                rows,
+                [1.0 * cm, 3.2 * cm, 4.1 * cm, 5.4 * cm, 2.9 * cm],
+                small,
+            )
+        )
+
     story.append(Paragraph("Itens relacionados encontrados", heading))
     story.append(
         Paragraph(
