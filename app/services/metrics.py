@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date
+import re
+import unicodedata
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -22,6 +26,205 @@ from app.services.collection.youtube_helpers import is_youtube_host, matches_pri
 from app.services.validation import low_information_title
 
 
+_TRACKING_QUERY_KEYS = {
+    "fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid",
+    "igshid", "mkt_tok", "vero_id",
+}
+_TITLE_STOPWORDS = {
+    "a", "as", "com", "da", "das", "de", "do", "dos", "e", "em",
+    "na", "nas", "no", "nos", "o", "os", "para", "por", "um", "uma",
+}
+_TITLE_TOKEN_RE = re.compile(r"[a-z0-9]+", flags=re.IGNORECASE)
+
+
+def _report_url_key(value: str | None) -> str:
+    """Normaliza URL para detectar aliases de rastreamento no corpus final."""
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return raw.casefold()
+
+    host = (parsed.hostname or "").casefold()
+    if host.startswith("www."):
+        host = host[4:]
+    port = parsed.port
+    netloc = host
+    if port and not (
+        (parsed.scheme.casefold() == "http" and port == 80)
+        or (parsed.scheme.casefold() == "https" and port == 443)
+    ):
+        netloc = f"{host}:{port}"
+
+    path = re.sub(r"/{2,}", "/", parsed.path or "/")
+    if path != "/":
+        path = path.rstrip("/")
+
+    kept_query = []
+    for key, value_part in parse_qsl(parsed.query, keep_blank_values=True):
+        lowered = key.casefold()
+        if lowered.startswith("utm_") or lowered in _TRACKING_QUERY_KEYS:
+            continue
+        kept_query.append((key, value_part))
+    kept_query.sort(key=lambda pair: (pair[0].casefold(), pair[1]))
+
+    return urlunsplit(
+        (
+            parsed.scheme.casefold() or "https",
+            netloc,
+            path,
+            urlencode(kept_query, doseq=True),
+            "",
+        )
+    )
+
+
+def _normalized_report_title(value: str | None) -> str:
+    normalized = unicodedata.normalize("NFKD", (value or "").casefold())
+    normalized = "".join(
+        char for char in normalized if not unicodedata.combining(char)
+    )
+    return " ".join(_TITLE_TOKEN_RE.findall(normalized))
+
+
+def _report_title_tokens(value: str | None) -> set[str]:
+    return {
+        token
+        for token in _normalized_report_title(value).split()
+        if token not in _TITLE_STOPWORDS
+    }
+
+
+def _corpus_domain(item: dict) -> str:
+    domain = str(item.get("domain") or "").casefold().strip()
+    if not domain and item.get("url"):
+        try:
+            domain = (urlsplit(str(item["url"])).hostname or "").casefold()
+        except ValueError:
+            domain = ""
+    return domain[4:] if domain.startswith("www.") else domain
+
+
+def _corpus_year(item: dict) -> str:
+    published_at = str(item.get("published_at") or "")
+    if len(published_at) >= 4 and published_at[:4].isdigit():
+        return published_at[:4]
+    year = str(item.get("published_year") or "")
+    return year if len(year) == 4 and year.isdigit() else ""
+
+
+def _same_report_item(left: dict, right: dict) -> bool:
+    left_url = _report_url_key(
+        str(left.get("canonical_url") or left.get("url") or "")
+    )
+    right_url = _report_url_key(
+        str(right.get("canonical_url") or right.get("url") or "")
+    )
+    if left_url and right_url and left_url == right_url:
+        return True
+
+    if _corpus_domain(left) != _corpus_domain(right):
+        return False
+
+    left_origin = left.get("media_origin")
+    right_origin = right.get("media_origin")
+    if left_origin and right_origin and left_origin != right_origin:
+        return False
+
+    left_year = _corpus_year(left)
+    right_year = _corpus_year(right)
+    if left_year and right_year and left_year != right_year:
+        return False
+
+    left_title = _normalized_report_title(left.get("title"))
+    right_title = _normalized_report_title(right.get("title"))
+    if not left_title or not right_title:
+        return False
+    if left_title == right_title:
+        return True
+
+    left_tokens = _report_title_tokens(left.get("title"))
+    right_tokens = _report_title_tokens(right.get("title"))
+    if min(len(left_tokens), len(right_tokens)) < 3:
+        return False
+
+    intersection = len(left_tokens & right_tokens)
+    containment = intersection / min(len(left_tokens), len(right_tokens))
+    union = len(left_tokens | right_tokens)
+    jaccard = intersection / union if union else 0.0
+    shorter = min(left_title, right_title, key=len)
+    title_containment = (
+        len(shorter) >= 12
+        and (left_title in right_title or right_title in left_title)
+    )
+    return containment >= 0.90 and (jaccard >= 0.72 or title_containment)
+
+
+def _corpus_item_quality(item: dict) -> tuple[int, int, int, int]:
+    return (
+        1 if item.get("published_at") else 0,
+        1 if item.get("evidence") or item.get("relation_evidence") else 0,
+        len(str(item.get("title") or "")),
+        1 if item.get("url") else 0,
+    )
+
+
+def deduplicate_corpus(corpus: list[dict]) -> list[dict]:
+    """Colapsa aliases/duplicatas para apresentacao, preservando rastreabilidade."""
+    representatives: list[dict] = []
+
+    for source_item in corpus or []:
+        candidate = dict(source_item)
+        candidate["duplicate_count"] = int(candidate.get("duplicate_count") or 0)
+        candidate["duplicate_urls"] = list(candidate.get("duplicate_urls") or [])
+
+        duplicate_index = next(
+            (
+                index
+                for index, existing in enumerate(representatives)
+                if _same_report_item(existing, candidate)
+            ),
+            None,
+        )
+        if duplicate_index is None:
+            representatives.append(candidate)
+            continue
+
+        existing = representatives[duplicate_index]
+        duplicate_count = (
+            int(existing.get("duplicate_count") or 0)
+            + int(candidate.get("duplicate_count") or 0)
+            + 1
+        )
+
+        all_urls: list[str] = []
+        for value in [
+            existing.get("url"),
+            *(existing.get("duplicate_urls") or []),
+            candidate.get("url"),
+            *(candidate.get("duplicate_urls") or []),
+        ]:
+            url = str(value or "").strip()
+            if url and url not in all_urls:
+                all_urls.append(url)
+
+        representative = (
+            candidate
+            if _corpus_item_quality(candidate) > _corpus_item_quality(existing)
+            else existing
+        )
+        representative = dict(representative)
+        representative["duplicate_count"] = duplicate_count
+        representative["duplicate_urls"] = [
+            url for url in all_urls if url != representative.get("url")
+        ]
+        representatives[duplicate_index] = representative
+
+    return representatives
+
+
 def corpus_for_project(db: Session, project_id: int) -> list[dict]:
     rows = db.execute(
         select(MediaItem, Classification)
@@ -29,10 +232,11 @@ def corpus_for_project(db: Session, project_id: int) -> list[dict]:
         .where(MediaItem.project_id == project_id, MediaItem.status == "VALID")
         .order_by(MediaItem.published_at.desc().nullslast(), MediaItem.id.desc())
     ).all()
-    return [
+    raw_corpus = [
         {
             "title": item.title,
             "url": item.url,
+            "canonical_url": item.canonical_url,
             "domain": item.domain,
             "media_origin": item.media_origin or classify_media_origin(item.url, item.domain),
             "theme": classification.theme if classification else None,
@@ -40,6 +244,7 @@ def corpus_for_project(db: Session, project_id: int) -> list[dict]:
             "relation_type": item.relation_type,
             "relation_evidence": item.relevance_evidence,
             "corpus_origin": item.corpus_origin or "SEARCH",
+            "search_source": item.search_source,
             "isp_mentioned": classification.isp_mentioned if classification else False,
             "published_at": item.published_at.isoformat() if item.published_at else None,
             "published_year": publication_year(item),
@@ -48,7 +253,7 @@ def corpus_for_project(db: Session, project_id: int) -> list[dict]:
         }
         for item, classification in rows
     ]
-
+    return deduplicate_corpus(raw_corpus)
 
 def split_corpus(corpus: list[dict]) -> tuple[list[dict], list[dict]]:
     traditional: list[dict] = []
