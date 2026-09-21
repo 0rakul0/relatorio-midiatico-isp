@@ -103,10 +103,15 @@ def persist_chat_exchange(
     conversation_id: int | None,
     question: str,
     answer_state: dict,
+    history_messages: list[dict] | None = None,
 ) -> ChatConversation:
     scope_type, scope_key, topic = _scope(project)
     conversation = db.get(ChatConversation, conversation_id) if conversation_id else None
 
+    if conversation_id and conversation is None:
+        raise ValueError("Conversa não encontrada")
+
+    is_new = conversation is None
     if conversation is not None:
         if conversation.owner_id != owner_id:
             raise PermissionError("Conversa não pertence ao usuário")
@@ -124,15 +129,34 @@ def persist_chat_exchange(
         db.add(conversation)
         db.flush()
 
-    db.add(
-        ChatMessage(
-            conversation_id=conversation.id,
-            role="user",
-            content=question,
-            sources=[],
-            extra={},
+    if is_new and history_messages:
+        # Compatibilidade com sessões que ainda estavam abertas antes da
+        # persistência: aproveita o contexto já presente no navegador.
+        for message in history_messages:
+            role = str(message.get("role") or "").lower()
+            content = str(message.get("content") or "").strip()
+            if role not in {"user", "assistant"} or not content:
+                continue
+            db.add(
+                ChatMessage(
+                    conversation_id=conversation.id,
+                    role=role,
+                    content=content,
+                    sources=[],
+                    extra={"backfilled": True},
+                )
+            )
+    else:
+        db.add(
+            ChatMessage(
+                conversation_id=conversation.id,
+                role="user",
+                content=question,
+                sources=[],
+                extra={},
+            )
         )
-    )
+
     db.add(
         ChatMessage(
             conversation_id=conversation.id,
