@@ -380,7 +380,6 @@ function render(result){
     <div class="kicker">Relatório de repercussão midiática</div>
     <h1>${esc(d.title)}</h1><p class="interpretive">${esc(d.interpretive_title)}</p><p class="subtitle">${esc(d.subtitle)}</p>
     <div class="report-meta"><div><b>Instituição</b><br>${esc(p.institution)}</div>${contextMeta}<div><b>Janela de repercussão</b><br>${windowLabel(p.collection_start,p.collection_end,'Busca temática')}</div><div><b>QA</b><br>${qaBadge(qa)}</div></div>
-    <h2>Nuvem de palavras</h2>
     ${renderWordCloud(wordCloud)}
     <h2>Resumo Executivo</h2><div class="summary"><p>${esc(d.executive_summary)}</p></div>
     ${academicSection}
