@@ -468,6 +468,11 @@ button:disabled {
     text-align: center;
     margin: 8px 0 20px !important;
 }
+
+.word-cloud-normalization {
+    color: #4f6474;
+    font-weight: 700;
+}
 .related-intro {
     color: var(--muted);
     margin-bottom: 12px;
