@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Relatório de Repercussão Midiática</title>
-  <link rel="stylesheet" href="/static/styles.css?v=2">
+  <link rel="stylesheet" href="/static/styles.css?v=5">
 </head>
 <body>
 <header class="top screen-only">
@@ -14,19 +14,23 @@
 </header>
 <main class="wrap">
   <div class="dashboard-grid screen-only">
-    <section class="panel">
-      <h2>Acesso</h2>
-      <div id="auth-logged-in">
-        <p><strong id="auth-user-email"></strong> · <span id="auth-user-plan" class="badge ok"></span></p>
-        <p class="note" id="auth-quota">Carregando uso do mês…</p>
-        <div class="actions">
-          <button type="button" class="secondary" id="auth-refresh-quota">Atualizar uso</button>
-          <button type="button" class="danger" id="auth-logout">Sair</button>
+    <section class="panel report-builder">
+      <div class="session-bar">
+        <div class="session-user">
+          <span class="session-label">Sessão ativa</span>
+          <strong id="auth-user-email"></strong>
+        </div>
+        <div class="session-actions">
+          <span id="auth-user-plan" class="badge ok"></span>
+          <button type="button" class="secondary compact-button" id="auth-logout">Sair</button>
         </div>
       </div>
-      <hr style="border:0;border-top:1px solid var(--line);margin:22px 0">
-      <h2>Gerar relatório</h2>
-      <p class="note">A execução agora é acompanhada etapa por etapa: <b>cinza</b> = ainda não iniciada, <b>laranja</b> = em execução e <b>verde</b> = concluída. O relatório pode ser interrompido entre operações seguras.</p>
+
+      <div class="builder-heading">
+        <span class="section-kicker">Nova análise</span>
+        <h2>Gerar relatório de repercussão</h2>
+        <p class="note">Defina o tema e, se necessário, os recortes de repercussão e dos fatos. O acompanhamento da execução aparece logo abaixo, etapa por etapa.</p>
+      </div>
       <form id="report-form">
         <div class="field topic-row"><label for="topic">Tema</label><input id="topic" placeholder="pesquise seu Tema" required minlength="3"></div>
         <div class="date-grid">
@@ -35,7 +39,7 @@
           <div class="field"><label for="event-start">Fatos - início</label><input id="event-start" type="date"></div>
           <div class="field"><label for="event-end">Fatos - fim</label><input id="event-end" type="date"></div>
         </div>
-        <div class="field"><label for="execution-profile">Perfil de execução</label><select id="execution-profile"><option value="AUTO">Automático (recomendado)</option><option value="MIDIATICO_SIMPLES">Midático simples</option><option value="MIDIATICO_COM_FATOS">Midático com fatos</option><option value="COMPLETO_NOMINAL">Completo nominal</option></select></div>
+        <div class="field"><label for="execution-profile">Perfil de execução</label><select id="execution-profile"><option value="AUTO">Automático (recomendado)</option><option value="MIDIATICO_SIMPLES">Midiático simples</option><option value="MIDIATICO_COM_FATOS">Midiático com fatos</option><option value="COMPLETO_NOMINAL">Completo nominal</option></select></div>
         <div class="actions">
           <button id="submit">Gerar relatório completo</button>
           <button type="button" class="secondary" id="refresh-report">Atualizar relatório aberto</button>
@@ -86,6 +90,6 @@
 </main>
 <!-- bump ?v= a cada mudanca nos estaticos para furar o cache do navegador -->
 <script src="/static/auth.js?v=2"></script>
-<script src="/static/app.js?v=3"></script>
+<script src="/static/app.js?v=4"></script>
 </body>
 </html>
