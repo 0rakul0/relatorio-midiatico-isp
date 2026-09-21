@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models import MediaItem
 from app.services.collection.media_origin import PORTAL_NOTICIAS, classify_media_origin
+from app.services.metrics import deduplicate_corpus
 
 
 # Stopwords portuguesas + termos jornalisticos muito genericos que tendem a
@@ -163,11 +164,31 @@ def word_cloud_for_project(
         .order_by(MediaItem.id.asc())
     ).all()
 
-    items = [
+    portal_candidates = [
         item
         for item in candidates
         if (item.media_origin or classify_media_origin(item.url, item.domain)) == PORTAL_NOTICIAS
     ]
+    deduplicated = deduplicate_corpus(
+        [
+            {
+                "_media_item_id": item.id,
+                "title": item.title,
+                "url": item.url,
+                "canonical_url": item.canonical_url,
+                "domain": item.domain,
+                "media_origin": item.media_origin,
+                "published_at": item.published_at.isoformat() if item.published_at else None,
+            }
+            for item in portal_candidates
+        ]
+    )
+    selected_ids = {
+        int(item["_media_item_id"])
+        for item in deduplicated
+        if item.get("_media_item_id") is not None
+    }
+    items = [item for item in portal_candidates if item.id in selected_ids]
 
     # Remove nomes dos veiculos presentes no proprio corpus, inclusive quando
     # aparecem no corpo de outras materias.
