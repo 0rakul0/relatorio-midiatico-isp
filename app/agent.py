@@ -382,27 +382,40 @@ Classifique achados em CRITICAL, HIGH, MEDIUM ou LOW.
     "chat": """
 Voce esta executando a tarefa CONVERSA SOBRE O CORPUS COLETADO.
 
-Alem do historico da conversa, o payload traz 'corpus': um subconjunto de itens
-VALID do acervo, selecionado deterministicamente pela pergunta antes da chamada
-LLM. Cada item tem um 'index' proprio. O campo project.scope pode ser TOPIC
-(base consolidada de um tema) ou ALL (todo o acervo visivel ao usuario).
-VOCE NAO TEM ferramentas: responda SOMENTE com base nesses itens e no historico.
+O payload traz 'corpus': um subconjunto de itens VALID do acervo selecionado
+deterministicamente pela pergunta antes da chamada LLM. Cada item tem um
+'index'. O campo project.scope pode ser TOPIC (tema consolidado) ou ALL
+(todo o acervo visivel ao usuario).
 
-Regras obrigatorias:
-- responda apenas com informacoes sustentadas pelo texto dos itens recebidos;
-- nao trate corpus_size como quantidade de itens efetivamente lidos: context_size
-  informa quantos documentos foram selecionados para esta resposta;
-- quando algo pedido nao estiver nos itens recuperados, diga que nao foi
-  localizado no contexto recuperado do acervo; nunca preencha lacunas com
-  conhecimento externo;
-- nao invente titulos, numeros, datas, autores, veiculos nem URLs;
+PRIORIDADE: use primeiro o corpus local. Voce tambem pode receber ferramentas
+externas. Decida chama-las SOMENTE quando agregarem informacao necessaria.
+
+Use ferramenta externa quando:
+- o usuario pedir explicitamente para pesquisar, buscar, verificar ou atualizar;
+- a pergunta depender de informacao atual/posterior ao corpus;
+- o corpus recuperado nao sustentar suficientemente a resposta e uma busca
+  externa puder preencher a lacuna;
+- literatura cientifica for materialmente util, usando pesquisar_artigos_arxiv;
+- videos forem especificamente relevantes, usando pesquisar_videos.
+
+Nao chame ferramenta externa quando o corpus ja for suficiente.
+
+Ferramentas externas sao COMPLEMENTARES:
+- resultados externos NAO passam a integrar o corpus validado;
+- nao trate resultado externo como noticia previamente validada do projeto;
+- diferencie na resposta o que veio do acervo e o que veio de pesquisa externa;
+- nunca invente titulo, numero, data, autor, veiculo, artigo ou URL;
+- se a ferramenta nao retornar evidencia suficiente, diga isso claramente.
+
+Regras de rastreabilidade:
+- used_member_indices deve listar SOMENTE indices do corpus efetivamente usados;
+- used_external_urls deve listar SOMENTE URLs de resultados externos
+  efetivamente usados para sustentar a resposta;
+- nao inclua URL apenas consultada se ela nao sustentou a resposta;
+- nao trate corpus_size como quantidade de itens lidos: context_size informa
+  quantos documentos locais foram selecionados;
 - em scope=TOPIC, preserve o recorte tematico e temporal informado;
-- em scope=ALL, compare temas/fontes somente quando os documentos recuperados
-  sustentarem a comparacao;
-- para uma resposta multi-item, resuma o que cada fonte apoia sem superpor dados;
-- used_member_indices deve listar SOMENTE os indices dos itens efetivamente
-  usados para responder; se a resposta depender apenas de uma ausencia no
-  contexto recuperado, retorne lista vazia e explique a limitacao;
+- em scope=ALL, compare temas/fontes somente com evidencia suficiente;
 - responda em portugues, de forma direta e auditavel.
 """,
 }
