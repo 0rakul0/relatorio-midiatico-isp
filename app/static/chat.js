@@ -1,5 +1,5 @@
-﻿// Chat com a base: conversa grounded no corpus validado do projeto ativo.
-// O historico vive na sessao (memoria do navegador); o servidor e stateless.
+﻿// Chat com a base: conversa grounded no corpus validado do tema selecionado.
+// Projetos repetidos do mesmo tema chegam agregados pelo backend.
 
 const esc = v => String(v ?? '').replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
 
@@ -14,7 +14,10 @@ async function api(path, opts = {}) {
     const r2 = await fetch(path, { headers: { 'Content-Type': 'application/json', ...authHeaders() }, ...opts });
     return handleApi(r2);
   }
-  if (r.status === 401) { window.location.href = '/login'; throw new Error('Sessão expirada. Entre de novo.'); }
+  if (r.status === 401) {
+    window.location.href = '/login';
+    throw new Error('Sessão expirada. Entre de novo.');
+  }
   return handleApi(r);
 }
 
@@ -27,16 +30,39 @@ async function handleApi(r) {
   return d;
 }
 
-const ORIGIN_LABEL = { YOUTUBE: 'YouTube', REDE_SOCIAL: 'Rede social', PORTAL_NOTICIAS: 'Portal de notícias' };
+const ORIGIN_LABEL = {
+  YOUTUBE: 'YouTube',
+  REDE_SOCIAL: 'Rede social',
+  PORTAL_NOTICIAS: 'Portal de notícias'
+};
 const originLabel = v => ORIGIN_LABEL[String(v || '').toUpperCase()] || 'Fonte';
 
 let currentProject = null;
+let currentTopic = null;
+let projects = [];
 let conversation = [];
+
 const log = document.getElementById('chat-log');
 const input = document.getElementById('chat-input');
 const sendBtn = document.getElementById('chat-send');
 const progress = document.getElementById('chat-progress');
-const selector = document.getElementById('chat-project');
+const newBtn = document.getElementById('chat-new');
+
+const picker = document.getElementById('topic-picker');
+const trigger = document.getElementById('topic-trigger');
+const menu = document.getElementById('topic-menu');
+const search = document.getElementById('topic-search');
+const list = document.getElementById('topic-list');
+const triggerTitle = document.getElementById('topic-trigger-title');
+const triggerMeta = document.getElementById('topic-trigger-meta');
+
+const baseSummary = document.getElementById('chat-base-summary');
+const baseItems = document.getElementById('base-items');
+const baseRuns = document.getElementById('base-runs');
+
+function plural(value, singular, pluralText) {
+  return `${value} ${value === 1 ? singular : pluralText}`;
+}
 
 function appendBubble(role, html) {
   const div = document.createElement('div');
@@ -46,10 +72,20 @@ function appendBubble(role, html) {
   log.scrollTop = log.scrollHeight;
 }
 
+function renderWelcome() {
+  if (!currentTopic) return;
+  appendBubble(
+    'assistant',
+    `<p><strong>Base “${esc(currentTopic.topic)}” pronta para consulta.</strong></p>
+     <p>Estou considerando ${currentTopic.valid_items} notícias validadas reunidas de ${currentTopic.project_count || 1} coleta(s). Posso resumir a cobertura, comparar veículos, localizar dados e apontar as fontes usadas.</p>`
+  );
+}
+
 function renderAnswer(state) {
   const paragraphs = String(state.answer || '').split(/\n{2,}|\r\n{2,}/);
   const body = paragraphs.map(p => `<p>${esc(p).replace(/\n/g, '<br>')}</p>`).join('');
   let sources = '';
+
   if (state.sources?.length) {
     const items = state.sources.map(s => {
       const link = s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noreferrer">Abrir fonte</a>` : '';
@@ -58,8 +94,12 @@ function renderAnswer(state) {
     }).join('');
     sources = `<details class="chat-sources"><summary>Fontes usadas (${state.sources.length})</summary><ul>${items}</ul></details>`;
   }
-  const corpusNote = state.corpus_size ? `<p class="note">Contexto: ${state.corpus_size} itens validados.</p>` : '';
-  appendBubble('assistant', `<div class="chat-answer">${body}</div>${sources}${corpusNote}`);
+
+  const contextNote = state.corpus_size
+    ? `<p class="note">Base consolidada: ${state.corpus_size} notícias validadas${state.project_count ? ` em ${state.project_count} coleta(s)` : ''}.</p>`
+    : '';
+
+  appendBubble('assistant', `<div class="chat-answer">${body}</div>${sources}${contextNote}`);
 }
 
 function renderUser(text) {
@@ -69,13 +109,19 @@ function renderUser(text) {
 async function sendQuestion() {
   const text = input.value.trim();
   if (!text || !currentProject) return;
+
   input.value = '';
   renderUser(text);
   conversation.push({ role: 'user', content: text });
+
   sendBtn.disabled = true;
   progress.classList.remove('hidden');
+
   try {
-    const state = await api(`/chat/${currentProject}/ask`, { method: 'POST', body: JSON.stringify({ messages: conversation }) });
+    const state = await api(`/chat/${currentProject}/ask`, {
+      method: 'POST',
+      body: JSON.stringify({ messages: conversation })
+    });
     conversation.push({ role: 'assistant', content: state.answer });
     renderAnswer(state);
   } catch (err) {
@@ -87,45 +133,116 @@ async function sendQuestion() {
   }
 }
 
-function resetConversation() {
+function resetConversation(showWelcome = true) {
   conversation = [];
   log.innerHTML = '';
+  if (showWelcome) renderWelcome();
+}
+
+function closePicker() {
+  menu.classList.add('hidden');
+  trigger.setAttribute('aria-expanded', 'false');
+}
+
+function openPicker() {
+  menu.classList.remove('hidden');
+  trigger.setAttribute('aria-expanded', 'true');
+  search.value = '';
+  renderTopicList('');
+  setTimeout(() => search.focus(), 0);
+}
+
+function renderTopicList(filterText = '') {
+  const q = filterText.trim().toLocaleLowerCase('pt-BR');
+  const filtered = projects.filter(p => !q || p.topic.toLocaleLowerCase('pt-BR').includes(q));
+
+  if (!filtered.length) {
+    list.innerHTML = '<div class="topic-empty">Nenhum tema encontrado.</div>';
+    return;
+  }
+
+  list.innerHTML = filtered.map(p => {
+    const selected = p.id === currentProject;
+    const status = p.generated_at ? 'Relatório gerado' : 'Base coletada';
+    const runs = p.project_count || 1;
+    return `
+      <button type="button"
+              class="topic-option${selected ? ' selected' : ''}"
+              data-project-id="${p.id}"
+              role="option"
+              aria-selected="${selected}">
+        <span class="topic-option-main">
+          <strong>${esc(p.topic)}</strong>
+          <span>${plural(p.valid_items, 'notícia validada', 'notícias validadas')} · ${plural(runs, 'coleta reunida', 'coletas reunidas')}</span>
+        </span>
+        <span class="topic-option-status">${esc(status)}</span>
+      </button>
+    `;
+  }).join('');
+
+  list.querySelectorAll('.topic-option').forEach(button => {
+    button.addEventListener('click', () => {
+      selectProject(Number(button.dataset.projectId));
+      closePicker();
+    });
+  });
+}
+
+function updatePickerSummary() {
+  if (!currentTopic) {
+    triggerTitle.textContent = 'Nenhuma base disponível';
+    triggerMeta.textContent = 'Gere um relatório para começar.';
+    baseSummary.classList.add('hidden');
+    return;
+  }
+
+  const runs = currentTopic.project_count || 1;
+  triggerTitle.textContent = currentTopic.topic;
+  triggerMeta.textContent = `${plural(currentTopic.valid_items, 'notícia validada', 'notícias validadas')} · ${plural(runs, 'coleta reunida', 'coletas reunidas')}`;
+  baseItems.textContent = currentTopic.valid_items;
+  baseRuns.textContent = runs;
+  baseSummary.classList.remove('hidden');
+
+  document.getElementById('chat-scope').textContent =
+    `Converse sobre “${currentTopic.topic}”. A base reúne todas as notícias validadas encontradas nas execuções desse mesmo tema, sem novas buscas na web.`;
+}
+
+function selectProject(projectId) {
+  const selected = projects.find(p => Number(p.id) === Number(projectId) && p.valid_items > 0);
+  currentTopic = selected || null;
+  currentProject = selected ? Number(selected.id) : null;
+
+  updatePickerSummary();
+  resetConversation(Boolean(currentProject));
+
+  input.disabled = !currentProject;
+  sendBtn.disabled = !currentProject;
+  newBtn.disabled = !currentProject;
+
+  if (currentProject) input.focus();
 }
 
 async function loadProjects() {
   const data = await api('/chat/projects');
-  selector.innerHTML = '';
-  const available = data.projects.filter(p => p.valid_items > 0);
-  if (!available.length) {
-    selector.innerHTML = '<option value="">Nenhum projeto com corpus coletado</option>';
+  projects = (data.projects || []).filter(p => p.valid_items > 0);
+
+  if (!projects.length) {
     currentProject = null;
-    appendBubble('assistant', '<p>Nenhum projeto tem itens validados ainda. Gere um relatório no <a href="/">painel</a> e volte aqui.</p>');
+    currentTopic = null;
+    updatePickerSummary();
+    appendBubble('assistant', '<p>Nenhum tema tem notícias validadas ainda. Gere um relatório no <a href="/">painel</a> e volte aqui.</p>');
+    input.disabled = true;
+    sendBtn.disabled = true;
+    newBtn.disabled = true;
     return;
   }
-  for (const p of data.projects) {
-    const opt = document.createElement('option');
-    opt.value = p.id;
-    opt.textContent = `${p.topic} — ${p.valid_items} itens${p.generated_at ? ' · relatório gerado' : ''}`;
-    if (p.valid_items > 0) opt.disabled = false;
-    selector.appendChild(opt);
-  }
-  const preselect = data.last_active_project_id && available.some(p => p.id === data.last_active_project_id)
-    ? data.last_active_project_id
-    : available[0].id;
-  selector.value = preselect;
-  selectProject();
-}
 
-function selectProject() {
-  const value = Number(selector.value);
-  currentProject = Number.isFinite(value) && value > 0 ? value : null;
-  resetConversation();
-  if (currentProject) {
-    const opt = selector.selectedOptions[0];
-    document.getElementById('chat-scope').textContent = `Converse sobre “${opt?.textContent?.split(' — ')[0] || ''}”. As respostas usam somente os itens validados — sem novas buscas na web.`;
-  }
-  input.disabled = !currentProject;
-  sendBtn.disabled = !currentProject;
+  const preselect = data.last_active_project_id && projects.some(p => p.id === data.last_active_project_id)
+    ? data.last_active_project_id
+    : projects[0].id;
+
+  selectProject(preselect);
+  renderTopicList('');
 }
 
 if (!guardAuth()) {
@@ -133,6 +250,7 @@ if (!guardAuth()) {
 } else {
   const s = authState();
   document.getElementById('chat-auth').textContent = `${s.email || ''} · `;
+
   const logout = document.createElement('button');
   logout.type = 'button';
   logout.className = 'secondary';
@@ -140,7 +258,26 @@ if (!guardAuth()) {
   logout.onclick = () => { saveAuth(null); window.location.href = '/login'; };
   document.getElementById('chat-auth').appendChild(logout);
 
-  document.getElementById('chat-form').addEventListener('submit', e => { e.preventDefault(); sendQuestion(); });
-  selector.addEventListener('change', selectProject);
+  document.getElementById('chat-form').addEventListener('submit', e => {
+    e.preventDefault();
+    sendQuestion();
+  });
+
+  newBtn.addEventListener('click', () => resetConversation(true));
+
+  trigger.addEventListener('click', () => {
+    menu.classList.contains('hidden') ? openPicker() : closePicker();
+  });
+
+  search.addEventListener('input', () => renderTopicList(search.value));
+
+  document.addEventListener('click', event => {
+    if (!picker.contains(event.target)) closePicker();
+  });
+
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') closePicker();
+  });
+
   loadProjects().catch(err => appendBubble('assistant', `<p>${esc(err.message)}</p>`));
 }
