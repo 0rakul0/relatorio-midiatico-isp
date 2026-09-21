@@ -290,51 +290,50 @@ def split_corpus_by_origin(corpus: list[dict]) -> dict[str, list[dict]]:
 
 def metrics(db: Session, project_id: int) -> dict:
     total = db.scalar(select(func.count(MediaItem.id)).where(MediaItem.project_id == project_id)) or 0
-    valid = db.scalar(
-        select(func.count(MediaItem.id)).where(MediaItem.project_id == project_id, MediaItem.status == "VALID")
-    ) or 0
-    vehicles = db.scalar(
-        select(func.count(func.distinct(MediaItem.domain))).where(
-            MediaItem.project_id == project_id, MediaItem.status == "VALID"
-        )
-    ) or 0
-    isp = db.scalar(
-        select(func.count(Classification.id))
-        .join(MediaItem)
-        .where(
+    raw_valid = db.scalar(
+        select(func.count(MediaItem.id)).where(
             MediaItem.project_id == project_id,
             MediaItem.status == "VALID",
-            Classification.isp_mentioned.is_(True),
         )
     ) or 0
-    themes = db.execute(
-        select(Classification.theme, func.count(Classification.id).label("items"))
-        .join(MediaItem)
-        .where(MediaItem.project_id == project_id, MediaItem.status == "VALID")
-        .group_by(Classification.theme)
-        .order_by(func.count(Classification.id).desc())
-    ).all()
 
-    origin_rows = db.execute(
-        select(MediaItem.media_origin, func.count(MediaItem.id).label("items"))
-        .where(MediaItem.project_id == project_id, MediaItem.status == "VALID")
-        .group_by(MediaItem.media_origin)
-    ).all()
+    report_corpus = corpus_for_project(db, project_id)
+    valid = len(report_corpus)
+    duplicates_collapsed = max(0, int(raw_valid) - valid)
+
+    domain_values = {
+        _corpus_domain(item)
+        for item in report_corpus
+        if _corpus_domain(item)
+    }
+    vehicles = len(domain_values)
+    isp = sum(bool(item.get("isp_mentioned")) for item in report_corpus)
+
+    theme_counts = Counter(
+        str(item.get("theme"))
+        for item in report_corpus
+        if item.get("theme")
+    )
+    themes = sorted(
+        theme_counts.items(),
+        key=lambda row: (-row[1], row[0].casefold()),
+    )
+
     media_origin_counts = {
         PORTAL_NOTICIAS: 0,
         REDE_SOCIAL: 0,
         YOUTUBE: 0,
     }
-    for origin, count in origin_rows:
-        key = origin if origin in media_origin_counts else classify_media_origin(None, None)
-        media_origin_counts[key] = media_origin_counts.get(key, 0) + int(count or 0)
+    for item in report_corpus:
+        origin = item.get("media_origin")
+        if origin not in media_origin_counts:
+            origin = classify_media_origin(item.get("url"), item.get("domain"))
+        media_origin_counts[origin] = media_origin_counts.get(origin, 0) + 1
 
     domains = [
-        domain.lower()
-        for domain in db.scalars(
-            select(MediaItem.domain).where(MediaItem.project_id == project_id, MediaItem.status == "VALID")
-        ).all()
-        if domain
+        _corpus_domain(item)
+        for item in report_corpus
+        if _corpus_domain(item)
     ]
     project = db.get(Project, project_id)
     youtube_status = project.youtube_collection_status if project else "NOT_ATTEMPTED"
@@ -583,7 +582,9 @@ def metrics(db: Session, project_id: int) -> dict:
     return {
         "items_found": total,
         "valid_items": valid,
-        "discarded_items": total - valid,
+        "raw_valid_items": int(raw_valid),
+        "duplicates_collapsed": duplicates_collapsed,
+        "discarded_items": total - int(raw_valid),
         "unique_vehicles": vehicles,
         "media_origin_counts": media_origin_counts,
         "collection_days": collection_days,
