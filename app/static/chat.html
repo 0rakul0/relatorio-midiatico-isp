@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Conversar com a base · Relatório de Repercussão Midiática</title>
-  <link rel="stylesheet" href="/static/styles.css?v=7">
+  <link rel="stylesheet" href="/static/styles.css?v=8">
 </head>
 <body>
 <header class="top screen-only">
@@ -58,6 +58,16 @@
       <p class="note chat-scope" id="chat-scope">
         As respostas usam somente as notícias validadas da base temática selecionada.
       </p>
+
+      <div id="chat-history-panel" class="chat-history-panel hidden">
+        <div class="chat-history-head">
+          <div>
+            <strong>Conversas recentes</strong>
+            <span>Salvas automaticamente neste tema</span>
+          </div>
+        </div>
+        <div id="chat-history-list" class="chat-history-list"></div>
+      </div>
     </div>
 
     <div id="chat-log" class="chat-log" aria-live="polite"></div>
@@ -73,6 +83,6 @@
 </main>
 
 <script src="/static/auth.js"></script>
-<script src="/static/chat.js?v=5"></script>
+<script src="/static/chat.js?v=6"></script>
 </body>
 </html>
