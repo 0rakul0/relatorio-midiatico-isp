@@ -4,34 +4,75 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Conversar com a base · Relatório de Repercussão Midiática</title>
-  <link rel="stylesheet" href="/static/styles.css?v=3">
+  <link rel="stylesheet" href="/static/styles.css?v=4">
 </head>
 <body>
 <header class="top screen-only">
-  <div class="brand"><div class="mark">ISP</div><div><small>Inteligência de comunicação</small><h1>Conversar com a base</h1></div></div>
+  <div class="brand">
+    <div class="mark">ISP</div>
+    <div><small>Inteligência de comunicação</small><h1>Conversar com a base</h1></div>
+  </div>
   <div class="chat-tools">
     <a class="link-back" href="/">↩ Painel</a>
     <span id="chat-auth" class="status">…</span>
   </div>
 </header>
-<main class="wrap">
-  <section class="panel">
+
+<main class="wrap chat-page">
+  <section class="panel chat-panel">
     <div class="chat-top">
-      <div class="field chat-project-field">
-        <label for="chat-project">Projeto (base coletada)</label>
-        <select id="chat-project"><option value="">Carregando projetos…</option></select>
+      <div class="chat-heading-row">
+        <div>
+          <span class="chat-kicker">Base temática consolidada</span>
+          <h2>Escolha um tema para conversar</h2>
+          <p class="note">Execuções repetidas do mesmo tema são reunidas em uma única base. Notícias duplicadas são contadas uma só vez.</p>
+        </div>
+        <button id="chat-new" type="button" class="secondary chat-new-button">Nova conversa</button>
       </div>
-      <p class="note" id="chat-scope">As respostas usam somente os itens validados do projeto selecionado — sem novas buscas na web.</p>
+
+      <div class="topic-picker" id="topic-picker">
+        <button id="topic-trigger" class="topic-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+          <span class="topic-trigger-copy">
+            <span class="topic-trigger-label">Tema selecionado</span>
+            <strong id="topic-trigger-title">Carregando temas…</strong>
+            <span id="topic-trigger-meta">Aguarde enquanto consultamos suas bases.</span>
+          </span>
+          <span class="topic-trigger-chevron" aria-hidden="true">⌄</span>
+        </button>
+
+        <div id="topic-menu" class="topic-menu hidden">
+          <div class="topic-search-wrap">
+            <span class="topic-search-icon" aria-hidden="true">⌕</span>
+            <input id="topic-search" type="search" placeholder="Buscar tema…" autocomplete="off">
+          </div>
+          <div id="topic-list" class="topic-list" role="listbox" aria-label="Temas disponíveis"></div>
+        </div>
+      </div>
+
+      <div id="chat-base-summary" class="chat-base-summary hidden">
+        <span class="base-pill"><strong id="base-items">0</strong> notícias validadas</span>
+        <span class="base-pill"><strong id="base-runs">0</strong> coletas reunidas</span>
+        <span class="base-pill safe">Sem busca externa</span>
+      </div>
+
+      <p class="note chat-scope" id="chat-scope">
+        As respostas usam somente as notícias validadas da base temática selecionada.
+      </p>
     </div>
+
     <div id="chat-log" class="chat-log" aria-live="polite"></div>
+
     <form id="chat-form" class="chat-form">
-      <input id="chat-input" class="chat-input" type="text" maxlength="2000" placeholder="Pergunte sobre o que foi coletado…" autocomplete="off" required>
+      <input id="chat-input" class="chat-input" type="text" maxlength="2000"
+             placeholder="Pergunte sobre as notícias desta base…" autocomplete="off" required>
       <button id="chat-send" type="submit" class="primary">Enviar</button>
     </form>
-    <div id="chat-progress" class="progress hidden">Consultando o corpus do projeto…</div>
+
+    <div id="chat-progress" class="progress hidden">Consultando a base consolidada…</div>
   </section>
 </main>
+
 <script src="/static/auth.js"></script>
-<script src="/static/chat.js"></script>
+<script src="/static/chat.js?v=4"></script>
 </body>
 </html>
