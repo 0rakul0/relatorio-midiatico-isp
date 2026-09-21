@@ -236,7 +236,15 @@ def build_pdf(data: dict) -> bytes:
                 [
                     published[:4] if published else "N/D",
                     author_text or "N/D",
-                    paper.get("title") or "Sem título",
+                    (
+                        (paper.get("title") or "Sem título")
+                        + (
+                            "\nOriginal: " + str(paper.get("title_original"))
+                            if paper.get("title_original")
+                            and paper.get("title_original") != paper.get("title")
+                            else ""
+                        )
+                    ),
                     paper.get("relation_to_topic") or "Contexto científico relacionado",
                     _pdf_link(paper.get("url")),
                 ]
