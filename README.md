@@ -125,7 +125,7 @@ flowchart TB
         Profile["project_profile.py<br/>topic_profile.py"]
         Plan["search_planning.py<br/>execution_profile.py"]
         Collect["collection/<br/>web.py youtube.py<br/>orchestrator.py guards.py<br/>persist.py common.py"]
-        Validate["news_validation.py<br/>validation.py<br/>article_hydration.py"]
+        Validate["news_validation.py<br/>validation.py<br/>article_hydration.py<br/>academic_research.py"]
         Facts["fact_layer.py"]
         Classify["classification.py<br/>metrics.py"]
         Write["reporting.py<br/>report_qa.py<br/>pdf_report.py"]
@@ -138,11 +138,12 @@ flowchart TB
 
     subgraph TOOLS[Tools - app/tools/]
         Registry["registry.py<br/>build_agent_tools()"]
-        SearchTools["search.py / hydration.py<br/>pesquisar_internet<br/>pesquisar_videos<br/>executar_buscas_web/videos<br/>hidratar_artigos"]
+        SearchTools["search.py / hydration.py / academic.py<br/>pesquisar_internet<br/>pesquisar_videos<br/>pesquisar_artigos_arxiv<br/>executar_buscas_web/videos<br/>hidratar_artigos"]
     end
 
     subgraph PROV[Providers - app/tools/providers/]
-        DDG["duckduckgo.py<br/>web + videos (provedor único)"]
+        DDG["duckduckgo.py<br/>web + videos"]
+        ARXIV["arxiv.py<br/>literatura científica"]
     end
 
     subgraph DATA[Persistência - app/models.py]
@@ -163,6 +164,7 @@ flowchart TB
     ReportAgent --> Registry
     Registry --> SearchTools
     SearchTools --> DDG
+    SearchTools --> ARXIV
     SVC --> DB
     ReportAgent --> OpenAI
     ReportAgent --> DB
@@ -222,14 +224,14 @@ sequenceDiagram
 
 Cancelamento é cooperativo (`POST /runs/{id}/cancel`): o worker checa `check_cancelled()` entre stages e preserva o que já foi persistido para auditoria.
 
-## Pipeline — os 13 stages (`app/services/pipeline.py:24`)
+## Pipeline — etapas acompanhadas (`app/services/pipeline.py`)
 
 ```mermaid
 flowchart LR
     P["profile<br/>descobre tipo:<br/>INSTITUTIONAL/<br/>EVENT/GENERAL"] --> SP["search_plan<br/>corpus_reuse +<br/>report_planner"]
     SP --> C["collection<br/>web leve:<br/>hits brutos"] --> Y["youtube<br/>DDG Videos"]
-    Y --> XV["cross_validation<br/>só se YouTube on"]
-    XV --> V["validation<br/>hydrate +<br/>media_relevance"]
+    Y --> AR["academic_research<br/>arXiv, opcional"]
+    AR --> V["validation<br/>hydrate +<br/>media_relevance"]
     V --> F1["facts_pass_1<br/>extract"] --> R1["fact_resolution_1<br/>CONFIRMED/CONFLICT"]
     R1 --> NP["nominal_plan"] --> NC["nominal_collection<br/>2ª coleta"]
     NC --> F2["facts_pass_2"] --> R2["fact_resolution_2"]
@@ -273,9 +275,11 @@ app/
 ├── database.py             # Session/engine (Postgres + SQLite dev)
 │
 ├── tools/
-│   ├── registry.py         # build_agent_tools(enable_web/video/article_fetch, bulk)
+│   ├── registry.py         # build_agent_tools(web/video/article_fetch/academic, bulk)
 │   ├── search.py           # pesquisar_internet/videos + executar_buscas_web/videos (lote)
 │   ├── hydration.py        # hidratar_artigos (fetch paralelo com anti-SSRF)
+│   ├── academic.py         # pesquisar_artigos_arxiv
+│   ├── providers/arxiv.py  # API pública Atom do arXiv
 │   └── providers/
 │       └── duckduckgo.py   # provedor único (web + videos)
 │
@@ -287,7 +291,7 @@ app/
 │   ├── corpus_reuse.py     # reuse_prior_corpus() — reaproveita CorpusDocument
 │   ├── article_hydration.py# hydrate_media_items() — corpo completo p/ validação
 │   ├── news_validation.py  # validate_news_stage() — triagem media_relevance
-│   ├── validation.py       # validate_and_classify() + validação cruzada de vídeo
+│   ├── validation.py       # validate_and_classify() e guardas de aderência
 │   ├── classification.py   # classify_with_llm() — tema/enquadramento/tom
 │   ├── reporting.py        # draft_report_with_llm() + export_report_pdf()
 │   ├── metrics.py          # agregações p/ redação e dashboard
