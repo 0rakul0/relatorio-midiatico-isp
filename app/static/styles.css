@@ -10,7 +10,7 @@
     --ok: #1d7a46;
     --warn: #d27a00;
     --bad: #a12626;
-    --pending: #7a8793
+    --pending: #7a8793;
 }
 
 * {
@@ -1216,7 +1216,7 @@ td a {
 }
 
 .link-back {
-    color: var(--brand, #1a5fb4);
+    color: var(--blue);
     text-decoration: none;
     font-weight: 600;
 }
@@ -1238,8 +1238,8 @@ td a {
     flex-direction: column;
     gap: 12px;
     overflow-y: auto;
-    background: var(--panel, #fff);
-    border: 1px solid var(--line, #d9dee3);
+    background: var(--white);
+    border: 1px solid var(--line);
     border-radius: 10px;
 }
 
@@ -1260,18 +1260,18 @@ td a {
 
 .chat-bubble.user {
     align-self: flex-end;
-    background: var(--brand, #1a5fb4);
+    background: var(--blue);
     color: #fff;
 }
 
 .chat-bubble.assistant {
     align-self: flex-start;
     background: #f1f4f7;
-    border: 1px solid var(--line, #d9dee3);
+    border: 1px solid var(--line);
 }
 
 .chat-bubble.assistant a {
-    color: var(--brand, #1a5fb4);
+    color: var(--blue);
 }
 
 .chat-sources {
@@ -1301,7 +1301,7 @@ td a {
 .chat-input {
     flex: 1;
     padding: 10px 12px;
-    border: 1px solid var(--line, #d9dee3);
+    border: 1px solid var(--line);
     border-radius: 8px;
     font-size: 14px;
 }
@@ -1309,7 +1309,7 @@ td a {
 .chat-form .primary,
 .chat-form .primary:disabled {
     padding: 10px 18px;
-    background: var(--brand, #1a5fb4);
+    background: var(--blue);
     color: #fff;
     border-radius: 8px;
 }
@@ -1322,7 +1322,7 @@ td a {
 .link-chat {
     margin-left: auto;
     padding: 8px 12px;
-    color: var(--brand, #1a5fb4);
+    color: var(--blue);
     border: 1px solid currentColor;
     border-radius: 8px;
     text-decoration: none;
