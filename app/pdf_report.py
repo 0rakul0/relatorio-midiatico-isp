@@ -66,16 +66,23 @@ def build_pdf(data: dict) -> bytes:
 
     report = data["report"]
     project = data["project"]
-    metrics = data["metrics"]
-    corpus = data.get("corpus", [])
+    metrics = dict(data["metrics"])
+    corpus = _deduplicated_corpus(
+        data.get("corpus", []),
+        data.get("corpus_by_origin") or {},
+    )
     facts = data.get("fact_events", [])
     fact_evidence = data.get("fact_evidence", [])
     academic_papers = data.get("academic_papers", [])
     word_cloud = data.get("word_cloud") or {}
-    by_origin = data.get("corpus_by_origin") or _split_by_origin(corpus)
+    by_origin = _split_by_origin(corpus)
     social_items = by_origin.get("redes_sociais", [])
     youtube_items = by_origin.get("youtube", [])
     portal_items = by_origin.get("portal_noticias", [])
+    metrics["valid_items"] = len(corpus)
+    metrics["duplicates_collapsed"] = sum(
+        int(item.get("duplicate_count") or 0) for item in corpus
+    )
     execution_flags = project.get("execution_flags") or {}
     fact_layer_enabled = bool(execution_flags.get("enable_fact_layer"))
 
@@ -299,12 +306,18 @@ def build_pdf(data: dict) -> bytes:
         )
 
     story.append(Paragraph("Itens relacionados encontrados", heading))
+    duplicate_total = sum(int(item.get("duplicate_count") or 0) for item in corpus)
+    duplicate_note = (
+        f" {duplicate_total} entrada(s) repetida(s) foram consolidadas para evitar dupla contagem."
+        if duplicate_total
+        else ""
+    )
     story.append(
         Paragraph(
-            f"{len(corpus)} item(ns) validado(s) como materialmente relacionados ao tema: "
+            f"{len(corpus)} item(ns) único(s) validado(s) como materialmente relacionados ao tema: "
             f"{len(social_items)} em mídias sociais, {len(youtube_items)} no YouTube e "
-            f"{len(portal_items)} em portais de notícias. "
-            "O detalhamento item a item está nos anexos.",
+            f"{len(portal_items)} em portais de notícias."
+            f"{duplicate_note} O detalhamento item a item está nos anexos.",
             small,
         )
     )
@@ -582,7 +595,14 @@ def build_pdf(data: dict) -> bytes:
                     str(index + 1),
                     item.get("published_at") or item.get("published_year", "N/D"),
                     item.get("source") or item.get("domain") or "Fonte aberta",
-                    item.get("title"),
+                    (
+                        item.get("title")
+                        + (
+                            f" (+{int(item.get('duplicate_count') or 0)} duplicata(s) consolidada(s))"
+                            if int(item.get("duplicate_count") or 0)
+                            else ""
+                        )
+                    ),
                     _pdf_link(item.get("url")),
                 ]
                 for index, item in enumerate(rows)
@@ -602,11 +622,32 @@ def build_pdf(data: dict) -> bytes:
     for offset, (annex_name, rows) in enumerate(annex_sections):
         letter = chr(ord("A") + annex_base + offset)
         story.append(Paragraph(f"Anexo {letter} - {annex_name}", heading))
-        story.append(Paragraph("Itens validados na janela de repercussão.", small))
+        collapsed = sum(int(item.get("duplicate_count") or 0) for item in rows)
+        note = "Itens validados na janela de repercussão."
+        if collapsed:
+            note += f" {collapsed} entrada(s) duplicada(s) foram consolidadas neste anexo."
+        story.append(Paragraph(note, small))
         story.append(corpus_table(rows))
 
     document.build(story, onFirstPage=page_number, onLaterPages=page_number)
     return buffer.getvalue()
+
+
+def _deduplicated_corpus(
+    corpus: list[dict],
+    by_origin: dict[str, list[dict]] | None = None,
+) -> list[dict]:
+    """Normaliza snapshots atuais e legados sem alterar o conteúdo persistido."""
+    from app.services.metrics import deduplicate_corpus
+
+    rows = list(corpus or [])
+    if not rows and by_origin:
+        rows = [
+            *list(by_origin.get("redes_sociais") or []),
+            *list(by_origin.get("youtube") or []),
+            *list(by_origin.get("portal_noticias") or []),
+        ]
+    return deduplicate_corpus(rows)
 
 
 def _split_by_origin(corpus: list[dict]) -> dict[str, list[dict]]:
