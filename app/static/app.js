@@ -354,7 +354,7 @@ function render(result){
     const note=collapsed
       ? `<p class="annex-dedup-note">${esc(collapsed)} entrada(s) duplicada(s) foram consolidadas neste anexo.</p>`
       : '';
-    return note+table(['#','Data','Fonte','Título','Origem','URL'],rows.map(corpusRow));
+    return note+`<div class="annex-table">${table(['#','Data','Fonte','Título','Origem','URL'],rows.map(corpusRow))}</div>`;
   };
   const duplicateNote=collapsedDuplicates
     ? ` ${collapsedDuplicates} entrada(s) repetida(s) foram consolidadas para evitar dupla contagem.`
