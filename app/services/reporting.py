@@ -16,6 +16,7 @@ from app.services.academic_research import academic_papers_for_project
 from app.services.execution_profile import execution_flags
 from app.services.project_profile import project_payload
 from app.services.metrics import corpus_for_project, metrics, split_corpus, split_corpus_by_origin
+from app.services.word_cloud import word_cloud_for_project
 from app.services.cache import hydrate_cached_report
 
 
@@ -118,6 +119,7 @@ def _save_report(db: Session, project: Project, result: dict, grounding: dict) -
         "fact_events": grounding["fact_events"],
         "fact_evidence": grounding["fact_evidence"],
         "academic_papers": grounding["academic_papers"],
+        "word_cloud": word_cloud_for_project(db, project.id),
         "project": project_payload(project, for_report=True),
     }
     digest = content_hash(payload)
