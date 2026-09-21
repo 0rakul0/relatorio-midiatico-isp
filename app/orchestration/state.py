@@ -25,7 +25,7 @@ RUN_STAGES = [
     ("search_plan", "Planejamento do relatório"),
     ("collection", "Coleta em sites"),
     ("youtube", "Coleta no YouTube"),
-    ("cross_validation", "Validação cruzada de vídeos"),
+    ("academic_research", "Literatura científica"),
     ("validation", "Validação das notícias"),
     ("facts_pass_1", "Extração factual"),
     ("fact_resolution_1", "Consolidação factual"),
