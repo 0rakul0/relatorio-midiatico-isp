@@ -113,7 +113,7 @@ def health():
         "agent": {
             "name": "ReportAgent",
             "tool_choice": "model_decides",
-            "tools": ["pesquisar_internet", "pesquisar_videos"],
+            "tools": ["pesquisar_internet", "pesquisar_videos", "pesquisar_artigos_arxiv"],
         },
         "ai_limits": {
             "max_semantic_reviews": settings.max_semantic_reviews,
@@ -402,7 +402,7 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db), user: 
             "enable_youtube": payload.enable_youtube,
             "enable_fact_layer": payload.enable_fact_layer,
             "enable_nominal_followup": payload.enable_nominal_followup,
-            "enable_cross_validation": payload.enable_cross_validation,
+            "enable_academic_research": payload.enable_academic_research,
         }.items()
         if value is not None
     }
