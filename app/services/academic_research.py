@@ -97,7 +97,9 @@ def research_academic_literature(
         response_model=AcademicResearchResponse,
         schema_name="academic_research_v1",
         tools=tools,
-        max_output_tokens=4200,
+        # A resposta inclui a traducao integral dos abstracts selecionados.
+        # Reserva folga para ate 10 artigos sem forcar resumos/truncamentos.
+        max_output_tokens=9000,
         max_tool_rounds=1,
     )
 
