@@ -297,6 +297,7 @@ def _pdf_word_cloud_flowable(word_cloud: dict, width: float):
 def build_pdf(data: dict) -> bytes:
     """Cria o PDF a partir do relatório persistido, sem chamar LLM novamente."""
     from reportlab.lib import colors
+    from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import cm
@@ -352,8 +353,23 @@ def build_pdf(data: dict) -> bytes:
         spaceBefore=15,
         spaceAfter=7,
     )
-    body = ParagraphStyle("Body", parent=styles["BodyText"], fontSize=9.2, leading=13, spaceAfter=8)
-    small = ParagraphStyle("Small", parent=body, fontSize=7.2, leading=9)
+    body = ParagraphStyle(
+        "Body",
+        parent=styles["BodyText"],
+        fontSize=9.2,
+        leading=13,
+        spaceAfter=8,
+        alignment=TA_JUSTIFY,
+    )
+    # Metadados, notas curtas e tabelas continuam alinhados à esquerda para
+    # evitar espaçamento excessivo em colunas estreitas.
+    small = ParagraphStyle(
+        "Small",
+        parent=body,
+        fontSize=7.2,
+        leading=9,
+        alignment=TA_LEFT,
+    )
     cloud_note_style = ParagraphStyle(
         "WordCloudNote",
         parent=small,
