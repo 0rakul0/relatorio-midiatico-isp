@@ -109,6 +109,45 @@ def _pdf_word_cloud_flowable(word_cloud: dict, width: float):
                     return True
             return False
 
+        def _draw_texture_edge_blend(self, canvas):
+            """Suaviza somente a textura nas bordas superior e inferior.
+
+            As faixas brancas semitransparentes são desenhadas depois do
+            pontilhado e antes das palavras, então os termos continuam nítidos
+            enquanto a textura se dissolve gradualmente no branco da página.
+            """
+            band_height = 34.0
+            steps = 20
+
+            for index in range(steps):
+                ratio = index / max(1, steps - 1)
+                alpha = 0.94 * ((1.0 - ratio) ** 1.7)
+                strip_height = (band_height / steps) + 0.7
+
+                canvas.setFillColor(colors.Color(1, 1, 1, alpha=alpha))
+
+                # Base: branco mais forte junto à borda, desaparecendo para o centro.
+                bottom_y = index * band_height / steps
+                canvas.rect(
+                    1.0,
+                    bottom_y,
+                    self.width - 2.0,
+                    strip_height,
+                    fill=1,
+                    stroke=0,
+                )
+
+                # Topo: espelha o mesmo degradê.
+                top_y = self.height - ((index + 1) * band_height / steps)
+                canvas.rect(
+                    1.0,
+                    top_y,
+                    self.width - 2.0,
+                    strip_height,
+                    fill=1,
+                    stroke=0,
+                )
+
         def _layout_words(self):
             counts = [max(1.0, float(item.get("count") or 1)) for item in words]
             min_count = min(counts)
@@ -236,6 +275,8 @@ def _pdf_word_cloud_flowable(word_cloud: dict, width: float):
                     canvas.circle(x, y, 0.45, fill=1, stroke=0)
                     x += step
                 y += step
+
+            self._draw_texture_edge_blend(canvas)
 
             for x, y, size, rotation, color, is_top, text, _box in self._placements:
                 canvas.saveState()
