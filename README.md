@@ -289,6 +289,8 @@ app/
 │   ├── search_planning.py  # plan_report_with_llm() + plan_queries()
 │   ├── execution_profile.py# AUTO → MIDIATICO_SIMPLES / COM_FATOS / COMPLETO_NOMINAL
 │   ├── corpus_reuse.py     # reuse_prior_corpus() — reaproveita CorpusDocument
+│   ├── corpus_chat.py      # chat grounded no corpus validado
+│   ├── chat_history.py     # histórico persistente por usuário/tema
 │   ├── article_hydration.py# hydrate_media_items() — corpo completo p/ validação
 │   ├── news_validation.py  # validate_news_stage() — triagem media_relevance
 │   ├── validation.py       # validate_and_classify() e guardas de aderência
