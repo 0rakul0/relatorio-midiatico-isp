@@ -18,13 +18,11 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
 # Dependências primeiro (layer em cache; rebuild só se pyproject/uv.lock mudar).
 # README.md acompanha porque o pyproject o declara como readme do pacote.
 COPY pyproject.toml uv.lock README.md ./
-RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Código da aplicação
 COPY app ./app
-RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev
 
 EXPOSE 8000
 # Railway injeta PORT em runtime; fora dele, 8000 preserva o uso local.
