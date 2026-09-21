@@ -478,6 +478,26 @@ button:disabled {
     margin-bottom: 12px;
 }
 
+.annex-dedup-note {
+    margin: 4px 0 10px !important;
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.annex-duplicate-badge {
+    display: inline-flex;
+    align-items: center;
+    margin-top: 4px;
+    padding: 2px 7px;
+    color: #5c6470;
+    background: #eef2f5;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
 .related-items {
     display: grid;
     gap: 10px;
