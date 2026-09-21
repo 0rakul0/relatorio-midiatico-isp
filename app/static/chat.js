@@ -41,6 +41,8 @@ let currentProject = null;
 let currentTopic = null;
 let projects = [];
 let conversation = [];
+let currentConversationId = null;
+let conversationHistory = [];
 
 const log = document.getElementById('chat-log');
 const input = document.getElementById('chat-input');
@@ -59,6 +61,8 @@ const triggerMeta = document.getElementById('topic-trigger-meta');
 const baseSummary = document.getElementById('chat-base-summary');
 const baseItems = document.getElementById('base-items');
 const baseRuns = document.getElementById('base-runs');
+const historyPanel = document.getElementById('chat-history-panel');
+const historyList = document.getElementById('chat-history-list');
 
 function plural(value, singular, pluralText) {
   return `${value} ${value === 1 ? singular : pluralText}`;
@@ -128,10 +132,15 @@ async function sendQuestion() {
       : `/chat/${currentProject}/ask`;
     const state = await api(endpoint, {
       method: 'POST',
-      body: JSON.stringify({ messages: conversation })
+      body: JSON.stringify({
+        messages: conversation.slice(-50),
+        conversation_id: currentConversationId
+      })
     });
+    currentConversationId = state.conversation_id || currentConversationId;
     conversation.push({ role: 'assistant', content: state.answer });
     renderAnswer(state);
+    await loadConversationHistory(false);
   } catch (err) {
     appendBubble('assistant', `<p>${esc(err.message)}</p>`);
   } finally {
@@ -141,10 +150,137 @@ async function sendQuestion() {
   }
 }
 
-function resetConversation(showWelcome = true) {
+function resetConversation(showWelcome = true, clearId = true) {
   conversation = [];
+  if (clearId) currentConversationId = null;
   log.innerHTML = '';
   if (showWelcome) renderWelcome();
+  renderConversationHistory();
+}
+
+function conversationTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date);
+}
+
+function renderConversationHistory() {
+  if (!historyPanel || !historyList) return;
+  historyPanel.classList.toggle('hidden', !currentProject);
+
+  if (!currentProject) {
+    historyList.innerHTML = '';
+    return;
+  }
+
+  if (!conversationHistory.length) {
+    historyList.innerHTML = '<div class="chat-history-empty">Nenhuma conversa salva neste tema ainda.</div>';
+    return;
+  }
+
+  historyList.innerHTML = conversationHistory.map(item => {
+    const current = String(item.id) === String(currentConversationId);
+    const count = Number(item.message_count || 0);
+    return `
+      <div class="chat-history-entry${current ? ' current' : ''}" data-conversation-id="${item.id}">
+        <button type="button" class="chat-history-open" data-open-conversation="${item.id}">
+          <strong>${esc(item.title || 'Conversa')}</strong>
+          <span>${esc(conversationTime(item.updated_at))} · ${count} mensagem(ns)</span>
+        </button>
+        <button type="button" class="chat-history-delete" data-delete-conversation="${item.id}" title="Excluir conversa" aria-label="Excluir conversa">×</button>
+      </div>
+    `;
+  }).join('');
+
+  historyList.querySelectorAll('[data-open-conversation]').forEach(button => {
+    button.addEventListener('click', () => loadConversation(button.dataset.openConversation));
+  });
+
+  historyList.querySelectorAll('[data-delete-conversation]').forEach(button => {
+    button.addEventListener('click', async event => {
+      event.stopPropagation();
+      const id = button.dataset.deleteConversation;
+      if (!confirm('Excluir esta conversa do histórico?')) return;
+      try {
+        await api(`/chat/conversations/${id}`, { method: 'DELETE' });
+        const wasCurrent = String(currentConversationId) === String(id);
+        if (wasCurrent) resetConversation(true, true);
+        await loadConversationHistory(wasCurrent);
+      } catch (err) {
+        appendBubble('assistant', `<p>${esc(err.message)}</p>`);
+      }
+    });
+  });
+}
+
+async function loadConversation(conversationId) {
+  if (!conversationId) return;
+  const selectedProject = currentProject;
+  try {
+    const state = await api(`/chat/conversations/${conversationId}`);
+    if (selectedProject !== currentProject) return;
+
+    currentConversationId = state.id;
+    conversation = [];
+    log.innerHTML = '';
+    renderWelcome();
+
+    for (const message of (state.messages || [])) {
+      conversation.push({ role: message.role, content: message.content });
+      if (message.role === 'user') {
+        renderUser(message.content);
+      } else {
+        renderAnswer({
+          answer: message.content,
+          sources: message.sources || [],
+          ...(message.metadata || {})
+        });
+      }
+    }
+    renderConversationHistory();
+    input.focus();
+  } catch (err) {
+    appendBubble('assistant', `<p>${esc(err.message)}</p>`);
+  }
+}
+
+async function loadConversationHistory(openLatest = false) {
+  if (!currentProject) {
+    conversationHistory = [];
+    renderConversationHistory();
+    return;
+  }
+
+  const selectedProject = currentProject;
+  try {
+    const state = await api(`/chat/conversations?project_id=${encodeURIComponent(selectedProject)}`);
+    if (selectedProject !== currentProject) return;
+    conversationHistory = state.conversations || [];
+    renderConversationHistory();
+
+    if (openLatest) {
+      if (conversationHistory.length) {
+        await loadConversation(conversationHistory[0].id);
+      } else {
+        resetConversation(true, true);
+      }
+    }
+  } catch (err) {
+    conversationHistory = [];
+    renderConversationHistory();
+    appendBubble('assistant', `<p>Não foi possível carregar o histórico: ${esc(err.message)}</p>`);
+  }
+}
+
+function startNewConversation() {
+  resetConversation(true, true);
+  input.focus();
 }
 
 function closePicker() {
@@ -226,21 +362,28 @@ function updatePickerSummary() {
     : `Converse sobre “${currentTopic.topic}”. A base reúne todas as notícias validadas encontradas nas execuções desse mesmo tema, sem novas buscas na web.`;
 }
 
-function selectProject(projectId) {
+async function selectProject(projectId) {
   const selected = projects.find(
     p => String(p.id) === String(projectId) && p.valid_items > 0
   );
   currentTopic = selected || null;
   currentProject = selected ? String(selected.id) : null;
+  currentConversationId = null;
+  conversationHistory = [];
 
   updatePickerSummary();
-  resetConversation(Boolean(currentProject));
+  log.innerHTML = '';
+  conversation = [];
 
   input.disabled = !currentProject;
   sendBtn.disabled = !currentProject;
   newBtn.disabled = !currentProject;
 
-  if (currentProject) input.focus();
+  renderConversationHistory();
+  if (currentProject) {
+    await loadConversationHistory(true);
+    input.focus();
+  }
 }
 
 async function loadProjects() {
@@ -267,7 +410,7 @@ async function loadProjects() {
     ? String(data.last_active_project_id)
     : String(projects[0].id);
 
-  selectProject(preselect);
+  await selectProject(preselect);
   renderTopicList('');
 }
 
@@ -289,7 +432,7 @@ if (!guardAuth()) {
     sendQuestion();
   });
 
-  newBtn.addEventListener('click', () => resetConversation(true));
+  newBtn.addEventListener('click', startNewConversation);
 
   trigger.addEventListener('click', () => {
     menu.classList.contains('hidden') ? openPicker() : closePicker();
