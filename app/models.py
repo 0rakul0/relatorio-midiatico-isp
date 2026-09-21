@@ -270,6 +270,44 @@ class MediaItem(Base):
     retrieved_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), server_default=func.now())
 
 
+class AcademicPaper(Base):
+    """Scientific literature selected for one report topic.
+
+    Academic papers are contextual evidence and never count as media
+    repercussion items.
+    """
+
+    __tablename__ = "academic_papers"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "provider", "external_id",
+            name="uq_project_academic_paper",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String(40), default="arxiv")
+    external_id: Mapped[str] = mapped_column(String(150))
+    arxiv_id: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    doi: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    title: Mapped[str] = mapped_column(Text)
+    authors: Mapped[list] = mapped_column(JSON, default=list)
+    abstract: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    updated_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    categories: Mapped[list] = mapped_column(JSON, default=list)
+    url: Mapped[str] = mapped_column(Text)
+    pdf_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    journal_reference: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_preprint: Mapped[bool] = mapped_column(Boolean, default=True)
+    relevance_score: Mapped[float] = mapped_column(Float, default=0.0)
+    relation_to_topic: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class FactEvent(Base):
     __tablename__ = "fact_events"
 
