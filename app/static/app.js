@@ -235,13 +235,13 @@ function render(result){
     <div class="kicker">Relatório de repercussão midiática</div>
     <h1>${esc(d.title)}</h1><p class="interpretive">${esc(d.interpretive_title)}</p><p class="subtitle">${esc(d.subtitle)}</p>
     <div class="report-meta"><div><b>Instituição</b><br>${esc(p.institution)}</div>${contextMeta}<div><b>Janela de repercussão</b><br>${windowLabel(p.collection_start,p.collection_end,'Busca temática')}</div><div><b>QA</b><br>${qaBadge(qa)}</div></div>
-    <h2>Nuvem de palavras</h2>
     ${renderWordCloud(wordCloud)}
     <h2>Resumo Executivo</h2><div class="summary"><p>${esc(d.executive_summary)}</p></div>
     ${academicSection}
     <h2>Itens relacionados encontrados</h2>
     ${relatedSummary}
     ${factSection}
+    ${factSection}<h2>Nuvem de palavras</h2>
     <h2>Abertura</h2><p>${esc(d.opening)}</p>
     <h2>I. Panorama da Repercussão</h2><p>${esc(d.panorama)}</p>
     <div class="table-wrap"><table><tbody><tr><th>Itens validados</th><td>${esc(m.valid_items)}</td><th>Veículos</th><td>${esc(m.unique_vehicles)}</td><th>Eventos factuais</th><td>${esc(m.facts?.events||0)}</td></tr></tbody></table></div>
