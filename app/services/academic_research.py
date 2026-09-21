@@ -36,9 +36,16 @@ def academic_papers_for_project(db: Session, project_id: int) -> list[dict]:
             "external_id": row.external_id,
             "arxiv_id": row.arxiv_id,
             "doi": row.doi,
-            "title": row.title,
+            # Campos de apresentacao usam pt-BR quando disponivel, enquanto os
+            # originais continuam expostos separadamente para auditoria.
+            "title": row.title_ptbr or row.title,
+            "title_ptbr": row.title_ptbr,
+            "title_original": row.title,
             "authors": list(row.authors or []),
-            "abstract": row.abstract,
+            "abstract": row.abstract_ptbr or row.abstract,
+            "abstract_ptbr": row.abstract_ptbr,
+            "abstract_original": row.abstract,
+            "original_language": row.original_language,
             "published_at": row.published_at.isoformat() if row.published_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
             "categories": list(row.categories or []),
@@ -121,9 +128,21 @@ def research_academic_literature(
         )
         row.arxiv_id = raw.get("arxiv_id")
         row.doi = raw.get("doi")
-        row.title = raw.get("title") or paper.get("title") or "Sem titulo"
-        row.authors = list(raw.get("authors") or [])
+        # A fonte original vem exclusivamente da tool; a LLM so fornece a
+        # camada de traducao e a avaliacao de relevancia.
+        row.title = raw.get("title") or "Sem titulo"
         row.abstract = raw.get("abstract")
+        row.title_ptbr = str(paper.get("title_ptbr") or "").strip() or row.title
+        translated_abstract = paper.get("abstract_ptbr")
+        row.abstract_ptbr = (
+            str(translated_abstract).strip()
+            if translated_abstract is not None and str(translated_abstract).strip()
+            else None
+        )
+        row.original_language = (
+            str(paper.get("original_language") or "").strip()[:20] or None
+        )
+        row.authors = list(raw.get("authors") or [])
         row.published_at = _as_date(raw.get("published_at"))
         row.updated_at = _as_date(raw.get("updated_at"))
         row.categories = list(raw.get("categories") or [])
