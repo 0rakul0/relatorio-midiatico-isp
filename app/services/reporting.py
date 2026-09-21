@@ -12,6 +12,7 @@ from app.pdf_report import build_pdf
 from app.report_fingerprint import content_hash, request_fingerprint
 from app.report_qa import run_report_qa
 from app.schemas import StructuredMediaReportResponse
+from app.services.academic_research import academic_papers_for_project
 from app.services.execution_profile import execution_flags
 from app.services.project_profile import project_payload
 from app.services.metrics import corpus_for_project, metrics, split_corpus, split_corpus_by_origin
@@ -34,6 +35,11 @@ def _writer_grounding(db: Session, project: Project) -> dict:
         if flags["enable_fact_layer"]
         else []
     )
+    academic_papers = (
+        academic_papers_for_project(db, project.id)
+        if flags.get("enable_academic_research")
+        else []
+    )
     return {
         "metrics": data,
         "items": items,
@@ -41,6 +47,7 @@ def _writer_grounding(db: Session, project: Project) -> dict:
         "flags": flags,
         "fact_events": fact_events,
         "fact_evidence": fact_evidence,
+        "academic_papers": academic_papers,
     }
 
 
@@ -83,6 +90,7 @@ def _agent_payload(db: Session, project: Project, grounding: dict) -> dict:
             for fact in grounding["official_facts"]
         ],
         "fact_events": grounding["fact_events"],
+        "academic_context": grounding["academic_papers"],
         "validated_items": [
             {
                 "title": item.title,
@@ -109,6 +117,7 @@ def _save_report(db: Session, project: Project, result: dict, grounding: dict) -
         "corpus_by_origin": split_corpus_by_origin(corpus),
         "fact_events": grounding["fact_events"],
         "fact_evidence": grounding["fact_evidence"],
+        "academic_papers": grounding["academic_papers"],
         "project": project_payload(project, for_report=True),
     }
     digest = content_hash(payload)
