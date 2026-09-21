@@ -502,6 +502,7 @@ class ChatTurnIn(BaseModel):
 
 class ChatAskRequest(BaseModel):
     messages: list[ChatTurnIn] = Field(min_length=1, max_length=50)
+    conversation_id: int | None = Field(default=None, ge=1)
 
 
 class ChatResponse(StrictLLMOutput):
