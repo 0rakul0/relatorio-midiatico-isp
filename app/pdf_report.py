@@ -676,7 +676,7 @@ def build_pdf(data: dict) -> bytes:
         story.append(
             KeepTogether(
                 [
-                    Paragraph("TOP 5 CANAIS NO YOUTUBE", heading),
+                    Paragraph("CANAIS NO YOUTUBE", heading),
                     _table(
                         [["#", "Canal", "Vídeos validados", "Visualizações", "Link"]]
                         + [
@@ -689,8 +689,9 @@ def build_pdf(data: dict) -> bytes:
                             ]
                             for index, item in enumerate(top_channels)
                         ],
-                        [0.7 * cm, 6.1 * cm, 2.8 * cm, 3.0 * cm, 4.0 * cm],
+                        [0.9 * cm, 5.9 * cm, 2.8 * cm, 3.0 * cm, 4.0 * cm],
                         small,
+                        nowrap_columns={0},
                     ),
                 ]
             )
@@ -698,7 +699,7 @@ def build_pdf(data: dict) -> bytes:
 
     top_reach_contents = metrics.get("top_reach_contents", [])
     if top_reach_contents:
-        story.append(Paragraph("TOP 5 CONTEÚDOS POR ALCANCE DISPONÍVEL", heading))
+        story.append(Paragraph("CONTEÚDOS POR ALCANCE DISPONÍVEL", heading))
         story.append(
             Paragraph(
                 escape(_text(metrics.get("top_reach_methodology", ""))),
@@ -719,8 +720,9 @@ def build_pdf(data: dict) -> bytes:
                     ]
                     for index, item in enumerate(top_reach_contents)
                 ],
-                [0.6 * cm, 1.7 * cm, 2.8 * cm, 6.3 * cm, 2.0 * cm, 3.2 * cm],
+                [0.9 * cm, 1.6 * cm, 2.8 * cm, 6.1 * cm, 2.0 * cm, 3.2 * cm],
                 small,
+                nowrap_columns={0},
             )
         )
 
@@ -811,8 +813,9 @@ def build_pdf(data: dict) -> bytes:
                 ]
                 for index, item in enumerate(rows)
             ],
-            [0.7 * cm, 1.6 * cm, 3.0 * cm, 10.1 * cm, 2.2 * cm],
+            [0.9 * cm, 2.3 * cm, 3.0 * cm, 9.2 * cm, 2.2 * cm],
             small,
+            nowrap_columns={0, 1},
         )
 
     # Anexos do corpus auditável, sempre nesta ordem: mídias sociais,
@@ -861,7 +864,14 @@ def _split_by_origin(corpus: list[dict]) -> dict[str, list[dict]]:
     return split_corpus_by_origin(corpus or [])
 
 
-def _table(rows: list[list[object]], widths: list[float], style, header_color=None, header_text=None):
+def _table(
+    rows: list[list[object]],
+    widths: list[float],
+    style,
+    header_color=None,
+    header_text=None,
+    nowrap_columns: set[int] | None = None,
+):
     from reportlab.lib import colors
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.platypus import Paragraph, Table, TableStyle
@@ -871,7 +881,9 @@ def _table(rows: list[list[object]], widths: list[float], style, header_color=No
         parent=style,
         textColor=header_text if header_text is not None else colors.white,
     )
-    def cell_paragraph(cell: object, cell_style):
+    nowrap_columns = set(nowrap_columns or set())
+
+    def cell_paragraph(cell: object, cell_style, row_index: int, column_index: int):
         if isinstance(cell, dict) and "_pdf_link" in cell:
             href = _text(cell.get("_pdf_link")).strip()
             label = escape(_text(cell.get("label") or "Abrir"))
@@ -882,12 +894,21 @@ def _table(rows: list[list[object]], widths: list[float], style, header_color=No
                 f'<link href="{safe_href}" color="#1F5E8C"><u>{label}</u></link>',
                 cell_style,
             )
+        if row_index > 0 and column_index in nowrap_columns:
+            # String simples dentro da Table não é quebrada pelo Paragraph.
+            # As larguras dessas colunas são dimensionadas para conter o valor.
+            return _text(cell)
         return Paragraph(escape(_text(cell)), cell_style)
 
     formatted = [
         [
-            cell_paragraph(cell, header_style if row_index == 0 else style)
-            for cell in row
+            cell_paragraph(
+                cell,
+                header_style if row_index == 0 else style,
+                row_index,
+                column_index,
+            )
+            for column_index, cell in enumerate(row)
         ]
         for row_index, row in enumerate(rows)
     ]
@@ -900,6 +921,8 @@ def _table(rows: list[list[object]], widths: list[float], style, header_color=No
                 ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#dbe4ec")),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("PADDING", (0, 0), (-1, -1), 5),
+                ("FONTNAME", (0, 1), (-1, -1), getattr(style, "fontName", "Helvetica")),
+                ("FONTSIZE", (0, 1), (-1, -1), getattr(style, "fontSize", 7.2)),
             ]
         )
     )
