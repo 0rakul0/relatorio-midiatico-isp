@@ -1,7 +1,29 @@
 
 const $=s=>document.querySelector(s);
 const esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-const api=async(path,opts={})=>{const r=await fetch(path,{headers:{'Content-Type':'application/json'},...opts});if(r.status===204)return null;const raw=await r.text();let d;try{d=raw?JSON.parse(raw):null}catch{d=null}if(!r.ok)throw new Error(d?.detail||raw||`Erro HTTP ${r.status}`);return d};
+const api=async(path,opts={})=>{const r=await fetch(path,{headers:{'Content-Type':'application/json',...authHeaders()},...opts});if(r.status===401&&await refreshSession()){const r2=await fetch(path,{headers:{'Content-Type':'application/json',...authHeaders()},...opts});return handleApi(r2)}if(r.status===401){window.location.href='/login';throw new Error('Sessão expirada. Entre de novo.')}return handleApi(r)};
+async function handleApi(r){if(r.status===204)return null;const raw=await r.text();let d;try{d=raw?JSON.parse(raw):null}catch{d=null}if(!r.ok)throw new Error(d?.detail||raw||`Erro HTTP ${r.status}`);return d}
+
+function showLoggedOut(msg){
+  saveAuth(null);
+  window.location.href='/login';
+}
+async function doLogout(){saveAuth(null);window.location.href='/login';}
+async function renderAuth(){
+  const s=authState();
+  if(!s){window.location.href='/login';return;}
+  $('#auth-user-email').textContent=s.email||'';
+  try{
+    const me=await api('/billing/me');
+    $('#auth-user-plan').textContent=me.plan||'FREE';
+    const u=me.usage||{},l=me.limits||{};
+    const margin=u.margin_pct?` (inclui ${String(u.margin_pct).replace('.',',')}% de margem operacional)`:'';
+    $('#auth-quota').textContent=`Plano ${me.plan} · ${u.reports_started??0}/${l.reports_per_month??'—'} relatórios · US$ ${(u.llm_usd??0).toFixed(4).replace('.',',')} de US$ ${l.llm_usd_per_month??'—'} em LLM no mês${margin}.`;
+  }catch(e){$('#auth-quota').textContent=`Uso indisponível: ${e.message}`}
+}
+$('#auth-logout').onclick=doLogout;
+$('#auth-refresh-quota').onclick=renderAuth;
+if(authState()){renderAuth();}else{window.location.href='/login';}
 const table=(headers,rows)=>`<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(cell=>`<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 let currentProjectId=null,currentRunId=null,pollTimer=null;
 

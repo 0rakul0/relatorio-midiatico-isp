@@ -196,8 +196,10 @@ def _llm_qa(payload: dict) -> list[dict]:
 
 
 def run_report_qa(db: Session, project: Project, payload: dict) -> dict:
+    from app.billing import plan_allows
+
     findings = deterministic_report_qa(payload)
-    if get_settings().enable_llm_qa:
+    if get_settings().enable_llm_qa and plan_allows(db, project, "llm_qa"):
         findings.extend(_llm_qa(payload))
     else:
         findings.append(

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Entrar — Relatório de Repercussão Midiática</title>
+  <link rel="stylesheet" href="/static/styles.css?v=3">
+  <style>
+    .login-wrap { max-width: 420px; margin: 8vh auto; padding: 0 24px; }
+    .login-card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 30px; box-shadow: 0 2px 8px #1232460a; }
+    .login-card h1 { font-size: 22px; margin: 0 0 4px; color: var(--navy); }
+  </style>
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="kicker">ISP · Inteligência de comunicação</div>
+    <h1>Entrar</h1>
+    <p class="note">Acesse para gerar e consultar relatórios.</p>
+    <div class="field"><label for="login-email">E-mail</label><input id="login-email" type="email" autocomplete="username"></div>
+    <div class="field" style="margin-top:10px"><label for="login-pass">Senha</label><input id="login-pass" type="password" autocomplete="current-password"></div>
+    <div class="actions">
+      <button id="login-go" type="button">Entrar</button>
+      <button type="button" class="secondary" id="login-signup">Criar conta</button>
+    </div>
+    <p class="note" id="login-msg" style="margin:12px 0 0"></p>
+  </div>
+</div>
+<script src="/static/auth.js?v=1"></script>
+<script src="/static/login.js?v=2"></script>
+</body>
+</html>

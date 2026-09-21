@@ -1595,10 +1595,27 @@ possuem validações determinísticas.
 
 ---
 
+# SaaS: auth, planos e billing
+
+Todos os endpoints exigem Bearer JWT do Supabase Auth (exceto `/health`).
+Projetos têm dono (`owner_id`); sem dono (legado), só admin enxerga.
+Admin via `ADMIN_EMAILS`.
+
+Planos (`FREE`/`PRO`/`INSTITUCIONAL`) limitam relatórios/mês, US$ LLM/mês
+(402 ao estourar, calculado de `report_runs` + `llm_calls`) e recursos
+(perfis, YouTube, fatos, gap-fill). `POST /projects` ajusta o pedido ao
+plano e avisa em `plan_notice`.
+
+Billing Mercado Pago: `POST /billing/checkout` (501, MOCK) e
+`POST /billing/webhook` (MOCK por `user_email`/`user_id`; o real valida
+assinatura MP e resolve pelo `preapproval_id`). `GET /billing/me` mostra
+plano + uso do mês; `GET /billing/subscriptions` é admin.
+
+---
+
 # Limitações e próximos passos
 
 A arquitetura atual já implementa o núcleo do MVP auditável, mas ainda existem melhorias planejadas:
-
 * bloqueio transacional de runs simultâneos em múltiplos workers;
 * recuperação ou marcação de runs interrompidos após restart;
 * auditoria `SearchCall` também para buscas opcionais do documentalista;

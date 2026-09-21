@@ -19,6 +19,7 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     "projects": {
         "event_start": "DATE",
         "event_end": "DATE",
+        "owner_id": "VARCHAR(60)",
         "project_type": "VARCHAR(40) DEFAULT 'AUTO'",
         "topic_profile": "JSON",
         "execution_profile": "VARCHAR(40) DEFAULT 'AUTO'",

@@ -10,6 +10,10 @@ class Project(Base):
     __tablename__ = "projects"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Dono (auth.uid do Supabase). NULL = legado, visível só para admin.
+    owner_id: Mapped[str | None] = mapped_column(
+        ForeignKey("app_users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     topic: Mapped[str] = mapped_column(String(300))
     institution: Mapped[str] = mapped_column(String(200), default="Instituto de Segurança Pública")
 
@@ -373,6 +377,34 @@ class ReportRun(Base):
     finished_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
     stages: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AppUser(Base):
+    """Identidade local espelhada do Supabase Auth (id = auth.uid)."""
+
+    __tablename__ = "app_users"
+
+    id: Mapped[str] = mapped_column(String(60), primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), default="")
+    plan: Mapped[str] = mapped_column(String(30), default="FREE")
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Subscription(Base):
+    """Assinatura (Mercado Pago; MOCK até a integração real)."""
+
+    __tablename__ = "subscriptions"
+
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("app_users.id", ondelete="CASCADE"), primary_key=True
+    )
+    plan: Mapped[str] = mapped_column(String(30), default="FREE")
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    mp_preapproval_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )

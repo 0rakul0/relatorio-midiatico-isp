@@ -52,6 +52,7 @@ def cached_report_for_topic(
     topic: str,
     collection_start: date | None = None,
     collection_end: date | None = None,
+    owner_id: str | None = None,
 ) -> dict | None:
     statement = (
         select(Project, GeneratedReport)
@@ -59,6 +60,8 @@ def cached_report_for_topic(
         .where(func.lower(Project.topic) == topic.strip().casefold())
         .order_by(GeneratedReport.generated_at.desc())
     )
+    if owner_id is not None:
+        statement = statement.where(Project.owner_id == owner_id)
     if collection_start:
         statement = statement.where(Project.collection_start == collection_start)
     if collection_end:

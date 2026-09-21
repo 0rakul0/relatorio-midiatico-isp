@@ -7,6 +7,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.auth import AuthUser, get_current_user, require_admin
+from app.billing import check_quota, clamp_profile, plan_for, router as billing_router
 from app.cost_tracker import cost_context
 from app.database import get_db
 from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report, fact_events_for_report
@@ -46,6 +48,7 @@ from app.topic_profile import requested_topic_window
 
 app = FastAPI(title="ISP Repercussão Midiática", version="0.3.1")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+app.include_router(billing_router)
 
 
 @app.on_event("startup")
@@ -53,9 +56,12 @@ def startup():
     ensure_schema()
 
 
-def project_or_404(db: Session, project_id: int) -> Project:
+def project_or_404(db: Session, user: AuthUser, project_id: int) -> Project:
     project = db.get(Project, project_id)
     if not project:
+        raise HTTPException(404, "Projeto não encontrado")
+    if project.owner_id != user.id and not user.is_admin:
+        # 404 proposital: não revelar existência de projeto alheio.
         raise HTTPException(404, "Projeto não encontrado")
     return project
 
@@ -121,7 +127,7 @@ def _costs_rows(rows) -> list[dict]:
 
 
 @app.get("/costs")
-def costs(db: Session = Depends(get_db), limit: int = 200):
+def costs(db: Session = Depends(get_db), admin: AuthUser = Depends(require_admin), limit: int = 200):
     rows = db.execute(
         select(LLMCall).order_by(LLMCall.id.desc()).limit(max(1, min(limit, 1000)))
     ).scalars().all()
@@ -129,14 +135,14 @@ def costs(db: Session = Depends(get_db), limit: int = 200):
 
 
 @app.get("/costs/summary")
-def costs_summary(db: Session = Depends(get_db)):
+def costs_summary(db: Session = Depends(get_db), admin: AuthUser = Depends(require_admin)):
     calls = db.query(LLMCall).all()
     return _summarize_costs(calls)
 
 
 @app.get("/projects/{project_id}/costs")
-def project_costs(project_id: int, db: Session = Depends(get_db)):
-    project_or_404(db, project_id)
+def project_costs(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project_or_404(db, user, project_id)
     calls = db.scalars(
         select(LLMCall).where(LLMCall.project_id == project_id).order_by(LLMCall.id.desc())
     ).all()
@@ -182,13 +188,16 @@ def _add_to_bucket(bucket: dict, call) -> None:
 
 
 @app.get("/reports/history")
-def report_history(db: Session = Depends(get_db)):
-    rows = db.execute(
+def report_history(db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    statement = (
         select(Project, GeneratedReport)
         .join(GeneratedReport, GeneratedReport.project_id == Project.id)
         .order_by(GeneratedReport.generated_at.desc())
         .limit(100)
-    ).all()
+    )
+    if not user.is_admin:
+        statement = statement.where(Project.owner_id == user.id)
+    rows = db.execute(statement).all()
     history, seen_versions = [], set()
     for project, generated in rows:
         generated_day = generated.generated_at.date().isoformat() if generated.generated_at else "sem-data"
@@ -217,13 +226,18 @@ def cached_report(
     collection_start: date | None = None,
     collection_end: date | None = None,
     db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
 ):
-    report = cached_report_for_topic(db, topic, collection_start, collection_end)
+    report = cached_report_for_topic(
+        db, topic, collection_start, collection_end,
+        owner_id=None if user.is_admin else user.id,
+    )
     return {"cached": bool(report), "report": report}
 
 
 @app.get("/reports/history/{project_id}")
-def historical_report(project_id: int, db: Session = Depends(get_db)):
+def historical_report(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project_or_404(db, user, project_id)
     report = cached_report_for_project(db, project_id)
     if not report:
         raise HTTPException(404, "Versão do relatório não encontrada")
@@ -231,7 +245,8 @@ def historical_report(project_id: int, db: Session = Depends(get_db)):
 
 
 @app.delete("/reports/history/{project_id}", status_code=204)
-def delete_historical_report(project_id: int, db: Session = Depends(get_db)):
+def delete_historical_report(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project_or_404(db, user, project_id)
     target = db.execute(
         select(Project, GeneratedReport)
         .join(GeneratedReport, GeneratedReport.project_id == Project.id)
@@ -264,8 +279,20 @@ def dashboard():
     return FileResponse("app/static/index.html")
 
 
+@app.get("/login", include_in_schema=False)
+def login_page():
+    return FileResponse("app/static/login.html")
+
+
+@app.get("/auth/config", include_in_schema=False)
+def auth_config():
+    # Chave publishable é pública por desenho (vai para o browser).
+    settings = get_settings()
+    return {"supabase_url": settings.supabase_url, "supabase_key": settings.supabase_key}
+
+
 @app.post("/projects", status_code=201)
-def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
+def create_project(payload: ProjectCreate, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
     today = date.today()
     inferred_window = requested_topic_window(payload.topic)
 
@@ -313,15 +340,26 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     if payload.launch_date is not None:
         execution_options["launch_date_user_supplied"] = True
 
+    # Limites do plano: perfil permitido + recursos vetados.
+    plan = plan_for(user)
+    execution_profile, plan_notice = clamp_profile(plan, payload.execution_profile)
+    if not plan["youtube"]:
+        execution_options["enable_youtube"] = False
+    if not plan["fact_layer"]:
+        execution_options["enable_fact_layer"] = False
+    if not plan["nominal_followup"]:
+        execution_options["enable_nominal_followup"] = False
+
     row = Project(
         topic=payload.topic,
         institution=payload.institution,
+        owner_id=user.id,
         launch_date=payload.launch_date or today,
         collection_start=collection_start,
         collection_end=collection_end,
         event_start=event_start,
         event_end=event_end,
-        execution_profile=payload.execution_profile,
+        execution_profile=execution_profile,
         execution_options=execution_options,
         fact_grace_days=10,
         has_custom_date_window=has_custom_window,
@@ -335,6 +373,8 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     return {
         "id": row.id,
         "status": row.status,
+        "plan": user.plan,
+        "plan_notice": plan_notice,
         "discovery": {
             "status": "DEFERRED",
             "message": "O perfil será executado como a primeira etapa acompanhada do relatório.",
@@ -343,34 +383,43 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
 
 
 @app.post("/projects/{project_id}/discover-profile")
-def discover_profile(project_id: int, db: Session = Depends(get_db)):
+def discover_profile(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
     try:
         with cost_context(project_id=project_id, operation="discover_profile"):
-            return discover_project_profile(db, project_or_404(db, project_id))
+            return discover_project_profile(db, project_or_404(db, user, project_id))
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
 
 
 @app.post("/projects/{project_id}/run")
-def run_project(project_id: int, db: Session = Depends(get_db)):
+def run_project(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project = project_or_404(db, user, project_id)
+    check_quota(db, user)
     try:
         with cost_context(project_id=project_id, operation="run_full_methodology"):
-            return run_full_methodology(db, project_or_404(db, project_id))
+            return run_full_methodology(db, project)
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
 
 
 @app.post("/projects/{project_id}/run-async", status_code=202)
-def run_project_async(project_id: int, db: Session = Depends(get_db)):
-    project_or_404(db, project_id)
+def run_project_async(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project_or_404(db, user, project_id)
+    check_quota(db, user)
     return {"run": start_run(project_id)}
 
 
-@app.get("/runs/{run_id}")
-def get_run_status(run_id: str, db: Session = Depends(get_db)):
+def _owned_run_or_404(db: Session, user: AuthUser, run_id: str) -> dict:
     snapshot = run_snapshot(run_id)
     if not snapshot:
         raise HTTPException(404, "Execução não encontrada")
+    project_or_404(db, user, snapshot.get("project_id"))
+    return snapshot
+
+
+@app.get("/runs/{run_id}")
+def get_run_status(run_id: str, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    snapshot = _owned_run_or_404(db, user, run_id)
     calls = db.scalars(
         select(LLMCall).where(LLMCall.run_id == run_id).order_by(LLMCall.id.asc())
     ).all()
@@ -379,10 +428,8 @@ def get_run_status(run_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/runs/{run_id}/cancel")
-def cancel_run(run_id: str):
-    snapshot = run_snapshot(run_id)
-    if not snapshot:
-        raise HTTPException(404, "Execução não encontrada")
+def cancel_run(run_id: str, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    snapshot = _owned_run_or_404(db, user, run_id)
     accepted = request_cancel(run_id)
     return {
         "accepted": accepted,
@@ -391,8 +438,8 @@ def cancel_run(run_id: str):
 
 
 @app.post("/projects/{project_id}/official-facts", status_code=201)
-def add_official_fact(project_id: int, payload: OfficialFactCreate, db: Session = Depends(get_db)):
-    project_or_404(db, project_id)
+def add_official_fact(project_id: int, payload: OfficialFactCreate, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project_or_404(db, user, project_id)
     row = OfficialFact(project_id=project_id, **payload.model_dump())
     db.add(row)
     db.commit()
@@ -401,8 +448,8 @@ def add_official_fact(project_id: int, payload: OfficialFactCreate, db: Session 
 
 
 @app.get("/projects/{project_id}/official-facts")
-def official_facts(project_id: int, db: Session = Depends(get_db)):
-    project_or_404(db, project_id)
+def official_facts(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project_or_404(db, user, project_id)
     rows = db.scalars(select(OfficialFact).where(OfficialFact.project_id == project_id)).all()
     return [
         {
@@ -423,14 +470,14 @@ def official_facts(project_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/projects/{project_id}/facts")
-def facts(project_id: int, db: Session = Depends(get_db)):
-    project_or_404(db, project_id)
+def facts(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project_or_404(db, user, project_id)
     return fact_events_for_report(db, project_id)
 
 
 @app.get("/projects/{project_id}/facts/{event_id}/evidence")
-def fact_evidence(project_id: int, event_id: int, db: Session = Depends(get_db)):
-    project_or_404(db, project_id)
+def fact_evidence(project_id: int, event_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project_or_404(db, user, project_id)
     event = db.scalar(select(FactEvent).where(FactEvent.id == event_id, FactEvent.project_id == project_id))
     if not event:
         raise HTTPException(404, "Evento factual não encontrado")
@@ -438,22 +485,22 @@ def fact_evidence(project_id: int, event_id: int, db: Session = Depends(get_db))
 
 
 @app.post("/projects/{project_id}/plan-searches")
-def create_plan(project_id: int, db: Session = Depends(get_db)):
-    return {"created": len(plan_queries(db, project_or_404(db, project_id)))}
+def create_plan(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    return {"created": len(plan_queries(db, project_or_404(db, user, project_id)))}
 
 
 @app.post("/projects/{project_id}/ai/plan-searches")
-def create_ai_plan(project_id: int, db: Session = Depends(get_db)):
+def create_ai_plan(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
     try:
         with cost_context(project_id=project_id, operation="plan_queries"):
-            return {"created": len(plan_queries_with_llm(db, project_or_404(db, project_id)))}
+            return {"created": len(plan_queries_with_llm(db, project_or_404(db, user, project_id)))}
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
 
 
 @app.get("/projects/{project_id}/searches")
-def searches(project_id: int, db: Session = Depends(get_db)):
-    project_or_404(db, project_id)
+def searches(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project_or_404(db, user, project_id)
     return [
         {
             "id": row.id,
@@ -469,8 +516,8 @@ def searches(project_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/projects/{project_id}/collect")
-def collect(project_id: int, db: Session = Depends(get_db)):
-    project_or_404(db, project_id)
+def collect(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project_or_404(db, user, project_id)
     try:
         return {"added": collect_web(db, project_id)}
     except RuntimeError as exc:
@@ -478,8 +525,8 @@ def collect(project_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/projects/{project_id}/media-items", status_code=201)
-def add_manual_item(project_id: int, payload: ManualMediaItemCreate, db: Session = Depends(get_db)):
-    project_or_404(db, project_id)
+def add_manual_item(project_id: int, payload: ManualMediaItemCreate, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project_or_404(db, user, project_id)
     url = str(payload.url)
     canonical = canonicalize(url)
     if db.scalar(select(MediaItem.id).where(MediaItem.project_id == project_id, MediaItem.canonical_url == canonical)):
@@ -516,28 +563,28 @@ def add_manual_item(project_id: int, payload: ManualMediaItemCreate, db: Session
 
 
 @app.post("/projects/{project_id}/validate-and-classify")
-def validate(project_id: int, db: Session = Depends(get_db)):
-    return validate_and_classify(db, project_or_404(db, project_id))
+def validate(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    return validate_and_classify(db, project_or_404(db, user, project_id))
 
 
 @app.post("/projects/{project_id}/ai/classify")
-def classify_ai(project_id: int, db: Session = Depends(get_db)):
+def classify_ai(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
     try:
         with cost_context(project_id=project_id, operation="classify"):
-            return classify_with_llm(db, project_or_404(db, project_id))
+            return classify_with_llm(db, project_or_404(db, user, project_id))
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
 
 
 @app.get("/projects/{project_id}/metrics")
-def get_metrics(project_id: int, db: Session = Depends(get_db)):
-    project_or_404(db, project_id)
+def get_metrics(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project_or_404(db, user, project_id)
     return metrics(db, project_id)
 
 
 @app.get("/projects/{project_id}/report")
-def report(project_id: int, db: Session = Depends(get_db)):
-    project = project_or_404(db, project_id)
+def report(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project = project_or_404(db, user, project_id)
     data = metrics(db, project_id)
     dominant = data["themes"][0]["theme"] if data["themes"] else "não identificado"
     profile = project.topic_profile or {}
@@ -568,17 +615,17 @@ def report(project_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/projects/{project_id}/ai/report")
-def ai_report(project_id: int, db: Session = Depends(get_db)):
+def ai_report(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
     try:
         with cost_context(project_id=project_id, operation="draft_report"):
-            return draft_report_with_llm(db, project_or_404(db, project_id))
+            return draft_report_with_llm(db, project_or_404(db, user, project_id))
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
 
 
 @app.post("/projects/{project_id}/qa")
-def qa_report(project_id: int, db: Session = Depends(get_db)):
-    project = project_or_404(db, project_id)
+def qa_report(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project = project_or_404(db, user, project_id)
     payload = cached_report_for_project(db, project_id)
     if not payload:
         raise HTTPException(404, "Relatório ainda não foi gerado")
@@ -587,8 +634,8 @@ def qa_report(project_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/projects/{project_id}/export.pdf")
-def export_pdf(project_id: int, db: Session = Depends(get_db)):
-    project = project_or_404(db, project_id)
+def export_pdf(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project = project_or_404(db, user, project_id)
     try:
         content = export_report_pdf(db, project, allow_draft=False)
     except RuntimeError as exc:
@@ -600,8 +647,8 @@ def export_pdf(project_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/projects/{project_id}/export-draft.pdf")
-def export_draft_pdf(project_id: int, db: Session = Depends(get_db)):
-    project = project_or_404(db, project_id)
+def export_draft_pdf(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project = project_or_404(db, user, project_id)
     try:
         content = export_report_pdf(db, project, allow_draft=True)
     except RuntimeError as exc:

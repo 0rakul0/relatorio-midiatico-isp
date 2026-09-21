@@ -5,6 +5,7 @@ from collections.abc import Callable
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.billing import plan_allows
 from app.fact_layer import extract_project_facts, plan_nominal_followups, resolve_project_facts
 from app.models import Project
 from app.report_qa import run_report_qa
@@ -356,6 +357,9 @@ def run_full_methodology(
         stage("gap_fill", "SKIPPED", gap_fill["reason"])
     elif not flags.get("enable_web_collection", True):
         gap_fill["reason"] = "Coleta web desativada pelo plano"
+        stage("gap_fill", "SKIPPED", gap_fill["reason"])
+    elif not plan_allows(db, project, "gap_fill"):
+        gap_fill["reason"] = "Plano atual não inclui cobertura complementar"
         stage("gap_fill", "SKIPPED", gap_fill["reason"])
     else:
         gaps = detect_coverage_gaps(db, project)

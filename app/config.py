@@ -7,6 +7,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://relatorio:relatorio@localhost:5432/repercussao"
 
+    # Supabase Auth (login) — mesma URL/key do projeto.
+    supabase_url: str | None = None
+    supabase_key: str | None = None
+    # Emails separados por vírgula promovidos a admin no login.
+    admin_emails: str = ""
+
     # Pool do SQLAlchemy. Banco gerenciado (ex.: Supabase) limita conexões;
     # 5 + 10 comporta o app com alguns runs paralelos. SQLite ignora.
     db_pool_size: int = Field(default=5, ge=1, le=50)
@@ -37,6 +43,10 @@ class Settings(BaseSettings):
     # Refinamentos automáticos redação -> QA. Cada rodada custa 1 redação
     # + 1 QA; 0 desliga o loop (vale o primeiro rascunho).
     max_qa_refinements: int = Field(default=2, ge=0, le=5)
+
+    # Margem repassada ao cliente sobre o custo LLM apurado (ex.: 10 = +10%).
+    # Vale para buscas novas e reuso (reuso também consome LLM na revalidação).
+    billing_margin_pct: float = Field(default=10.0, ge=0.0, le=1000.0)
 
     # Cobertura complementar (fase 2): consultas direcionadas aos portais
     # prioritários sem item validado. Uma única rodada por projeto.

@@ -14,6 +14,16 @@
 <main class="wrap">
   <div class="dashboard-grid screen-only">
     <section class="panel">
+      <h2>Acesso</h2>
+      <div id="auth-logged-in">
+        <p><strong id="auth-user-email"></strong> · <span id="auth-user-plan" class="badge ok"></span></p>
+        <p class="note" id="auth-quota">Carregando uso do mês…</p>
+        <div class="actions">
+          <button type="button" class="secondary" id="auth-refresh-quota">Atualizar uso</button>
+          <button type="button" class="danger" id="auth-logout">Sair</button>
+        </div>
+      </div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:22px 0">
       <h2>Gerar relatório</h2>
       <p class="note">A execução agora é acompanhada etapa por etapa: <b>cinza</b> = ainda não iniciada, <b>laranja</b> = em execução e <b>verde</b> = concluída. O relatório pode ser interrompido entre operações seguras.</p>
       <form id="report-form">
@@ -72,7 +82,8 @@
     <article id="report" class="report-doc"></article>
   </div>
 </main>
-<!-- bump ?v= a cada mudanca em app.js/styles.css para furar o cache do navegador -->
-<script src="/static/app.js?v=2"></script>
+<!-- bump ?v= a cada mudanca nos estaticos para furar o cache do navegador -->
+<script src="/static/auth.js?v=2"></script>
+<script src="/static/app.js?v=3"></script>
 </body>
 </html>
