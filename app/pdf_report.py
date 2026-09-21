@@ -367,7 +367,7 @@ def build_pdf(data: dict) -> bytes:
                 [
                     Paragraph("CHECAGEM DE CANAIS PRIORITÁRIOS NO YOUTUBE", heading),
                     _table(
-                        [["Canal", "Resultado", "Vídeos", "Visualizações", "Link do vídeo de maior alcance"]]
+                        [["Canal", "Resultado", "Vídeos", "Visualizações", "Link"]]
                         + [
                             [
                                 item.get("channel", "N/D"),
@@ -378,7 +378,7 @@ def build_pdf(data: dict) -> bytes:
                             ]
                             for item in priority_channels
                         ],
-                        [2.4 * cm, 3.3 * cm, 1.5 * cm, 2.2 * cm, 7.2 * cm],
+                        [4.2 * cm, 5.0 * cm, 1.8 * cm, 2.6 * cm, 3.0 * cm],
                         small,
                         header_color=colors.HexColor("#f0f0f0"),
                         header_text=colors.black,
@@ -412,7 +412,7 @@ def build_pdf(data: dict) -> bytes:
                 [
                     Paragraph("TOP 5 CANAIS NO YOUTUBE", heading),
                     _table(
-                        [["#", "Canal", "Vídeos validados", "Visualizações", "Link do vídeo de maior alcance"]]
+                        [["#", "Canal", "Vídeos validados", "Visualizações", "Link"]]
                         + [
                             [
                                 index + 1,
@@ -423,7 +423,7 @@ def build_pdf(data: dict) -> bytes:
                             ]
                             for index, item in enumerate(top_channels)
                         ],
-                        [0.7 * cm, 3.0 * cm, 2.3 * cm, 2.2 * cm, 8.4 * cm],
+                        [0.7 * cm, 6.1 * cm, 2.8 * cm, 3.0 * cm, 4.0 * cm],
                         small,
                     ),
                 ]
@@ -497,7 +497,7 @@ def build_pdf(data: dict) -> bytes:
         story.append(Paragraph("Anexo B - Evidências Factuais", heading))
         story.append(
             Paragraph(
-                "Cada linha preserva o campo, valor, fonte, evidência textual e URL usados na camada factual.",
+                "Cada linha preserva o campo, valor, fonte, evidência textual e link usados na camada factual.",
                 small,
             )
         )
