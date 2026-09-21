@@ -50,6 +50,12 @@ def _view_count_label(value: object) -> str:
     return "N/D"
 
 
+def _pdf_link(url: object, label: str = "Abrir") -> dict[str, str]:
+    """Marca uma célula para renderização como hyperlink real no PDF."""
+    href = _text(url).strip()
+    return {"_pdf_link": href, "label": label if href else "N/D"}
+
+
 def build_pdf(data: dict) -> bytes:
     """Cria o PDF a partir do relatório persistido, sem chamar LLM novamente."""
     from reportlab.lib import colors
@@ -232,7 +238,7 @@ def build_pdf(data: dict) -> bytes:
                     author_text or "N/D",
                     paper.get("title") or "Sem título",
                     paper.get("relation_to_topic") or "Contexto científico relacionado",
-                    paper.get("url") or "",
+                    _pdf_link(paper.get("url")),
                 ]
             )
         story.append(
@@ -368,7 +374,7 @@ def build_pdf(data: dict) -> bytes:
                                 item.get("result", "N/D"),
                                 item.get("videos", 0),
                                 _view_count_label(item.get("views")),
-                                item.get("lead_url", ""),
+                                _pdf_link(item.get("lead_url")),
                             ]
                             for item in priority_channels
                         ],
@@ -413,7 +419,7 @@ def build_pdf(data: dict) -> bytes:
                                 item.get("channel", "N/D"),
                                 item.get("videos", 0),
                                 _view_count_label(item.get("views")),
-                                item.get("lead_url", ""),
+                                _pdf_link(item.get("lead_url")),
                             ]
                             for index, item in enumerate(top_channels)
                         ],
@@ -435,7 +441,7 @@ def build_pdf(data: dict) -> bytes:
         )
         story.append(
             _table(
-                [["#", "Plataforma", "Fonte", "Título", "Alcance", "URL"]]
+                [["#", "Plataforma", "Fonte", "Título", "Alcance", "Link"]]
                 + [
                     [
                         index + 1,
@@ -443,11 +449,11 @@ def build_pdf(data: dict) -> bytes:
                         item.get("source", "N/D"),
                         item.get("title", "N/D"),
                         _view_count_label(item.get("reach")),
-                        item.get("url", ""),
+                        _pdf_link(item.get("url")),
                     ]
                     for index, item in enumerate(top_reach_contents)
                 ],
-                [0.6 * cm, 1.7 * cm, 2.6 * cm, 4.3 * cm, 1.8 * cm, 5.6 * cm],
+                [0.6 * cm, 1.7 * cm, 2.8 * cm, 6.3 * cm, 2.0 * cm, 3.2 * cm],
                 small,
             )
         )
@@ -498,7 +504,7 @@ def build_pdf(data: dict) -> bytes:
         if fact_evidence:
             story.append(
                 _table(
-                    [["Pessoa", "Campo", "Valor", "Fonte", "Evidência", "URL"]]
+                    [["Pessoa", "Campo", "Valor", "Fonte", "Evidência", "Link"]]
                     + [
                         [
                             item.get("subject_name") or "N/D",
@@ -506,11 +512,11 @@ def build_pdf(data: dict) -> bytes:
                             item.get("value") or "N/D",
                             item.get("source") or item.get("source_type") or "N/D",
                             item.get("evidence") or "N/D",
-                            item.get("url") or "",
+                            _pdf_link(item.get("url")),
                         ]
                         for item in fact_evidence
                     ],
-                    [2.2 * cm, 1.8 * cm, 2.4 * cm, 2.2 * cm, 4.5 * cm, 3.5 * cm],
+                    [2.2 * cm, 1.8 * cm, 2.4 * cm, 2.4 * cm, 6.0 * cm, 1.8 * cm],
                     small,
                 )
             )
@@ -521,18 +527,18 @@ def build_pdf(data: dict) -> bytes:
         if not rows:
             return Paragraph("Nenhum item validado nesta categoria para a janela observada.", small)
         return _table(
-            [["#", "Data", "Fonte", "Título", "URL"]]
+            [["#", "Data", "Fonte", "Título", "Link"]]
             + [
                 [
                     str(index + 1),
                     item.get("published_at") or item.get("published_year", "N/D"),
                     item.get("source") or item.get("domain") or "Fonte aberta",
                     item.get("title"),
-                    item.get("url"),
+                    _pdf_link(item.get("url")),
                 ]
                 for index, item in enumerate(rows)
             ],
-            [0.7 * cm, 1.5 * cm, 2.6 * cm, 5.0 * cm, 7.8 * cm],
+            [0.7 * cm, 1.6 * cm, 3.0 * cm, 10.1 * cm, 2.2 * cm],
             small,
         )
 
@@ -571,9 +577,22 @@ def _table(rows: list[list[object]], widths: list[float], style, header_color=No
         parent=style,
         textColor=header_text if header_text is not None else colors.white,
     )
+    def cell_paragraph(cell: object, cell_style):
+        if isinstance(cell, dict) and "_pdf_link" in cell:
+            href = _text(cell.get("_pdf_link")).strip()
+            label = escape(_text(cell.get("label") or "Abrir"))
+            if not href:
+                return Paragraph("N/D", cell_style)
+            safe_href = escape(href, {'"': '&quot;', "'": '&apos;'})
+            return Paragraph(
+                f'<link href="{safe_href}" color="#1F5E8C"><u>{label}</u></link>',
+                cell_style,
+            )
+        return Paragraph(escape(_text(cell)), cell_style)
+
     formatted = [
         [
-            Paragraph(escape(_text(cell)), header_style if row_index == 0 else style)
+            cell_paragraph(cell, header_style if row_index == 0 else style)
             for cell in row
         ]
         for row_index, row in enumerate(rows)
