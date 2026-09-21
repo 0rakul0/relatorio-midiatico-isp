@@ -1,5 +1,6 @@
 from datetime import date
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
@@ -11,7 +12,7 @@ from app.config import get_settings
 from app.auth import AuthUser, get_current_user, require_admin
 from app.billing import check_quota, clamp_profile, plan_for, router as billing_router
 from app.cost_tracker import cost_context
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report, fact_events_for_report
 from app.orchestration import request_cancel, run_snapshot, start_run
 from app.models import (
@@ -32,6 +33,7 @@ from app.services import (
     cached_report_for_project,
     cached_report_for_topic,
     canonicalize,
+    chat_with_all_corpus,
     chat_with_corpus,
     classify_with_llm,
     collect_web,
@@ -46,12 +48,31 @@ from app.services import (
     validate_and_classify,
 )
 from app.services.collection.media_origin import classify_media_origin
+from app.services.corpus_metadata import repair_corpus_metadata
 from app.topic_profile import requested_topic_window
+
+
+logger = logging.getLogger("app.main")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_schema()
+
+    settings = get_settings()
+    if settings.corpus_metadata_repair_on_startup:
+        try:
+            with SessionLocal() as db:
+                stats = repair_corpus_metadata(
+                    db,
+                    limit=settings.corpus_metadata_repair_limit,
+                )
+                db.commit()
+                logger.info("Corpus metadata repair: %s", stats)
+        except Exception:
+            # A limpeza do acervo nao deve impedir a aplicacao de iniciar.
+            logger.exception("Falha ao normalizar metadados do corpus")
+
     yield
 
 
@@ -302,8 +323,25 @@ def chat_page():
 
 @app.get("/chat/projects")
 def chat_projects(db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    """Projetos disponiveis para o chat, com o ultimo ativo em destaque."""
+    """Bases tematicas disponiveis e resumo do acervo completo."""
     return list_chat_projects(db, user)
+
+
+@app.post("/chat/all/ask")
+def chat_all_ask(
+    payload: ChatAskRequest,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """Responde sobre todo o acervo validado visivel para o usuario."""
+    try:
+        return chat_with_all_corpus(
+            db,
+            user,
+            [message.model_dump(mode="json") for message in payload.messages],
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/chat/{project_id}/ask")
