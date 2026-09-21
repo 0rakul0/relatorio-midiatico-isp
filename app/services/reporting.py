@@ -7,7 +7,7 @@ from app.agent import get_report_agent
 from app.config import get_settings
 from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report
 from app.llm import llm_is_configured
-from app.models import Classification, GeneratedReport, MediaItem, OfficialFact, Project, ReportVersion
+from app.models import GeneratedReport, OfficialFact, Project, ReportVersion
 from app.pdf_report import build_pdf
 from app.report_fingerprint import content_hash, request_fingerprint
 from app.report_qa import run_report_qa
@@ -23,11 +23,7 @@ from app.services.cache import hydrate_cached_report
 def _writer_grounding(db: Session, project: Project) -> dict:
     """Dados de fundamentação compartilhados por redação e revisão."""
     data = metrics(db, project.id)
-    items = db.execute(
-        select(MediaItem, Classification)
-        .join(Classification, Classification.media_item_id == MediaItem.id)
-        .where(MediaItem.project_id == project.id, MediaItem.status == "VALID")
-    ).all()
+    corpus = corpus_for_project(db, project.id)
     official_facts = db.scalars(select(OfficialFact).where(OfficialFact.project_id == project.id)).all()
     execution_profile, flags = execution_flags(project)
     fact_events = fact_events_for_main_report(db, project.id) if flags["enable_fact_layer"] else []
@@ -43,7 +39,7 @@ def _writer_grounding(db: Session, project: Project) -> dict:
     )
     return {
         "metrics": data,
-        "items": items,
+        "corpus": corpus,
         "official_facts": official_facts,
         "flags": flags,
         "fact_events": fact_events,
@@ -94,14 +90,15 @@ def _agent_payload(db: Session, project: Project, grounding: dict) -> dict:
         "academic_context": grounding["academic_papers"],
         "validated_items": [
             {
-                "title": item.title,
-                "url": item.url,
-                "published_at": item.published_at.isoformat() if item.published_at else None,
-                "evidence": classification.evidence,
-                "theme": classification.theme,
-                "framing": classification.framing,
+                "title": item.get("title"),
+                "url": item.get("url"),
+                "published_at": item.get("published_at"),
+                "evidence": item.get("evidence"),
+                "theme": item.get("theme"),
+                "framing": item.get("framing"),
+                "duplicate_count": item.get("duplicate_count", 0),
             }
-            for item, classification in grounding["items"]
+            for item in grounding["corpus"]
         ],
     }
 
