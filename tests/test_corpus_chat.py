@@ -9,6 +9,7 @@ from app.database import Base
 from app.models import GeneratedReport, MediaItem, Project
 from app.services.corpus_chat import (
     _chat_corpus_members,
+    chat_with_all_corpus,
     chat_with_corpus,
     list_chat_projects,
 )
@@ -81,6 +82,8 @@ def test_list_chat_projects_orders_by_report_and_picks_last_active():
     assert by_id[p2.id]["valid_items"] == 0
     assert by_id[p1.id]["generated_at"] is not None
     assert by_id[p2.id]["generated_at"] is None
+    assert result["all_corpus"]["valid_items"] == 3
+    assert result["all_corpus"]["project_count"] == 2
     session.close()
 
 
@@ -182,4 +185,66 @@ def test_chat_with_corpus_requires_llm_configuration(monkeypatch):
     with pytest.raises(RuntimeError) as excinfo:
         chat_with_corpus(session, project, [{"role": "user", "content": "oi"}])
     assert "OPENAI_API_KEY" in str(excinfo.value)
+    session.close()
+
+def test_chat_retrieval_prefers_question_terms():
+    session = _session()
+    project = _project(session, "tema")
+    relevant = _valid_item(
+        session,
+        project,
+        "violencia digital contra mulheres",
+        days_ago=8,
+        content="A materia discute violencia digital, ameacas e perseguição contra mulheres.",
+    )
+    _valid_item(
+        session,
+        project,
+        "seguranca publica geral",
+        days_ago=0,
+        content="Texto sobre outro assunto de seguranca.",
+    )
+    session.commit()
+
+    members = _chat_corpus_members(
+        session,
+        project,
+        limit=1,
+        question="O que apareceu sobre violencia digital contra mulheres?",
+    )
+    assert len(members) == 1
+    assert members[0]["id"] == relevant.id
+    session.close()
+
+
+def test_chat_with_all_corpus_is_scoped_to_visible_projects(monkeypatch):
+    session = _session()
+    mine = _project(session, "meu tema", owner="u1")
+    other = _project(session, "tema alheio", owner="u2")
+    mine_item = _valid_item(session, mine, "minha fonte")
+    _valid_item(session, other, "fonte alheia")
+    session.commit()
+
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        return {"answer": "resposta global", "used_member_indices": [0]}
+
+    monkeypatch.setattr("app.services.corpus_chat.llm_is_configured", lambda: True)
+    monkeypatch.setattr(
+        "app.services.corpus_chat.get_report_agent",
+        lambda: SimpleNamespace(run=fake_run),
+    )
+
+    user = SimpleNamespace(id="u1", is_admin=False)
+    result = chat_with_all_corpus(
+        session,
+        user,
+        [{"role": "user", "content": "minha fonte"}],
+    )
+
+    assert result["corpus_size"] == 1
+    assert result["sources"][0]["url"] == mine_item.url
+    assert captured["payload"]["project"]["scope"] == "ALL"
     session.close()
