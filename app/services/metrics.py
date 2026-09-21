@@ -240,6 +240,7 @@ def corpus_for_project(db: Session, project_id: int) -> list[dict]:
             "domain": item.domain,
             "media_origin": item.media_origin or classify_media_origin(item.url, item.domain),
             "theme": classification.theme if classification else None,
+            "framing": classification.framing if classification else None,
             "evidence": classification.evidence if classification else item.relevance_evidence,
             "relation_type": item.relation_type,
             "relation_evidence": item.relevance_evidence,
