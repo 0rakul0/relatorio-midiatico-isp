@@ -18,13 +18,11 @@ async function renderAuth(){
   try{
     const me=await api('/billing/me');
     $('#auth-user-plan').textContent=me.plan||'FREE';
-    const u=me.usage||{},l=me.limits||{};
-    const margin=u.margin_pct?` (inclui ${String(u.margin_pct).replace('.',',')}% de margem operacional)`:'';
-    $('#auth-quota').textContent=`Plano ${me.plan} · ${u.reports_started??0}/${l.reports_per_month??'—'} relatórios · US$ ${(u.llm_usd??0).toFixed(4).replace('.',',')} de US$ ${l.llm_usd_per_month??'—'} em LLM no mês${margin}.`;
-  }catch(e){$('#auth-quota').textContent=`Uso indisponível: ${e.message}`}
+  }catch(e){
+    $('#auth-user-plan').textContent='Conta ativa';
+  }
 }
 $('#auth-logout').onclick=doLogout;
-$('#auth-refresh-quota').onclick=renderAuth;
 if(authState()){renderAuth();}else{window.location.href='/login';}
 const table=(headers,rows)=>`<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(cell=>{const s=String(cell??'');return `<td>${s.startsWith(RAW_HTML)?s.slice(RAW_HTML.length):esc(s)}</td>`}).join('')}</tr>`).join('')}</tbody></table></div>`;
 let currentProjectId=null,currentRunId=null,pollTimer=null;
