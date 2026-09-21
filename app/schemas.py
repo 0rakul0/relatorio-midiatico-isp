@@ -171,7 +171,14 @@ class AcademicSearchToolResponse(StrictLLMOutput):
 class AcademicPaperSelection(StrictLLMOutput):
     provider: Literal["arxiv"]
     external_id: str
+
+    # Deve reproduzir o titulo original retornado pela tool. Os campos pt-BR
+    # sao a camada de apresentacao/traducao e nunca substituem a fonte original.
     title: str
+    title_ptbr: str = Field(min_length=1, max_length=2000)
+    abstract_ptbr: str | None = Field(default=None, max_length=12000)
+    original_language: str | None = Field(default=None, max_length=20)
+
     relevance_score: float = Field(ge=0, le=1)
     relation_to_topic: str = Field(min_length=3, max_length=4000)
 
