@@ -373,6 +373,51 @@ button:disabled {
     padding-left: 18px
 }
 
+.word-cloud {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 10px 14px;
+    min-height: 180px;
+    padding: 24px 22px;
+    margin: 8px 0 8px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: linear-gradient(180deg, #fbfdff 0%, #f4f8fb 100%);
+    overflow: hidden;
+}
+
+.word-cloud.empty {
+    min-height: 90px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.word-cloud-term {
+    display: inline-block;
+    line-height: 1;
+    font-weight: 800;
+    color: #24506c;
+    white-space: nowrap;
+    transform-origin: center;
+}
+
+.word-cloud-term:nth-child(3n) {
+    color: #102b46;
+}
+
+.word-cloud-term:nth-child(5n) {
+    color: #4f6f86;
+}
+
+.word-cloud-note {
+    color: var(--muted);
+    font-size: 11px;
+    text-align: center;
+    margin: 0 0 20px !important;
+}
+
 .related-intro {
     color: var(--muted);
     margin-bottom: 12px;
