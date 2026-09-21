@@ -49,6 +49,123 @@ function bucketByOrigin(items){
   }
   return b;
 }
+const ANNEX_TITLE_STOPWORDS=new Set(['a','as','com','da','das','de','do','dos','e','em','na','nas','no','nos','o','os','para','por','um','uma']);
+const ANNEX_TRACKING_KEYS=new Set(['fbclid','gclid','dclid','msclkid','mc_cid','mc_eid','igshid','mkt_tok','vero_id']);
+
+function normalizeAnnexText(value){
+  const normalized=String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  return (normalized.match(/[a-z0-9]+/g)||[]).join(' ');
+}
+
+function annexTitleTokens(value){
+  return new Set(normalizeAnnexText(value).split(' ').filter(token=>token&&!ANNEX_TITLE_STOPWORDS.has(token)));
+}
+
+function annexDomain(item){
+  let domain=String(item?.domain||'').toLowerCase().trim();
+  if(!domain&&item?.url){
+    try{domain=new URL(item.url,window.location.origin).hostname.toLowerCase()}catch(_error){}
+  }
+  return domain.startsWith('www.')?domain.slice(4):domain;
+}
+
+function annexYear(item){
+  const published=String(item?.published_at||'');
+  if(/^\d{4}/.test(published))return published.slice(0,4);
+  const year=String(item?.published_year||'');
+  return /^\d{4}$/.test(year)?year:'';
+}
+
+function annexUrlKey(value){
+  const raw=String(value||'').trim();
+  if(!raw)return '';
+  try{
+    const url=new URL(raw,window.location.origin);
+    let host=url.hostname.toLowerCase();
+    if(host.startsWith('www.'))host=host.slice(4);
+    let path=url.pathname.replace(/\/{2,}/g,'/');
+    if(path.length>1)path=path.replace(/\/+$/,'');
+    const params=[...url.searchParams.entries()]
+      .filter(([key])=>{
+        const lowered=key.toLowerCase();
+        return !lowered.startsWith('utm_')&&!ANNEX_TRACKING_KEYS.has(lowered);
+      })
+      .sort((a,b)=>a[0].localeCompare(b[0])||a[1].localeCompare(b[1]));
+    const query=new URLSearchParams(params).toString();
+    return host+path+(query?'?'+query:'');
+  }catch(_error){
+    return raw.toLowerCase();
+  }
+}
+
+function sameAnnexItem(left,right){
+  const leftUrl=annexUrlKey(left?.canonical_url||left?.url);
+  const rightUrl=annexUrlKey(right?.canonical_url||right?.url);
+  if(leftUrl&&rightUrl&&leftUrl===rightUrl)return true;
+  if(annexDomain(left)!==annexDomain(right))return false;
+  const leftOrigin=String(left?.media_origin||'');
+  const rightOrigin=String(right?.media_origin||'');
+  if(leftOrigin&&rightOrigin&&leftOrigin!==rightOrigin)return false;
+  const leftYear=annexYear(left),rightYear=annexYear(right);
+  if(leftYear&&rightYear&&leftYear!==rightYear)return false;
+
+  const leftTitle=normalizeAnnexText(left?.title);
+  const rightTitle=normalizeAnnexText(right?.title);
+  if(!leftTitle||!rightTitle)return false;
+  if(leftTitle===rightTitle)return true;
+
+  const leftTokens=annexTitleTokens(left?.title);
+  const rightTokens=annexTitleTokens(right?.title);
+  if(Math.min(leftTokens.size,rightTokens.size)<3)return false;
+  const intersection=[...leftTokens].filter(token=>rightTokens.has(token)).length;
+  const containment=intersection/Math.min(leftTokens.size,rightTokens.size);
+  const union=new Set([...leftTokens,...rightTokens]).size;
+  const jaccard=union?intersection/union:0;
+  const shorter=leftTitle.length<=rightTitle.length?leftTitle:rightTitle;
+  const titleContainment=shorter.length>=12&&(leftTitle.includes(rightTitle)||rightTitle.includes(leftTitle));
+  return containment>=.90&&(jaccard>=.72||titleContainment);
+}
+
+function annexItemQuality(item){
+  return [
+    item?.published_at?1:0,
+    (item?.evidence||item?.relation_evidence)?1:0,
+    String(item?.title||'').length,
+    item?.url?1:0
+  ];
+}
+
+function betterAnnexItem(candidate,existing){
+  const left=annexItemQuality(candidate),right=annexItemQuality(existing);
+  for(let i=0;i<left.length;i++){
+    if(left[i]!==right[i])return left[i]>right[i];
+  }
+  return false;
+}
+
+function deduplicateAnnexItems(rows){
+  const representatives=[];
+  for(const row of (rows||[])){
+    const candidate={...row,duplicate_count:Number(row?.duplicate_count||0),duplicate_urls:[...(row?.duplicate_urls||[])]};
+    const index=representatives.findIndex(existing=>sameAnnexItem(existing,candidate));
+    if(index<0){representatives.push(candidate);continue}
+
+    const existing=representatives[index];
+    const duplicateCount=Number(existing.duplicate_count||0)+Number(candidate.duplicate_count||0)+1;
+    const urls=[existing.url,...(existing.duplicate_urls||[]),candidate.url,...(candidate.duplicate_urls||[])]
+      .filter(Boolean)
+      .filter((url,pos,array)=>array.indexOf(url)===pos);
+    const representative=betterAnnexItem(candidate,existing)?{...candidate}:{...existing};
+    representative.duplicate_count=duplicateCount;
+    representative.duplicate_urls=urls.filter(url=>url!==representative.url);
+    representatives[index]=representative;
+  }
+  return representatives;
+}
+
+function annexCollapsedCount(rows){
+  return (rows||[]).reduce((total,item)=>total+Number(item?.duplicate_count||0),0);
+}
 function renderWordCloud(cloud){
   const words=(cloud?.words||[]).slice(0,50);
   if(!words.length){
@@ -208,13 +325,41 @@ function render(result){
       x.relation_to_topic||'Contexto científico relacionado',
       x.url?raw(`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">arXiv</a>`):'N/D'
     ]))}`:'';
-  const buckets=result.corpus_by_origin||bucketByOrigin(rawCorpus);
-  const socialItems=buckets.redes_sociais||[];
-  const youtubeItems=buckets.youtube||[];
-  const portalItems=buckets.portal_noticias||[];
-  const corpusRow=(x,i)=>[String(i+1),x.published_at||x.published_year||'N/D',x.source||x.domain||'Fonte aberta',x.title,raw(`<span class="origin-badge ${originClass(x.origin)}">${esc(originLabel(x.origin))}</span>${x.search_source?`<br><small>via ${esc(x.search_source)}</small>`:''}`),x.url?raw(`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">Abrir</a>`):'N/D'];
-  const annexTable=(rows)=>rows.length?table(['#','Data','Fonte','Título','Origem','URL'],rows.map(corpusRow)):'<p>Nenhum item validado nesta categoria para a janela observada.</p>';
-  const relatedSummary=`<p class="related-intro">${rawCorpus.length} item(ns) validado(s) como materialmente relacionados ao tema: ${socialItems.length} em mídias sociais, ${youtubeItems.length} no YouTube e ${portalItems.length} em portais de notícias. O detalhamento item a item está nos anexos.</p><p class="note">Origem: <span class="origin-badge new">Nova coleta</span> = coletado desta vez; <span class="origin-badge reused">Corpus reutilizado</span> = reaproveitado de coleta anterior.</p>`;
+  const sourceBuckets=rawCorpus.length
+    ? bucketByOrigin(rawCorpus)
+    : (result.corpus_by_origin||{portal_noticias:[],redes_sociais:[],youtube:[]});
+  const socialItems=deduplicateAnnexItems(sourceBuckets.redes_sociais||[]);
+  const youtubeItems=deduplicateAnnexItems(sourceBuckets.youtube||[]);
+  const portalItems=deduplicateAnnexItems(sourceBuckets.portal_noticias||[]);
+  const displayCorpusCount=socialItems.length+youtubeItems.length+portalItems.length;
+  const collapsedDuplicates=annexCollapsedCount(socialItems)+annexCollapsedCount(youtubeItems)+annexCollapsedCount(portalItems);
+  const displayValidItems=(rawCorpus.length||result.corpus_by_origin)?displayCorpusCount:(m.valid_items||0);
+
+  const corpusRow=(x,i)=>{
+    const duplicateCount=Number(x.duplicate_count||0);
+    const titleCell=raw(`<span>${esc(x.title||'Sem título')}</span>${duplicateCount?`<br><span class="annex-duplicate-badge">+${esc(duplicateCount)} duplicata(s) consolidada(s)</span>`:''}`);
+    const corpusOrigin=x.corpus_origin||x.origin||'SEARCH';
+    return [
+      String(i+1),
+      x.published_at||x.published_year||'N/D',
+      x.source||x.domain||'Fonte aberta',
+      titleCell,
+      raw(`<span class="origin-badge ${originClass(corpusOrigin)}">${esc(originLabel(corpusOrigin))}</span>${x.search_source?`<br><small>via ${esc(x.search_source)}</small>`:''}`),
+      x.url?raw(`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">Abrir</a>`):'N/D'
+    ];
+  };
+  const annexTable=(rows)=>{
+    if(!rows.length)return '<p>Nenhum item validado nesta categoria para a janela observada.</p>';
+    const collapsed=annexCollapsedCount(rows);
+    const note=collapsed
+      ? `<p class="annex-dedup-note">${esc(collapsed)} entrada(s) duplicada(s) foram consolidadas neste anexo.</p>`
+      : '';
+    return note+table(['#','Data','Fonte','Título','Origem','URL'],rows.map(corpusRow));
+  };
+  const duplicateNote=collapsedDuplicates
+    ? ` ${collapsedDuplicates} entrada(s) repetida(s) foram consolidadas para evitar dupla contagem.`
+    : '';
+  const relatedSummary=`<p class="related-intro">${displayCorpusCount} item(ns) único(s) validado(s) como materialmente relacionados ao tema: ${socialItems.length} em mídias sociais, ${youtubeItems.length} no YouTube e ${portalItems.length} em portais de notícias.${duplicateNote} O detalhamento item a item está nos anexos.</p><p class="note">Origem: <span class="origin-badge new">Nova coleta</span> = coletado desta vez; <span class="origin-badge reused">Corpus reutilizado</span> = reaproveitado de coleta anterior.</p>`;
   const linkCell=u=>u?raw(`<a href="${esc(u)}" target="_blank" rel="noreferrer">Abrir</a>`):'N/D';
   const coveredPortals=(m.portal_checks||[]).filter(x=>x.result==='com cobertura auditável');
   const portalSection=coveredPortals.length?`<h2>Checagem de portais prioritários</h2>${table(['Portal','Resultado','Evidência'],coveredPortals.map(x=>[x.portal,x.result,x.evidence]))}`:'';
@@ -235,16 +380,16 @@ function render(result){
     <div class="kicker">Relatório de repercussão midiática</div>
     <h1>${esc(d.title)}</h1><p class="interpretive">${esc(d.interpretive_title)}</p><p class="subtitle">${esc(d.subtitle)}</p>
     <div class="report-meta"><div><b>Instituição</b><br>${esc(p.institution)}</div>${contextMeta}<div><b>Janela de repercussão</b><br>${windowLabel(p.collection_start,p.collection_end,'Busca temática')}</div><div><b>QA</b><br>${qaBadge(qa)}</div></div>
+    <h2>Nuvem de palavras</h2>
     ${renderWordCloud(wordCloud)}
     <h2>Resumo Executivo</h2><div class="summary"><p>${esc(d.executive_summary)}</p></div>
     ${academicSection}
     <h2>Itens relacionados encontrados</h2>
     ${relatedSummary}
     ${factSection}
-    ${factSection}<h2>Nuvem de palavras</h2>
     <h2>Abertura</h2><p>${esc(d.opening)}</p>
     <h2>I. Panorama da Repercussão</h2><p>${esc(d.panorama)}</p>
-    <div class="table-wrap"><table><tbody><tr><th>Itens validados</th><td>${esc(m.valid_items)}</td><th>Veículos</th><td>${esc(m.unique_vehicles)}</td><th>Eventos factuais</th><td>${esc(m.facts?.events||0)}</td></tr></tbody></table></div>
+    <div class="table-wrap"><table><tbody><tr><th>Itens validados</th><td>${esc(displayValidItems)}</td><th>Veículos</th><td>${esc(m.unique_vehicles)}</td><th>Eventos factuais</th><td>${esc(m.facts?.events||0)}</td></tr></tbody></table></div>
     ${portalSection}
     ${channelSection}
     ${topChannelsSection}
