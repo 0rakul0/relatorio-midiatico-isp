@@ -293,9 +293,18 @@ class AcademicPaper(Base):
     external_id: Mapped[str] = mapped_column(String(150))
     arxiv_id: Mapped[str | None] = mapped_column(String(150), nullable=True)
     doi: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # Conteudo original retornado pelo provedor. Nunca e sobrescrito pela traducao.
     title: Mapped[str] = mapped_column(Text)
-    authors: Mapped[list] = mapped_column(JSON, default=list)
     abstract: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Versao de apresentacao em portugues do Brasil. A traducao e produzida
+    # pelo mesmo ReportAgent que seleciona os artigos, depois do retorno real
+    # da tool do arXiv, preservando o original para auditoria.
+    title_ptbr: Mapped[str | None] = mapped_column(Text, nullable=True)
+    abstract_ptbr: Mapped[str | None] = mapped_column(Text, nullable=True)
+    original_language: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    authors: Mapped[list] = mapped_column(JSON, default=list)
     published_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     updated_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     categories: Mapped[list] = mapped_column(JSON, default=list)
