@@ -74,10 +74,15 @@ function appendBubble(role, html) {
 
 function renderWelcome() {
   if (!currentTopic) return;
+  const total = currentTopic.valid_items || 0;
+  const groups = currentTopic.project_count || 1;
+  const scopeText = currentTopic.scope === 'ALL'
+    ? `${groups} projeto(s) com notícias validadas`
+    : `${groups} coleta(s) reunida(s)`;
   appendBubble(
     'assistant',
     `<p><strong>Base “${esc(currentTopic.topic)}” pronta para consulta.</strong></p>
-     <p>Estou considerando ${currentTopic.valid_items} notícias validadas reunidas de ${currentTopic.project_count || 1} coleta(s). Posso resumir a cobertura, comparar veículos, localizar dados e apontar as fontes usadas.</p>`
+     <p>O acervo disponível tem ${total} notícias validadas em ${scopeText}. A cada pergunta eu recupero primeiro os documentos mais aderentes e só então envio esse contexto à LLM.</p>`
   );
 }
 
@@ -96,7 +101,7 @@ function renderAnswer(state) {
   }
 
   const contextNote = state.corpus_size
-    ? `<p class="note">Base consolidada: ${state.corpus_size} notícias validadas${state.project_count ? ` em ${state.project_count} coleta(s)` : ''}.</p>`
+    ? `<p class="note">Acervo: ${state.corpus_size} notícias validadas · contexto recuperado nesta pergunta: ${state.context_size || 0}.</p>`
     : '';
 
   appendBubble('assistant', `<div class="chat-answer">${body}</div>${sources}${contextNote}`);
@@ -118,7 +123,10 @@ async function sendQuestion() {
   progress.classList.remove('hidden');
 
   try {
-    const state = await api(`/chat/${currentProject}/ask`, {
+    const endpoint = currentProject === 'all'
+      ? '/chat/all/ask'
+      : `/chat/${currentProject}/ask`;
+    const state = await api(endpoint, {
       method: 'POST',
       body: JSON.stringify({ messages: conversation })
     });
@@ -162,9 +170,14 @@ function renderTopicList(filterText = '') {
   }
 
   list.innerHTML = filtered.map(p => {
-    const selected = p.id === currentProject;
-    const status = p.generated_at ? 'Relatório gerado' : 'Base coletada';
+    const selected = String(p.id) === String(currentProject);
+    const status = p.scope === 'ALL'
+      ? 'Acervo completo'
+      : (p.generated_at ? 'Relatório gerado' : 'Base coletada');
     const runs = p.project_count || 1;
+    const groupLabel = p.scope === 'ALL'
+      ? plural(runs, 'projeto com itens', 'projetos com itens')
+      : plural(runs, 'coleta reunida', 'coletas reunidas');
     return `
       <button type="button"
               class="topic-option${selected ? ' selected' : ''}"
@@ -173,7 +186,7 @@ function renderTopicList(filterText = '') {
               aria-selected="${selected}">
         <span class="topic-option-main">
           <strong>${esc(p.topic)}</strong>
-          <span>${plural(p.valid_items, 'notícia validada', 'notícias validadas')} · ${plural(runs, 'coleta reunida', 'coletas reunidas')}</span>
+          <span>${plural(p.valid_items, 'notícia validada', 'notícias validadas')} · ${groupLabel}</span>
         </span>
         <span class="topic-option-status">${esc(status)}</span>
       </button>
@@ -182,7 +195,7 @@ function renderTopicList(filterText = '') {
 
   list.querySelectorAll('.topic-option').forEach(button => {
     button.addEventListener('click', () => {
-      selectProject(Number(button.dataset.projectId));
+      selectProject(button.dataset.projectId);
       closePicker();
     });
   });
@@ -197,20 +210,28 @@ function updatePickerSummary() {
   }
 
   const runs = currentTopic.project_count || 1;
+  const allScope = currentTopic.scope === 'ALL';
   triggerTitle.textContent = currentTopic.topic;
-  triggerMeta.textContent = `${plural(currentTopic.valid_items, 'notícia validada', 'notícias validadas')} · ${plural(runs, 'coleta reunida', 'coletas reunidas')}`;
+  triggerMeta.textContent = allScope
+    ? `${plural(currentTopic.valid_items, 'notícia validada', 'notícias validadas')} · ${plural(runs, 'projeto com itens', 'projetos com itens')}`
+    : `${plural(currentTopic.valid_items, 'notícia validada', 'notícias validadas')} · ${plural(runs, 'coleta reunida', 'coletas reunidas')}`;
   baseItems.textContent = currentTopic.valid_items;
   baseRuns.textContent = runs;
+  const runsLabel = document.getElementById('base-runs-label');
+  if (runsLabel) runsLabel.textContent = allScope ? 'projetos com itens' : 'coletas reunidas';
   baseSummary.classList.remove('hidden');
 
-  document.getElementById('chat-scope').textContent =
-    `Converse sobre “${currentTopic.topic}”. A base reúne todas as notícias validadas encontradas nas execuções desse mesmo tema, sem novas buscas na web.`;
+  document.getElementById('chat-scope').textContent = allScope
+    ? 'Converse com todo o acervo validado disponível para sua conta. Nenhuma nova busca na web é feita.'
+    : `Converse sobre “${currentTopic.topic}”. A base reúne todas as notícias validadas encontradas nas execuções desse mesmo tema, sem novas buscas na web.`;
 }
 
 function selectProject(projectId) {
-  const selected = projects.find(p => Number(p.id) === Number(projectId) && p.valid_items > 0);
+  const selected = projects.find(
+    p => String(p.id) === String(projectId) && p.valid_items > 0
+  );
   currentTopic = selected || null;
-  currentProject = selected ? Number(selected.id) : null;
+  currentProject = selected ? String(selected.id) : null;
 
   updatePickerSummary();
   resetConversation(Boolean(currentProject));
@@ -224,7 +245,10 @@ function selectProject(projectId) {
 
 async function loadProjects() {
   const data = await api('/chat/projects');
-  projects = (data.projects || []).filter(p => p.valid_items > 0);
+  const topicProjects = (data.projects || []).filter(p => p.valid_items > 0);
+  projects = data.all_corpus
+    ? [data.all_corpus, ...topicProjects]
+    : topicProjects;
 
   if (!projects.length) {
     currentProject = null;
@@ -237,9 +261,11 @@ async function loadProjects() {
     return;
   }
 
-  const preselect = data.last_active_project_id && projects.some(p => p.id === data.last_active_project_id)
-    ? data.last_active_project_id
-    : projects[0].id;
+  const preselect = data.last_active_project_id && projects.some(
+    p => String(p.id) === String(data.last_active_project_id)
+  )
+    ? String(data.last_active_project_id)
+    : String(projects[0].id);
 
   selectProject(preselect);
   renderTopicList('');
