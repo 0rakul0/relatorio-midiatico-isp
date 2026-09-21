@@ -71,7 +71,7 @@ function render(result){
     ${table(['Ano','Autores','Artigo','Relação com o tema','Fonte'],academicPapers.map(x=>[
       x.published_at?String(x.published_at).slice(0,4):'N/D',
       (x.authors||[]).slice(0,4).join(', ')+((x.authors||[]).length>4?' et al.':''),
-      x.title||'Sem título',
+      raw(`<strong>${esc(x.title||'Sem título')}</strong>${x.title_original&&x.title_original!==x.title? `<br><small>Original: ${esc(x.title_original)}</small>`:''}${x.abstract_ptbr? `<details class="academic-abstract"><summary>Resumo em pt-BR</summary><small>${esc(x.abstract_ptbr)}</small></details>`:''}`),
       x.relation_to_topic||'Contexto científico relacionado',
       x.url?raw(`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">arXiv</a>`):'N/D'
     ]))}`:'';
