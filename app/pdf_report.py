@@ -68,7 +68,6 @@ def build_pdf(data: dict) -> bytes:
     social_items = by_origin.get("redes_sociais", [])
     youtube_items = by_origin.get("youtube", [])
     portal_items = by_origin.get("portal_noticias", [])
-    qa = data.get("qa", {})
     execution_flags = project.get("execution_flags") or {}
     fact_layer_enabled = bool(execution_flags.get("enable_fact_layer"))
 
@@ -152,14 +151,13 @@ def build_pdf(data: dict) -> bytes:
                 ),
             ],
         ]
-        if project.get("launch_date") or qa:
-            left = (
-                Paragraph("<b>Lançamento confirmado</b><br/>" + escape(_text(project.get("launch_date"))), small)
-                if project.get("launch_date")
-                else Paragraph("<b>Escopo</b><br/>Repercussão midiática do produto", small)
+        if project.get("launch_date"):
+            metadata.append(
+                [
+                    Paragraph("<b>Lançamento confirmado</b><br/>" + escape(_text(project.get("launch_date"))), small),
+                    Paragraph("<b>Escopo</b><br/>Repercussão midiática do produto", small),
+                ]
             )
-            right = Paragraph("<b>QA final</b><br/>" + escape(_text(qa.get("status", "N/D"))), small)
-            metadata.append([left, right])
     else:
         event_label = _window_label(
             project.get("event_start"),
@@ -179,13 +177,12 @@ def build_pdf(data: dict) -> bytes:
                 ),
             ],
         ]
-        if qa:
-            metadata.append(
-                [
-                    Paragraph("<b>Tipo de pauta</b><br/>" + escape(_text(project.get("project_type_label"))), small),
-                    Paragraph("<b>QA final</b><br/>" + escape(_text(qa.get("status", "N/D"))), small),
-                ]
-            )
+        metadata.append(
+            [
+                Paragraph("<b>Tipo de pauta</b><br/>" + escape(_text(project.get("project_type_label"))), small),
+                Paragraph("<b>Escopo</b><br/>Repercussão midiática do tema", small),
+            ]
+        )
 
     meta_table = Table(metadata, colWidths=[8.3 * cm, 8.3 * cm])
     meta_table.setStyle(
