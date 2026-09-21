@@ -262,6 +262,20 @@ erDiagram
 
 Principais tabelas: `projects`, `search_queries`, `search_calls`, `search_hits` (bruto imutável + `technical_flags`), `media_items` (consolidado por `canonical_url`), `corpus_documents` (reuso histórico global), `fact_events` + `fact_assertions`, `classifications`, `generated_reports` (snapshot imutável), `report_runs`, `llm_calls`.
 
+## Chat com ferramentas
+
+O chat faz retrieval local no corpus validado antes de chamar a LLM. O mesmo
+`ReportAgent` pode decidir, por pergunta, complementar a resposta com:
+
+- `pesquisar_internet` — DuckDuckGo web/notícias;
+- `pesquisar_videos` — DuckDuckGo Videos;
+- `pesquisar_artigos_arxiv` — literatura científica no arXiv.
+
+Resultados obtidos no chat são fontes transitórias da conversa: **não** viram
+`MediaItem`, não alteram o corpus validado e não modificam métricas ou
+relatórios. O histórico persiste as fontes e as ferramentas acionadas para
+auditoria posterior.
+
 ## Estrutura principal
 
 ```text
