@@ -63,11 +63,18 @@ function renderWordCloud(cloud){
     return `<span class="word-cloud-fallback-term${emphasis}" data-rank="${index+1}" style="font-size:${size}px">${esc(item.word)}</span>`;
   }).join('');
 
+  const mergedVariants=Math.max(0,Number(cloud?.merged_variants||0));
+  const normalizationNote=mergedVariants
+    ? ` · <span class="word-cloud-normalization">${esc(mergedVariants)} variante(s) linguística(s) consolidada(s)</span>`
+    : '';
+
   return `<div class="word-cloud-panel">
     <div id="word-cloud-chart" class="word-cloud-chart" aria-label="Nuvem de palavras do corpus validado">
       <div class="word-cloud-fallback">${fallback}</div>
     </div>
-    <p class="word-cloud-note">${esc(cloud.documents||0)} notícia(s) validada(s) de portais · stopwords e nomes de sites removidos.</p>
+    <p class="word-cloud-note">
+      ${esc(cloud.documents||0)} notícia(s) validada(s) de portais · stopwords e nomes de sites removidos${normalizationNote}.
+    </p>
   </div>`;
 }
 
