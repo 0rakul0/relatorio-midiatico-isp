@@ -366,9 +366,9 @@ function render(result){
   const coveredChannels=(m.youtube_priority_channel_checks||[]).filter(x=>x.result==='com cobertura auditável');
   const channelSection=coveredChannels.length?`<h2>Checagem de canais prioritários no YouTube</h2>${table(['Canal','Resultado','Vídeos','Visualizações','Link do vídeo de maior alcance'],coveredChannels.map(x=>[x.channel,x.result,x.videos??0,viewLabel(x.views),linkCell(x.lead_url)]))}`:'';
   const topChannels=(m.top_youtube_channels||[]);
-  const topChannelsSection=topChannels.length?`<h2>Top 5 canais no YouTube</h2>${table(['#','Canal','Vídeos validados','Visualizações','Link do vídeo de maior alcance'],topChannels.map((x,i)=>[String(i+1),x.channel,x.videos??0,viewLabel(x.views),linkCell(x.lead_url)]))}`:'';
+  const topChannelsSection=topChannels.length?`<h2>Canais no YouTube</h2>${table(['#','Canal','Vídeos validados','Visualizações','Link do vídeo de maior alcance'],topChannels.map((x,i)=>[String(i+1),x.channel,x.videos??0,viewLabel(x.views),linkCell(x.lead_url)]))}`:'';
   const topReach=(m.top_reach_contents||[]);
-  const topReachSection=topReach.length?`<h2>Top 5 conteúdos por alcance disponível</h2><p class="related-intro">Ranking considera apenas itens validados com métrica numérica de alcance disponível no corpus.</p>${table(['#','Plataforma','Fonte','Título','Alcance','URL'],topReach.map((x,i)=>[String(i+1),x.platform,x.source,x.title,viewLabel(x.reach),linkCell(x.url)]))}`:'';
+  const topReachSection=topReach.length?`<h2>Conteúdos por alcance disponível</h2><p class="related-intro">Ranking considera apenas itens validados com métrica numérica de alcance disponível no corpus.</p>${table(['#','Plataforma','Fonte','Título','Alcance','URL'],topReach.map((x,i)=>[String(i+1),x.platform,x.source,x.title,viewLabel(x.reach),linkCell(x.url)]))}`:'';
   const annexBase=!!p.execution_flags?.enable_fact_layer?2:1;
   const annexLetter=i=>String.fromCharCode(65+annexBase+i);
   const windowLabel=(a,b,empty='Não delimitado')=>a&&b?`${esc(a)} a ${esc(b)}`:a?esc(a):b?esc(b):empty;
