@@ -506,11 +506,8 @@ class ChatAskRequest(BaseModel):
 
 
 class ChatResponse(StrictLLMOutput):
-    """Resposta groundada exclusivamente no corpus coletado do projeto.
-
-    ``used_member_indices`` referencia (por indice) os itens do corpus
-    fornecidos na chamada que sustentam a resposta.
-    """
+    """Resposta do chat com rastreabilidade de corpus e pesquisa externa."""
 
     answer: str = Field(min_length=1, max_length=12000)
     used_member_indices: list[int] = Field(default_factory=list, max_length=60)
+    used_external_urls: list[str] = Field(default_factory=list, max_length=30)
