@@ -49,6 +49,20 @@ function bucketByOrigin(items){
   }
   return b;
 }
+function renderWordCloud(cloud){
+  const words=(cloud?.words||[]);
+  if(!words.length){
+    return '<div class="word-cloud empty"><span>Nenhuma palavra relevante disponível no corpus jornalístico validado.</span></div>';
+  }
+  return `<div class="word-cloud">${words.map((item,index)=>{
+    const weight=Math.max(0,Math.min(1,Number(item.weight||0)));
+    const size=14+Math.round(weight*24);
+    const rotate=index%11===0?'rotate(-4deg)':index%13===0?'rotate(4deg)':'none';
+    return `<span class="word-cloud-term" style="font-size:${size}px;transform:${rotate}" title="${esc(item.count)} ocorrência(s)">${esc(item.word)}</span>`;
+  }).join('')}</div>
+  <p class="word-cloud-note">${esc(cloud.documents||0)} notícia(s) validada(s) de portais · stopwords e nomes de sites removidos.</p>`;
+}
+
 function render(result){
   const d=result.report,p=result.project,m=result.metrics,qa=result.qa||{};
   const facts=result.fact_events||[];
@@ -65,6 +79,7 @@ function render(result){
   const risks=(d.risk_assessment||[]).map(x=>[x.dimension,x.assessment,x.evidence]);
   const kit=(d.press_kit||[]).map(x=>[x.product,x.purpose]);
   const rawCorpus=result.corpus||[];
+  const wordCloud=result.word_cloud||{};
   const academicPapers=result.academic_papers||[];
   const academicSection=academicPapers.length?`<h2>Literatura científica relacionada</h2>
     <p class="related-intro">Estes trabalhos foram recuperados no arXiv para contextualização científica. Eles não são contados como repercussão midiática e não confirmam automaticamente fatos noticiados.</p>
@@ -102,6 +117,8 @@ function render(result){
     <div class="kicker">Relatório de repercussão midiática</div>
     <h1>${esc(d.title)}</h1><p class="interpretive">${esc(d.interpretive_title)}</p><p class="subtitle">${esc(d.subtitle)}</p>
     <div class="report-meta"><div><b>Instituição</b><br>${esc(p.institution)}</div>${contextMeta}<div><b>Janela de repercussão</b><br>${windowLabel(p.collection_start,p.collection_end,'Busca temática')}</div><div><b>QA</b><br>${qaBadge(qa)}</div></div>
+    <h2>Nuvem de palavras</h2>
+    ${renderWordCloud(wordCloud)}
     <h2>Resumo Executivo</h2><div class="summary"><p>${esc(d.executive_summary)}</p></div>
     ${academicSection}
     <h2>Itens relacionados encontrados</h2>
