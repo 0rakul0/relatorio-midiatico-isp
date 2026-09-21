@@ -465,6 +465,41 @@ class AppUser(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class ChatConversation(Base):
+    """Thread persistente do chat associado ao usuário e ao escopo temático."""
+
+    __tablename__ = "chat_conversations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("app_users.id", ondelete="CASCADE"), index=True
+    )
+    scope_type: Mapped[str] = mapped_column(String(20), index=True)
+    scope_key: Mapped[str] = mapped_column(String(500), index=True)
+    topic: Mapped[str] = mapped_column(String(300))
+    title: Mapped[str] = mapped_column(String(120), default="Nova conversa")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), index=True
+    )
+
+
+class ChatMessage(Base):
+    """Mensagem persistida de uma conversa, incluindo fontes exibidas."""
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_conversations.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(20))
+    content: Mapped[str] = mapped_column(Text)
+    sources: Mapped[list] = mapped_column(JSON, default=list)
+    extra: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class Subscription(Base):
     """Assinatura (Mercado Pago; MOCK até a integração real)."""
 
