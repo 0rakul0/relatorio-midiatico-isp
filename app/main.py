@@ -16,6 +16,7 @@ from app.database import SessionLocal, get_db
 from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report, fact_events_for_report
 from app.orchestration import request_cancel, run_snapshot, start_run
 from app.models import (
+    AcademicPaper,
     Classification,
     FactAssertion,
     FactEvent,
@@ -121,7 +122,6 @@ def health():
             "max_classifications": settings.max_classifications,
             "classification_batch_size": settings.classification_batch_size,
             "max_fact_extractions": settings.max_fact_extractions,
-            "max_cross_validations": settings.max_cross_validations,
             "validation_item_max_chars": settings.validation_item_max_chars,
             "classification_item_max_chars": settings.classification_item_max_chars,
         },
@@ -290,6 +290,7 @@ def delete_historical_report(project_id: int, db: Session = Depends(get_db), use
     db.execute(delete(Classification).where(Classification.media_item_id.in_(item_ids)))
     db.execute(delete(GeneratedReport).where(GeneratedReport.project_id == project_id))
     db.execute(delete(OfficialFact).where(OfficialFact.project_id == project_id))
+    db.execute(delete(AcademicPaper).where(AcademicPaper.project_id == project_id))
     # MediaItem referencia SearchQuery; remova os itens antes das consultas para
     # funcionar também quando o banco estiver com FKs estritas habilitadas.
     db.execute(delete(MediaItem).where(MediaItem.project_id == project_id))
