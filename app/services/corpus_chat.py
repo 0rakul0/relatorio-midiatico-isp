@@ -197,7 +197,8 @@ def _all_visible_items(db: Session, user) -> tuple[list[MediaItem], list[int]]:
             MediaItem.status == "VALID",
         )
     ).all())
-    return _dedupe_items(items), project_ids
+    valid_project_ids = sorted({item.project_id for item in items})
+    return _dedupe_items(items), valid_project_ids
 
 
 def list_chat_projects(db: Session, user) -> dict:
