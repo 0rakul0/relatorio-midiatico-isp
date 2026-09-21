@@ -439,3 +439,28 @@ class QAFindingOutput(StrictLLMOutput):
 
 class ReportQAResponse(StrictLLMOutput):
     findings: list[QAFindingOutput] = Field(max_length=30)
+
+
+# ---------------------------------------------------------------------------
+# Chat com o corpus coletado
+# ---------------------------------------------------------------------------
+
+
+class ChatTurnIn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=20000)
+
+
+class ChatAskRequest(BaseModel):
+    messages: list[ChatTurnIn] = Field(min_length=1, max_length=50)
+
+
+class ChatResponse(StrictLLMOutput):
+    """Resposta groundada exclusivamente no corpus coletado do projeto.
+
+    ``used_member_indices`` referencia (por indice) os itens do corpus
+    fornecidos na chamada que sustentam a resposta.
+    """
+
+    answer: str = Field(min_length=1, max_length=12000)
+    used_member_indices: list[int] = Field(default_factory=list, max_length=60)

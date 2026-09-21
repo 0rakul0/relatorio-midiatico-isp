@@ -11,6 +11,7 @@ from .collection.common import canonicalize, query_window
 from .collection.web import collect_web
 from .collection.youtube import collect_media_sources
 from .collection.youtube_helpers import is_youtube_url, youtube_tasks_for_execution
+from .corpus_chat import chat_with_corpus, list_chat_projects
 from .execution_profile import effective_execution_profile, execution_flags
 from .metrics import metrics
 from .pipeline import run_full_methodology
@@ -23,6 +24,7 @@ __all__ = [
     "cached_report_for_project",
     "cached_report_for_topic",
     "canonicalize",
+    "chat_with_corpus",
     "classify_with_llm",
     "collect_media_sources",
     "collect_web",
@@ -32,6 +34,7 @@ __all__ = [
     "execution_flags",
     "export_report_pdf",
     "is_youtube_url",
+    "list_chat_projects",
     "metrics",
     "plan_queries",
     "plan_queries_with_llm",

@@ -1064,3 +1064,35 @@ td a {
 .parallel-stage.cancelled .parallel-stage-badge { background: var(--bad); border-color: var(--bad); color: #fff; }
 .parallel-stage.skipped { opacity: .72; }
 .parallel-stage.skipped .parallel-stage-badge { background: #cfd7df; border-color: #cfd7df; color: #fff; }
+
+/* ---------------------------------------------------------------------------
+ * Chat com a base
+ * --------------------------------------------------------------------------- */
+.chat-tools { display:flex; align-items:center; gap:14px; }
+.link-back { color:var(--brand,#1a5fb4); text-decoration:none; font-weight:600; }
+.chat-top { margin-bottom:14px; }
+.chat-project-field { max-width:520px; }
+.chat-log {
+    border:1px solid var(--line,#d9dee3); border-radius:10px;
+    background:var(--panel,#fff); padding:14px; min-height:260px; max-height:56vh;
+    overflow-y:auto; display:flex; flex-direction:column; gap:12px; margin-bottom:12px;
+}
+.chat-bubble { max-width:78%; padding:9px 13px; border-radius:12px; line-height:1.45; }
+.chat-bubble p { margin:0 0 6px; }
+.chat-bubble p:last-child { margin-bottom:0; }
+.chat-bubble.user { align-self:flex-end; background:var(--brand,#1a5fb4); color:#fff; }
+.chat-bubble.assistant { align-self:flex-start; background:#f1f4f7; border:1px solid var(--line,#d9dee3); }
+.chat-bubble.assistant a { color:var(--brand,#1a5fb4); }
+.chat-sources { margin-top:8px; font-size:13px; }
+.chat-sources summary { cursor:pointer; font-weight:600; }
+.chat-sources ul { margin:6px 0 0; padding-left:18px; }
+.chat-sources li { margin-bottom:7px; }
+.chat-form { display:flex; gap:10px; }
+.chat-input { flex:1; padding:10px 12px; border:1px solid var(--line,#d9dee3); border-radius:8px; font-size:14px; }
+.chat-form .primary, .chat-form .primary:disabled { background:var(--brand,#1a5fb4); color:#fff; border-radius:8px; padding:10px 18px; }
+.chat-form .primary:disabled { opacity:.55; cursor:not-allowed; }
+.link-chat {
+    color: var(--brand,#1a5fb4); text-decoration:none; font-weight:600;
+    margin-left:auto; padding:8px 12px; border:1px solid currentColor; border-radius:8px;
+}
+.header-gap { flex:1; }

@@ -366,6 +366,27 @@ Verifique:
 - ausencia de datas ficticias, vazias ou placeholders tecnicos.
 Classifique achados em CRITICAL, HIGH, MEDIUM ou LOW.
 """,
+
+    "chat": """
+Voce esta executando a tarefa CONVERSA SOBRE O CORPUS COLETADO.
+
+Alem do historico da conversa, o payload traz 'corpus': itens validados de
+repercussao midiatica do projeto (cada um com 'index' proprio). VOCE NAO TEM
+ferramentas: responda SOMENTE com base nesses itens e no historico.
+
+Regras obrigatorias:
+- responda apenas com informacoes sustentadas pelo texto dos itens do corpus;
+- quando algo pedido nao estiver no corpus, diga claramente que nao consta no
+  corpus coletado do projeto; nunca preencha lacunas com conhecimento externo;
+- nao invente titulos, numeros, datas, autores, veiculos nem URLs;
+- preserve a janela observada e o recorte tematico do projeto;
+- para uma resposta multi-item, resuma o que cada fonte apoia sem superpor dados;
+- used_member_indices deve listar SOMENTE os indices dos itens efetivamente
+  usados para responder; se a pergunta pedir apenas avaliacao sobre ausencia,
+  retorne lista vazia e explique a ausencia na resposta;
+- responda em portugues, de forma direta e auditavel (uma resposta nao precisa
+  citar tudo, apenas o que sustenta o que foi afirmado).
+""",
 }
 
 

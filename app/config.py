@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     # o nome servido pelo vLLM (--served-model-name).
     openai_base_url: str | None = None
 
+    # Fallback LLM local (endpoint compatível com OpenAI, ex.: Ollama).
+    # Quando a OpenAI estiver indisponível (sem crédito / 429 / conexão /
+    # 5xx), todas as chamadas de LLM tentam este endpoint antes de falhar.
+    # Ex.: OPENAI_FALLBACK_BASE_URL=http://localhost:11434/v1 e
+    # OPENAI_FALLBACK_MODEL=gemma4:12b.
+    openai_fallback_base_url: str | None = None
+    openai_fallback_model: str | None = None
+
     # QA por LLM (camada narrativa). O QA determinístico é sempre
     # obrigatório e gratuito; este flag desliga só a auditoria por LLM
     # (modo econômico para rodadas de teste).

@@ -27,16 +27,18 @@ from app.models import (
 )
 from app.report_qa import run_report_qa
 from app.schema_upgrade import ensure_schema
-from app.schemas import ManualMediaItemCreate, OfficialFactCreate, ProjectCreate
+from app.schemas import ChatAskRequest, ManualMediaItemCreate, OfficialFactCreate, ProjectCreate
 from app.services import (
     cached_report_for_project,
     cached_report_for_topic,
     canonicalize,
+    chat_with_corpus,
     classify_with_llm,
     collect_web,
     discover_project_profile,
     draft_report_with_llm,
     export_report_pdf,
+    list_chat_projects,
     metrics,
     plan_queries,
     plan_queries_with_llm,
@@ -291,6 +293,36 @@ def auth_config():
     # Chave publishable é pública por desenho (vai para o browser).
     settings = get_settings()
     return {"supabase_url": settings.supabase_url, "supabase_key": settings.supabase_key}
+
+
+@app.get("/chat", include_in_schema=False)
+def chat_page():
+    return FileResponse("app/static/chat.html")
+
+
+@app.get("/chat/projects")
+def chat_projects(db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    """Projetos disponiveis para o chat, com o ultimo ativo em destaque."""
+    return list_chat_projects(db, user)
+
+
+@app.post("/chat/{project_id}/ask")
+def chat_ask(
+    project_id: int,
+    payload: ChatAskRequest,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """Responde uma pergunta do chat usando somente o corpus coletado do projeto."""
+    project = project_or_404(db, user, project_id)
+    try:
+        return chat_with_corpus(
+            db,
+            project,
+            [message.model_dump(mode="json") for message in payload.messages],
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/projects", status_code=201)

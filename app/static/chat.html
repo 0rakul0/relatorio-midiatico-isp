@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Conversar com a base · Relatório de Repercussão Midiática</title>
+  <link rel="stylesheet" href="/static/styles.css?v=3">
+</head>
+<body>
+<header class="top screen-only">
+  <div class="brand"><div class="mark">ISP</div><div><small>Inteligência de comunicação</small><h1>Conversar com a base</h1></div></div>
+  <div class="chat-tools">
+    <a class="link-back" href="/">↩ Painel</a>
+    <span id="chat-auth" class="status">…</span>
+  </div>
+</header>
+<main class="wrap">
+  <section class="panel">
+    <div class="chat-top">
+      <div class="field chat-project-field">
+        <label for="chat-project">Projeto (base coletada)</label>
+        <select id="chat-project"><option value="">Carregando projetos…</option></select>
+      </div>
+      <p class="note" id="chat-scope">As respostas usam somente os itens validados do projeto selecionado — sem novas buscas na web.</p>
+    </div>
+    <div id="chat-log" class="chat-log" aria-live="polite"></div>
+    <form id="chat-form" class="chat-form">
+      <input id="chat-input" class="chat-input" type="text" maxlength="2000" placeholder="Pergunte sobre o que foi coletado…" autocomplete="off" required>
+      <button id="chat-send" type="submit" class="primary">Enviar</button>
+    </form>
+    <div id="chat-progress" class="progress hidden">Consultando o corpus do projeto…</div>
+  </section>
+</main>
+<script src="/static/auth.js"></script>
+<script src="/static/chat.js"></script>
+</body>
+</html>
