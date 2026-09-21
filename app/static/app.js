@@ -50,17 +50,118 @@ function bucketByOrigin(items){
   return b;
 }
 function renderWordCloud(cloud){
-  const words=(cloud?.words||[]);
+  const words=(cloud?.words||[]).slice(0,50);
   if(!words.length){
-    return '<div class="word-cloud empty"><span>Nenhuma palavra relevante disponível no corpus jornalístico validado.</span></div>';
+    return '<div class="word-cloud-panel empty"><span>Nenhuma palavra relevante disponível no corpus jornalístico validado.</span></div>';
   }
-  return `<div class="word-cloud">${words.map((item,index)=>{
+
+  // Os spans funcionam como fallback caso D3/CDN esteja indisponível.
+  const fallback=words.slice(0,30).map((item,index)=>{
     const weight=Math.max(0,Math.min(1,Number(item.weight||0)));
-    const size=14+Math.round(weight*24);
-    const rotate=index%11===0?'rotate(-4deg)':index%13===0?'rotate(4deg)':'none';
-    return `<span class="word-cloud-term" style="font-size:${size}px;transform:${rotate}" title="${esc(item.count)} ocorrência(s)">${esc(item.word)}</span>`;
-  }).join('')}</div>
-  <p class="word-cloud-note">${esc(cloud.documents||0)} notícia(s) validada(s) de portais · stopwords e nomes de sites removidos.</p>`;
+    const size=14+Math.round(weight*22);
+    return `<span class="word-cloud-fallback-term" style="font-size:${size}px">${esc(item.word)}</span>`;
+  }).join('');
+
+  return `<div class="word-cloud-panel">
+    <div id="word-cloud-chart" class="word-cloud-chart" aria-label="Nuvem de palavras do corpus validado">
+      <div class="word-cloud-fallback">${fallback}</div>
+    </div>
+    <p class="word-cloud-note">${esc(cloud.documents||0)} notícia(s) validada(s) de portais · stopwords e nomes de sites removidos.</p>
+  </div>`;
+}
+
+function wordCloudSeed(value){
+  let hash=2166136261;
+  const text=String(value||'word-cloud');
+  for(let i=0;i<text.length;i++){
+    hash^=text.charCodeAt(i);
+    hash=Math.imul(hash,16777619);
+  }
+  return hash>>>0;
+}
+
+function seededRandom(seed){
+  let state=seed>>>0;
+  return ()=>{
+    state=(Math.imul(1664525,state)+1013904223)>>>0;
+    return state/4294967296;
+  };
+}
+
+function drawPackedWordCloud(containerSelector,cloud){
+  const container=document.querySelector(containerSelector);
+  const words=(cloud?.words||[]).slice(0,50);
+  if(!container||!words.length)return;
+
+  if(typeof window.d3==='undefined'||!window.d3.layout||typeof window.d3.layout.cloud!=='function'){
+    container.classList.add('word-cloud-fallback-active');
+    return;
+  }
+
+  const width=Math.max(320,Math.floor(container.getBoundingClientRect().width||900));
+  const height=width<560?330:420;
+  const counts=words.map(item=>Math.max(1,Number(item.count||1)));
+  const minCount=Math.min(...counts);
+  const maxCount=Math.max(...counts);
+
+  const fontScale=maxCount===minCount
+    ? ()=>34
+    : d3.scaleSqrt().domain([minCount,maxCount]).range([16,width<560?62:88]);
+
+  const palette=['#0b6fa4','#6f42c1','#198754','#d97706','#c43d75','#008b8b','#3559a6','#7a8f21'];
+  const seed=wordCloudSeed(words.map(item=>`${item.word}:${item.count}`).join('|'));
+  const random=seededRandom(seed);
+
+  const prepared=words.map((item,index)=>({
+    text:String(item.word||'').trim(),
+    count:Math.max(1,Number(item.count||1)),
+    size:fontScale(Math.max(1,Number(item.count||1))),
+    rotate:index%9===0?90:index%13===0?-90:0,
+    color:palette[index%palette.length],
+  })).filter(item=>item.text);
+
+  container.innerHTML='';
+
+  d3.layout.cloud()
+    .size([width,height])
+    .words(prepared)
+    .padding(3)
+    .rotate(item=>item.rotate)
+    .font('Inter, Segoe UI, Arial, sans-serif')
+    .fontWeight(item=>item.size>=48?800:700)
+    .fontSize(item=>item.size)
+    .spiral('archimedean')
+    .random(random)
+    .on('end',layoutWords=>{
+      const svg=d3.select(container)
+        .append('svg')
+        .attr('class','word-cloud-svg')
+        .attr('viewBox',`0 0 ${width} ${height}`)
+        .attr('width','100%')
+        .attr('height',height)
+        .attr('role','img')
+        .attr('aria-label','Nuvem de palavras do corpus jornalístico validado');
+
+      const group=svg.append('g')
+        .attr('transform',`translate(${width/2},${height/2})`);
+
+      const nodes=group.selectAll('text')
+        .data(layoutWords)
+        .enter()
+        .append('text')
+        .attr('class','word-cloud-svg-term')
+        .style('font-family','Inter, Segoe UI, Arial, sans-serif')
+        .style('font-size',item=>`${item.size}px`)
+        .style('font-weight',item=>item.size>=48?800:700)
+        .style('fill',item=>item.color)
+        .attr('text-anchor','middle')
+        .attr('transform',item=>`translate(${item.x},${item.y}) rotate(${item.rotate})`)
+        .text(item=>item.text);
+
+      nodes.append('title')
+        .text(item=>`${item.text}: ${item.count} ocorrência(s)`);
+    })
+    .start();
 }
 
 function render(result){
@@ -144,6 +245,7 @@ function render(result){
     <h2>Anexo ${annexLetter(2)} - Portais de Notícias</h2><p class="related-intro">Itens validados na janela de repercussão.</p>${annexTable(portalItems)}
     ${qa.findings?.length?`<h2>Achados de QA</h2>${table(['Severidade','Código','Mensagem'],qa.findings.map(x=>[x.severity,x.code,x.message]))}`:''}
     <div class="footer-note">Fato, fonte factual e item de repercussão são tratados como objetos distintos. Fontes posteriores podem confirmar um fato sem aumentar a repercussão do mês.</div>`;
+  requestAnimationFrame(()=>drawPackedWordCloud('#word-cloud-chart',wordCloud));
   buildToc();
 }
 
