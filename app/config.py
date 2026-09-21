@@ -160,6 +160,16 @@ class Settings(BaseSettings):
 
     max_fact_source_chars: int = Field(default=16000, ge=1000, le=100000)
 
+    # Chat/RAG sobre o corpus. O ranking inicial e local/deterministico e
+    # seleciona somente os documentos mais aderentes a pergunta antes da LLM.
+    chat_context_items: int = Field(default=18, ge=5, le=60)
+    chat_item_max_chars: int = Field(default=2400, ge=500, le=10000)
+
+    # Reparacao leve de metadados antigos no startup. Corrige origem
+    # (portal/rede social/YouTube) e datas completas explicitas em URL/titulo.
+    corpus_metadata_repair_on_startup: bool = True
+    corpus_metadata_repair_limit: int = Field(default=10000, ge=100, le=200000)
+
     # LLM item budgets. Keeping these close to the raw corpus ceiling avoids a
     # search explosion becoming an OpenAI-cost explosion later in the pipeline.
     max_semantic_reviews: int = Field(default=60, ge=1, le=500)
