@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report
 from app.models import GeneratedReport, Project
+from app.services.academic_research import academic_papers_for_project
 from app.services.execution_profile import execution_flags
 from app.services.project_profile import project_payload
 from app.services.metrics import corpus_for_project, metrics, split_corpus, split_corpus_by_origin
@@ -41,6 +42,12 @@ def hydrate_cached_report(db: Session, project: Project, generated: GeneratedRep
         payload["fact_evidence"] = (
             fact_assertions_for_report(db, project.id, main_report_only=True)
             if flags["enable_fact_layer"]
+            else []
+        )
+    if "academic_papers" not in payload:
+        payload["academic_papers"] = (
+            academic_papers_for_project(db, project.id)
+            if flags.get("enable_academic_research")
             else []
         )
     payload["qa"] = {"status": generated.qa_status, "findings": generated.qa_findings or []}
