@@ -168,6 +168,9 @@ def persist_chat_exchange(
                 "context_size": int(answer_state.get("context_size") or 0),
                 "project_count": int(answer_state.get("project_count") or 0),
                 "retrieval_strategy": answer_state.get("retrieval_strategy"),
+                "external_research_used": bool(answer_state.get("external_research_used")),
+                "external_source_mode": answer_state.get("external_source_mode"),
+                "tools_used": list(answer_state.get("tools_used") or []),
             },
         )
     )
