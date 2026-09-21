@@ -456,7 +456,7 @@ def plan_report_with_llm(db: Session, project: Project) -> list[SearchQuery]:
         "processes": {
             "web_collection": result["web_collection"],
             "youtube_collection": result["youtube_collection"],
-            "cross_validation": result["cross_validation"],
+            "academic_research": result["academic_research"],
             "media_validation": result["media_validation"],
             "fact_extraction": result["fact_extraction"],
             "fact_resolution": result["fact_resolution"],
