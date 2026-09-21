@@ -33,7 +33,9 @@ async function handleApi(r) {
 const ORIGIN_LABEL = {
   YOUTUBE: 'YouTube',
   REDE_SOCIAL: 'Rede social',
-  PORTAL_NOTICIAS: 'Portal de notícias'
+  PORTAL_NOTICIAS: 'Portal de notícias',
+  WEB: 'Web',
+  ACADEMIC: 'Artigo científico'
 };
 const originLabel = v => ORIGIN_LABEL[String(v || '').toUpperCase()] || 'Fonte';
 
@@ -86,7 +88,7 @@ function renderWelcome() {
   appendBubble(
     'assistant',
     `<p><strong>Base “${esc(currentTopic.topic)}” pronta para consulta.</strong></p>
-     <p>O acervo disponível tem ${total} notícias validadas em ${scopeText}. A cada pergunta eu recupero primeiro os documentos mais aderentes e só então envio esse contexto à LLM.</p>`
+     <p>O acervo disponível tem ${total} notícias validadas em ${scopeText}. Eu consulto primeiro essa base e, quando necessário, o agente pode complementar com Web, vídeos ou arXiv.</p>`
   );
 }
 
@@ -95,20 +97,50 @@ function renderAnswer(state) {
   const body = paragraphs.map(p => `<p>${esc(p).replace(/\n/g, '<br>')}</p>`).join('');
   let sources = '';
 
-  if (state.sources?.length) {
-    const items = state.sources.map(s => {
+  const allSources = state.sources || [];
+  if (allSources.length) {
+    const corpusSources = allSources.filter(s => (s.source_scope || 'CORPUS') !== 'EXTERNAL');
+    const externalSources = allSources.filter(s => s.source_scope === 'EXTERNAL');
+
+    const renderSourceItems = rows => rows.map(s => {
       const link = s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noreferrer">Abrir fonte</a>` : '';
       const when = s.published_at ? ` · ${esc(s.published_at)}` : '';
-      return `<li><strong>${esc(s.title)}</strong><br><span class="note">${esc(s.domain || s.source_name || '')}${when} · ${esc(originLabel(s.media_origin))} · via ${esc(s.search_source || 'unknown')}${link ? ' · ' + link : ''}</span></li>`;
+      const via = s.search_source ? ` · via ${esc(s.search_source)}` : '';
+      const tool = s.tool ? ` · ${esc({
+        pesquisar_internet: 'busca web',
+        pesquisar_videos: 'busca de vídeos',
+        pesquisar_artigos_arxiv: 'arXiv'
+      }[s.tool] || s.tool)}` : '';
+      return `<li><strong>${esc(s.title)}</strong><br><span class="note">${esc(s.domain || s.source_name || '')}${when} · ${esc(originLabel(s.media_origin))}${via}${tool}${link ? ' · ' + link : ''}</span></li>`;
     }).join('');
-    sources = `<details class="chat-sources"><summary>Fontes usadas (${state.sources.length})</summary><ul>${items}</ul></details>`;
+
+    const groups = [];
+    if (corpusSources.length) {
+      groups.push(`<div class="chat-source-group"><span class="chat-source-label">Acervo validado</span><ul>${renderSourceItems(corpusSources)}</ul></div>`);
+    }
+    if (externalSources.length) {
+      const label = state.external_source_mode === 'consulted'
+        ? 'Pesquisa externa consultada'
+        : 'Pesquisa externa usada';
+      groups.push(`<div class="chat-source-group"><span class="chat-source-label">${esc(label)}</span><ul>${renderSourceItems(externalSources)}</ul></div>`);
+    }
+
+    sources = `<details class="chat-sources"><summary>Fontes e evidências (${allSources.length})</summary>${groups.join('')}</details>`;
   }
 
   const contextNote = state.corpus_size
-    ? `<p class="note">Acervo: ${state.corpus_size} notícias validadas · contexto recuperado nesta pergunta: ${state.context_size || 0}.</p>`
+    ? `<p class="note">Acervo: ${state.corpus_size} notícias validadas · contexto local recuperado: ${state.context_size || 0}.</p>`
     : '';
 
-  appendBubble('assistant', `<div class="chat-answer">${body}</div>${sources}${contextNote}`);
+  const toolNote = state.tools_used?.length
+    ? `<p class="note chat-tool-note">Ferramentas acionadas: ${esc(state.tools_used.map(t => ({
+        pesquisar_internet: 'Web',
+        pesquisar_videos: 'YouTube/Vídeos',
+        pesquisar_artigos_arxiv: 'arXiv'
+      }[t] || t)).join(', '))}.</p>`
+    : '';
+
+  appendBubble('assistant', `<div class="chat-answer">${body}</div>${sources}${contextNote}${toolNote}`);
 }
 
 function renderUser(text) {
@@ -358,8 +390,8 @@ function updatePickerSummary() {
   baseSummary.classList.remove('hidden');
 
   document.getElementById('chat-scope').textContent = allScope
-    ? 'Converse com todo o acervo validado disponível para sua conta. Nenhuma nova busca na web é feita.'
-    : `Converse sobre “${currentTopic.topic}”. A base reúne todas as notícias validadas encontradas nas execuções desse mesmo tema, sem novas buscas na web.`;
+    ? 'Converse com todo o acervo validado disponível para sua conta. O agente usa o acervo primeiro e pode pesquisar externamente quando a pergunta exigir.'
+    : `Converse sobre “${currentTopic.topic}”. A base reúne as notícias validadas das execuções desse tema; o agente pode complementar com Web, vídeos ou arXiv quando necessário.`;
 }
 
 async function selectProject(projectId) {
