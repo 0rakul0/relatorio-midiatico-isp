@@ -141,9 +141,9 @@ def search_arxiv(query: str, *, max_results: int = 6, timeout: int = 25) -> list
                 "url": abs_url,
                 "pdf_url": pdf_url,
                 "journal_reference": journal_reference,
-                # arXiv e um repositorio de e-prints; a existencia de journal_ref
-                # nao permite assumir revisao por pares para todos os registros.
-                "is_preprint": journal_reference is None,
+                # O registro recuperado e um e-print do arXiv. journal_ref e
+                # preservado separadamente, sem inferir revisao por pares.
+                "is_preprint": True,
             }
         )
 
