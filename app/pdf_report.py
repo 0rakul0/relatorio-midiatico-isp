@@ -88,8 +88,8 @@ def _pdf_word_cloud_flowable(word_cloud: dict, width: float):
         def _font_size(self, count: float, min_count: float, max_count: float) -> float:
             if max_count <= min_count:
                 return 24.0
-            low = 10.5
-            high = 42.0
+            low = 9.5
+            high = 40.0
             lower = math.sqrt(max(1.0, min_count))
             upper = math.sqrt(max(1.0, max_count))
             current = math.sqrt(max(1.0, count))
@@ -97,7 +97,7 @@ def _pdf_word_cloud_flowable(word_cloud: dict, width: float):
             return low + (high - low) * max(0.0, min(1.0, ratio))
 
         @staticmethod
-        def _intersects(box, others, padding=1.8):
+        def _intersects(box, others, padding=1.0):
             x1, y1, x2, y2 = box
             for ox1, oy1, ox2, oy2 in others:
                 if not (
@@ -164,7 +164,7 @@ def _pdf_word_cloud_flowable(word_cloud: dict, width: float):
 
                 found = None
                 trial_size = size
-                for _shrink in range(6):
+                for _shrink in range(8):
                     text_width = pdfmetrics.stringWidth(text, font_name, trial_size)
                     text_height = trial_size * 1.05
                     box_width = text_height if rotation else text_width
@@ -174,9 +174,9 @@ def _pdf_word_cloud_flowable(word_cloud: dict, width: float):
                     # a mesma ideia com uma leve compressao vertical para a
                     # proporcao horizontal do relatorio.
                     phase = rng.random() * 0.7
-                    for step in range(1500):
+                    for step in range(2200):
                         angle = phase + step * 0.29
-                        radius = 0.52 * angle
+                        radius = 0.48 * angle
                         x = center_x + radius * math.cos(angle)
                         y = center_y + radius * math.sin(angle) * 0.72
                         box = (
@@ -313,6 +313,13 @@ def build_pdf(data: dict) -> bytes:
     )
     body = ParagraphStyle("Body", parent=styles["BodyText"], fontSize=9.2, leading=13, spaceAfter=8)
     small = ParagraphStyle("Small", parent=body, fontSize=7.2, leading=9)
+    cloud_note_style = ParagraphStyle(
+        "WordCloudNote",
+        parent=small,
+        alignment=1,
+        textColor=colors.HexColor("#66788a"),
+        spaceBefore=2,
+    )
 
     buffer = BytesIO()
 
@@ -443,7 +450,7 @@ def build_pdf(data: dict) -> bytes:
                     Paragraph("Nuvem de palavras", heading),
                     cloud_visual,
                     Spacer(1, 4),
-                    Paragraph(cloud_note, small),
+                    Paragraph(cloud_note, cloud_note_style),
                 ]
             )
         )
