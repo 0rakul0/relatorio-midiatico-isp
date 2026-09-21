@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Conversar com a base · Relatório de Repercussão Midiática</title>
-  <link rel="stylesheet" href="/static/styles.css?v=8">
+  <link rel="stylesheet" href="/static/styles.css?v=9">
 </head>
 <body>
 <header class="top screen-only">
@@ -52,11 +52,11 @@
       <div id="chat-base-summary" class="chat-base-summary hidden">
         <span class="base-pill"><strong id="base-items">0</strong> notícias validadas</span>
         <span class="base-pill"><strong id="base-runs">0</strong> <span id="base-runs-label">coletas reunidas</span></span>
-        <span class="base-pill safe">Sem busca externa</span>
+        <span class="base-pill agent-tools">Agente pode pesquisar</span>
       </div>
 
       <p class="note chat-scope" id="chat-scope">
-        As respostas usam somente as notícias validadas da base temática selecionada.
+        O chat usa primeiro o acervo validado e pode acionar pesquisa externa quando necessário.
       </p>
 
       <div id="chat-history-panel" class="chat-history-panel hidden">
@@ -78,11 +78,11 @@
       <button id="chat-send" type="submit" class="primary">Enviar</button>
     </form>
 
-    <div id="chat-progress" class="progress hidden">Consultando a base consolidada…</div>
+    <div id="chat-progress" class="progress hidden">Consultando a base e acionando ferramentas quando necessário…</div>
   </section>
 </main>
 
 <script src="/static/auth.js"></script>
-<script src="/static/chat.js?v=6"></script>
+<script src="/static/chat.js?v=7"></script>
 </body>
 </html>
