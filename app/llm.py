@@ -38,6 +38,8 @@ def create_chat_model(*, max_output_tokens: int = 50000):
         "temperature": 0,
         "max_completion_tokens": max_output_tokens,
     }
+    if settings.openai_base_url:
+        base_kwargs["base_url"] = settings.openai_base_url
     effort = (settings.openai_reasoning_effort or "").strip().lower()
     if effort and _is_reasoning_model(settings.openai_model):
         try:

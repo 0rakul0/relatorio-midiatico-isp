@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     # Ignored for non-reasoning models. Empty/null disables.
     openai_reasoning_effort: str | None = "low"
 
+    # Endpoint compatível com OpenAI. None = api.openai.com.
+    # Para LLM local via vLLM: http://vllm:8001/v1 (no compose) ou
+    # http://127.0.0.1:8001/v1 (fora do docker). OPENAI_MODEL deve ser
+    # o nome servido pelo vLLM (--served-model-name).
+    openai_base_url: str | None = None
+
     # QA por LLM (camada narrativa). O QA determinístico é sempre
     # obrigatório e gratuito; este flag desliga só a auditoria por LLM
     # (modo econômico para rodadas de teste).

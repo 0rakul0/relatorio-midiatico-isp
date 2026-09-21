@@ -11,27 +11,4 @@ services:
       - "8000:8000"
     volumes:
       - .:/app
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  postgres:
-    image: postgres:16-alpine
-    container_name: isp-repercussao-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: repercussao
-      POSTGRES_USER: relatorio
-      POSTGRES_PASSWORD: relatorio
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U relatorio -d repercussao"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-
-volumes:
-  postgres_data:
+    # Banco: Supabase via DATABASE_URL no .env (sem postgres local).
