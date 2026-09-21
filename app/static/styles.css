@@ -1633,3 +1633,32 @@ td a {
     font-size:11px;
     padding:5px 2px;
 }
+
+.base-pill.agent-tools {
+    background:#f3f0ff;
+    border-color:#ded5ff;
+    color:#5d47a8;
+}
+.chat-source-group {
+    margin-top:8px;
+    padding-top:7px;
+    border-top:1px solid #dfe7ed;
+}
+.chat-source-group:first-child {
+    margin-top:0;
+    padding-top:0;
+    border-top:0;
+}
+.chat-source-label {
+    display:inline-block;
+    margin-bottom:4px;
+    color:#50677a;
+    font-size:10px;
+    font-weight:800;
+    text-transform:uppercase;
+    letter-spacing:.05em;
+}
+.chat-tool-note {
+    margin-top:8px !important;
+    color:#5d47a8;
+}
