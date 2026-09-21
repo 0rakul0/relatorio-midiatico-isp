@@ -419,6 +419,7 @@ def chat_all_ask(
             conversation_id=payload.conversation_id,
             question=_last_chat_question(payload),
             answer_state=state,
+            history_messages=messages,
         )
         state["conversation_id"] = conversation.id
         return state
@@ -449,6 +450,7 @@ def chat_ask(
             conversation_id=payload.conversation_id,
             question=_last_chat_question(payload),
             answer_state=state,
+            history_messages=messages,
         )
         state["conversation_id"] = conversation.id
         return state
