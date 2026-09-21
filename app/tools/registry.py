@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from langchain_core.tools import BaseTool
 
+from app.tools.academic import AcademicSink, make_academic_search_tool
 from app.tools.hydration import ArticleHydrationSink, make_bulk_article_fetch_tool
 from app.tools.search import (
     SearchContextResolver,
@@ -29,9 +30,11 @@ def build_agent_tools(
     enable_web: bool = False,
     enable_video: bool = False,
     enable_article_fetch: bool = False,
+    enable_academic: bool = False,
     web_sink: SearchSink | None = None,
     video_sink: SearchSink | None = None,
     article_sink: ArticleHydrationSink | None = None,
+    academic_sink: AcademicSink | None = None,
     web_context: SearchContextResolver | None = None,
     video_context: SearchContextResolver | None = None,
     web_observer: SearchObserver | None = None,
@@ -63,4 +66,6 @@ def build_agent_tools(
         )
     if enable_article_fetch:
         tools.append(make_bulk_article_fetch_tool(sink=article_sink))
+    if enable_academic:
+        tools.append(make_academic_search_tool(sink=academic_sink))
     return tools
