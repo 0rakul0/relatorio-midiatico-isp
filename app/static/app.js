@@ -59,7 +59,8 @@ function renderWordCloud(cloud){
   const fallback=words.slice(0,30).map((item,index)=>{
     const weight=Math.max(0,Math.min(1,Number(item.weight||0)));
     const size=14+Math.round(weight*22);
-    return `<span class="word-cloud-fallback-term" style="font-size:${size}px">${esc(item.word)}</span>`;
+    const emphasis=index<5?' word-cloud-fallback-top':'';
+    return `<span class="word-cloud-fallback-term${emphasis}" data-rank="${index+1}" style="font-size:${size}px">${esc(item.word)}</span>`;
   }).join('');
 
   return `<div class="word-cloud-panel">
@@ -108,7 +109,10 @@ function drawPackedWordCloud(containerSelector,cloud){
     ? ()=>34
     : d3.scaleSqrt().domain([minCount,maxCount]).range([16,width<560?62:88]);
 
-  const palette=['#0b6fa4','#6f42c1','#198754','#d97706','#c43d75','#008b8b','#3559a6','#7a8f21'];
+  // Paleta institucional fixa: azul, roxo, verde, teal e amarelo.
+  // Top 5 usa tons fortes; os demais ciclam por versoes mais suaves.
+  const strongPalette=['#075B9A','#6536A5','#247A3C','#007C73','#A87400'];
+  const softPalette=['#6F9FC2','#9A83BC','#79A783','#6FAAA5','#B9A36A'];
   const seed=wordCloudSeed(words.map(item=>`${item.word}:${item.count}`).join('|'));
   const random=seededRandom(seed);
 
@@ -117,7 +121,11 @@ function drawPackedWordCloud(containerSelector,cloud){
     count:Math.max(1,Number(item.count||1)),
     size:fontScale(Math.max(1,Number(item.count||1))),
     rotate:index%9===0?90:index%13===0?-90:0,
-    color:palette[index%palette.length],
+    rank:index+1,
+    isTop:index<5,
+    color:index<5
+      ? strongPalette[index]
+      : softPalette[(index-5)%softPalette.length],
   })).filter(item=>item.text);
 
   container.innerHTML='';
@@ -149,11 +157,13 @@ function drawPackedWordCloud(containerSelector,cloud){
         .data(layoutWords)
         .enter()
         .append('text')
-        .attr('class','word-cloud-svg-term')
+        .attr('class',item=>`word-cloud-svg-term${item.isTop?' word-cloud-svg-top':''}`)
+        .attr('data-rank',item=>item.rank)
         .style('font-family','Inter, Segoe UI, Arial, sans-serif')
         .style('font-size',item=>`${item.size}px`)
-        .style('font-weight',item=>item.size>=48?800:700)
+        .style('font-weight',item=>item.isTop?900:(item.size>=48?800:650))
         .style('fill',item=>item.color)
+        .style('opacity',item=>item.isTop?1:.78)
         .attr('text-anchor','middle')
         .attr('transform',item=>`translate(${item.x},${item.y}) rotate(${item.rotate})`)
         .text(item=>item.text);
