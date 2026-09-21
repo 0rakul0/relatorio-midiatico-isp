@@ -1522,3 +1522,22 @@ td a {
         max-height: none;
     }
 }
+
+
+/* Acervo completo no seletor do chat */
+.topic-option.all-corpus {
+    background:#f7fbff;
+    border:1px solid #d9e8f2;
+    margin-bottom:5px;
+}
+.topic-option.all-corpus:hover {
+    background:#edf7fd;
+}
+.topic-option.all-corpus .topic-option-status {
+    background:#e6f3fb;
+    color:#17648f;
+}
+.topic-option.all-corpus.selected {
+    background:#e4f2fb;
+    border-color:#bfddeb;
+}
