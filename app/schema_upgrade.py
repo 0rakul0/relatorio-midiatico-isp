@@ -76,6 +76,11 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     "corpus_documents": {
         "media_origin": "VARCHAR(30) DEFAULT 'PORTAL_NOTICIAS'",
     },
+    "academic_papers": {
+        "title_ptbr": "TEXT",
+        "abstract_ptbr": "TEXT",
+        "original_language": "VARCHAR(20)",
+    },
     "fact_events": {
         "death_place_name": "VARCHAR(300)",
         "death_address": "TEXT",
