@@ -133,7 +133,7 @@ flowchart TB
     end
 
     subgraph AGENT[Um único agente - app/agent.py]
-        ReportAgent["ReportAgent<br/>12 tasks: topic_profile,<br/>documentalist, collector,<br/>classification, report_writer, qa..."]
+        ReportAgent["ReportAgent<br/>13 tasks: topic_profile,<br/>documentalist, collector,<br/>classification, report_writer, qa..."]
     end
 
     subgraph TOOLS[Tools - app/tools/]
@@ -267,7 +267,7 @@ Principais tabelas: `projects`, `search_queries`, `search_calls`, `search_hits` 
 ```text
 app/
 ├── main.py                 # FastAPI: projects, run/run-async, facts, reports, costs, PDF
-├── agent.py                # ReportAgent único (12 tasks, bind_tools, saída Pydantic)
+├── agent.py                # ReportAgent único (13 tasks, bind_tools, saída Pydantic)
 ├── llm.py + cost_tracker.py# criação do chat model + registro LLMCall (tokens/custo)
 ├── schemas.py              # contratos Pydantic das tasks do agente
 ├── config.py               # Settings (limites de busca, lotes LLM, YouTube, corpus reuse)
