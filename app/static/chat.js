@@ -180,7 +180,7 @@ function renderTopicList(filterText = '') {
       : plural(runs, 'coleta reunida', 'coletas reunidas');
     return `
       <button type="button"
-              class="topic-option${selected ? ' selected' : ''}"
+              class="topic-option${p.scope === 'ALL' ? ' all-corpus' : ''}${selected ? ' selected' : ''}"
               data-project-id="${p.id}"
               role="option"
               aria-selected="${selected}">
