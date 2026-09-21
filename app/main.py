@@ -36,6 +36,10 @@ from app.services import (
     canonicalize,
     chat_with_all_corpus,
     chat_with_corpus,
+    delete_chat_conversation,
+    get_chat_conversation,
+    list_chat_conversations,
+    persist_chat_exchange,
     classify_with_llm,
     collect_web,
     discover_project_profile,
@@ -328,19 +332,100 @@ def chat_projects(db: Session = Depends(get_db), user: AuthUser = Depends(get_cu
     return list_chat_projects(db, user)
 
 
+def _chat_project_from_scope(
+    project_id: str,
+    db: Session,
+    user: AuthUser,
+) -> Project | None:
+    if str(project_id).casefold() == "all":
+        return None
+    try:
+        numeric_id = int(project_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, "project_id inválido") from exc
+    return project_or_404(db, user, numeric_id)
+
+
+def _last_chat_question(payload: ChatAskRequest) -> str:
+    for message in reversed(payload.messages):
+        if message.role == "user":
+            return message.content
+    raise HTTPException(422, "A conversa precisa terminar com uma pergunta do usuário")
+
+
+@app.get("/chat/conversations")
+def chat_conversations(
+    project_id: str,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """Lista as conversas persistidas do tema selecionado."""
+    project = _chat_project_from_scope(project_id, db, user)
+    return {
+        "conversations": list_chat_conversations(
+            db,
+            owner_id=user.id,
+            project=project,
+        )
+    }
+
+
+@app.get("/chat/conversations/{conversation_id}")
+def chat_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """Carrega uma conversa persistida sem chamar a LLM novamente."""
+    conversation = get_chat_conversation(
+        db,
+        owner_id=user.id,
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(404, "Conversa não encontrada")
+    return conversation
+
+
+@app.delete("/chat/conversations/{conversation_id}", status_code=204)
+def delete_chat_conversation_route(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    if not delete_chat_conversation(
+        db,
+        owner_id=user.id,
+        conversation_id=conversation_id,
+    ):
+        raise HTTPException(404, "Conversa não encontrada")
+    return Response(status_code=204)
+
+
 @app.post("/chat/all/ask")
 def chat_all_ask(
     payload: ChatAskRequest,
     db: Session = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    """Responde sobre todo o acervo validado visivel para o usuario."""
+    """Responde sobre todo o acervo e persiste o turno da conversa."""
+    messages = [message.model_dump(mode="json") for message in payload.messages]
     try:
-        return chat_with_all_corpus(
+        state = chat_with_all_corpus(db, user, messages)
+        conversation = persist_chat_exchange(
             db,
-            user,
-            [message.model_dump(mode="json") for message in payload.messages],
+            owner_id=user.id,
+            project=None,
+            conversation_id=payload.conversation_id,
+            question=_last_chat_question(payload),
+            answer_state=state,
         )
+        state["conversation_id"] = conversation.id
+        return state
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -352,14 +437,25 @@ def chat_ask(
     db: Session = Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    """Responde uma pergunta do chat usando somente o corpus coletado do projeto."""
+    """Responde usando o corpus do tema e persiste o turno da conversa."""
     project = project_or_404(db, user, project_id)
+    messages = [message.model_dump(mode="json") for message in payload.messages]
     try:
-        return chat_with_corpus(
+        state = chat_with_corpus(db, project, messages)
+        conversation = persist_chat_exchange(
             db,
-            project,
-            [message.model_dump(mode="json") for message in payload.messages],
+            owner_id=user.id,
+            project=project,
+            conversation_id=payload.conversation_id,
+            question=_last_chat_question(payload),
+            answer_state=state,
         )
+        state["conversation_id"] = conversation.id
+        return state
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
