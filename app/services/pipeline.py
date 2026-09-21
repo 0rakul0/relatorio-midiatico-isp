@@ -10,6 +10,7 @@ from app.fact_layer import extract_project_facts, plan_nominal_followups, resolv
 from app.models import Project
 from app.report_qa import run_report_qa
 from app.services.article_hydration import hydrate_media_items
+from app.services.academic_research import research_academic_literature
 from app.services.classification import classify_with_llm
 from app.services.collection.web import collect_web
 from app.services.collection.youtube import collect_media_sources
@@ -19,7 +20,6 @@ from app.services.news_validation import validate_news_stage
 from app.services.project_profile import discover_project_profile, project_payload, trusted_launch_date
 from app.services.reporting import draft_report_with_llm, refine_report_with_qa
 from app.services.search_planning import plan_report_with_llm
-from app.services.validation import validate_video_metadata_cross_source
 
 
 def run_full_methodology(
@@ -106,7 +106,7 @@ def run_full_methodology(
         label
         for key, label in (
             ("youtube_collection", "YouTube"),
-            ("cross_validation", "validacao cruzada"),
+            ("academic_research", "literatura cientifica"),
             ("fact_extraction", "camada factual"),
             ("nominal_followup", "busca nominal"),
         )
@@ -134,8 +134,8 @@ def run_full_methodology(
     # This makes the execution tracker reflect the real methodology immediately.
     if not flags["enable_youtube"]:
         stage("youtube", "SKIPPED", (processes.get("youtube_collection") or {}).get("reason") or "Nao prevista no plano")
-    if not flags["enable_cross_validation"]:
-        stage("cross_validation", "SKIPPED", (processes.get("cross_validation") or {}).get("reason") or "Nao prevista no plano")
+    if not flags["enable_academic_research"]:
+        stage("academic_research", "SKIPPED", (processes.get("academic_research") or {}).get("reason") or "Nao prevista no plano")
     if not flags["enable_fact_layer"]:
         fact_reason = (processes.get("fact_extraction") or {}).get("reason") or "Camada factual nao prevista no plano"
         for optional_key in ("facts_pass_1", "fact_resolution_1", "nominal_plan", "nominal_collection", "facts_pass_2", "fact_resolution_2"):
@@ -206,23 +206,60 @@ def run_full_methodology(
         stage("youtube", "DONE", f"{youtube_collected} video(s) consolidados")
     db.commit()
 
-    # Cross-validation belongs to collection group (stage 3 in the UI).
+    # Literatura cientifica: contexto separado da metrica de repercussao.
+    academic_research = {
+        "searched": False,
+        "queries": [],
+        "summary": None,
+        "candidates_returned": 0,
+        "selected": 0,
+        "persisted": 0,
+        "papers": [],
+    }
     check()
-    if not flags["enable_cross_validation"]:
-        stage("cross_validation", "SKIPPED", (processes.get("cross_validation") or {}).get("reason") or "Nao necessaria")
+    if not flags["enable_academic_research"]:
+        stage(
+            "academic_research",
+            "SKIPPED",
+            (processes.get("academic_research") or {}).get("reason") or "Nao necessaria para esta pauta",
+        )
     else:
-        stage("cross_validation", "RUNNING", "Comparando metadados coincidentes de video")
+        stage(
+            "academic_research",
+            "RUNNING",
+            "Buscando artigos cientificos relacionados sem mistura-los ao corpus midiatico",
+        )
         try:
-            cross_validation = validate_video_metadata_cross_source(
-                db, project, cancel_check=check, progress_detail=detail_for("cross_validation")
+            academic_research = research_academic_literature(
+                db,
+                project,
+                cancel_check=check,
+                progress_detail=detail_for("academic_research"),
             )
         except RuntimeError as exc:
-            stage("cross_validation", "SKIPPED", f"Validacao cruzada indisponivel: {str(exc)[:180]}")
+            from app.orchestration.state import RunCancelled
+
+            if isinstance(exc, RunCancelled):
+                raise
+            stage(
+                "academic_research",
+                "SKIPPED",
+                f"Literatura cientifica indisponivel: {str(exc)[:180]}",
+            )
         else:
-            if cross_validation["skipped"]:
-                stage("cross_validation", "SKIPPED", "Nenhum video comparavel por dois coletores independentes")
+            if not academic_research.get("searched") and not academic_research.get("papers"):
+                stage(
+                    "academic_research",
+                    "SKIPPED",
+                    academic_research.get("summary") or "O agente concluiu que a pauta nao exige contexto academico",
+                )
             else:
-                stage("cross_validation", "DONE", f"{cross_validation['validated']} video(s) comparado(s)")
+                stage(
+                    "academic_research",
+                    "DONE",
+                    f"{academic_research.get('candidates_returned', 0)} candidato(s) do arXiv; "
+                    f"{academic_research.get('persisted', 0)} artigo(s) relevante(s) preservado(s)",
+                )
 
     # 4. News validation ------------------------------------------------
     validation = {
@@ -457,6 +494,7 @@ def run_full_methodology(
         "fact_pass_2": fact_pass_2,
         "fact_resolution_2": fact_resolution_2,
         "validation": validation,
+        "academic_research": academic_research,
         "classification": classification,
         "gap_fill": gap_fill,
         "refinements": refinements,
