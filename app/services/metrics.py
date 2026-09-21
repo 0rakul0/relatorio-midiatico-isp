@@ -514,7 +514,7 @@ def metrics(db: Session, project_id: int) -> dict:
             channels.values(),
             key=lambda row: (row["views"] if row["view_count_items"] else -1, row["videos"]),
             reverse=True,
-        )[:5]
+        )
     ]
     top_youtube_videos = [
         {
@@ -524,7 +524,7 @@ def metrics(db: Session, project_id: int) -> dict:
             "published_year": publication_year(item),
             "url": item.url,
         }
-        for item in sorted(youtube_items, key=lambda item: item.view_count or 0, reverse=True)[:5]
+        for item in sorted(youtube_items, key=lambda item: item.view_count or 0, reverse=True)
     ]
 
     def content_platform(item: MediaItem) -> str:
@@ -570,7 +570,7 @@ def metrics(db: Session, project_id: int) -> dict:
                 item.id,
             ),
             reverse=True,
-        )[:5]
+        )
     ]
 
     _, metric_flags = execution_flags(project) if project else ("MIDIATICO_SIMPLES", EXECUTION_PROFILE_DEFAULTS["MIDIATICO_SIMPLES"])
