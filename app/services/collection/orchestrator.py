@@ -440,7 +440,7 @@ def _make_video_sink(
         if provider == "duckduckgo":
             counters["duckduckgo_added"] = counters.get("duckduckgo_added", 0) + int(local.get("added", 0))
         state.added += int(local.get("added", 0))
-        if usable_rows or int(local.get("duplicates", 0)) > 0:
+        if usable_rows:
             state.resolved.add(query)
         return usable_rows
 

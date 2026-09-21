@@ -10,6 +10,7 @@ from app.models import GeneratedReport, Project
 from app.services.execution_profile import execution_flags
 from app.services.project_profile import project_payload
 from app.services.metrics import corpus_for_project, metrics, split_corpus, split_corpus_by_origin
+from app.report_fingerprint import request_fingerprint
 
 
 def hydrate_cached_report(db: Session, project: Project, generated: GeneratedReport) -> dict:
@@ -43,6 +44,9 @@ def hydrate_cached_report(db: Session, project: Project, generated: GeneratedRep
             else []
         )
     payload["qa"] = {"status": generated.qa_status, "findings": generated.qa_findings or []}
+    payload["version_no"] = generated.version_no or 1
+    payload["content_hash"] = generated.content_hash
+    payload["request_fingerprint"] = generated.request_fingerprint
     payload["cached_at"] = generated.generated_at.isoformat() if generated.generated_at else None
     return payload
 
@@ -67,7 +71,17 @@ def cached_report_for_topic(
     if collection_end:
         statement = statement.where(Project.collection_end == collection_end)
     row = db.execute(statement).first()
-    return hydrate_cached_report(db, *row) if row else None
+    if not row:
+        return None
+    project, generated = row
+    if (
+        generated.request_fingerprint
+        and request_fingerprint(project) != generated.request_fingerprint
+    ):
+        # O estado de entrada (janela, perfil, opções) mudou desde a geração:
+        # servir esse snapshot seria enganoso. Força uma nova geração.
+        return None
+    return hydrate_cached_report(db, project, generated)
 
 
 def cached_report_for_project(db: Session, project_id: int) -> dict | None:

@@ -49,6 +49,21 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: Session = Depends(get_db),
 ) -> AuthUser:
+    settings = get_settings()
+    if settings.local_auth_bypass:
+        # Perfil explicitamente local: preserva o fluxo de ownership, quotas
+        # e permissões sem exigir que a máquina alcance o Supabase Auth.
+        row = db.get(AppUser, "local-development")
+        if row is None:
+            row = AppUser(
+                id="local-development",
+                email="local@development.invalid",
+                plan="INSTITUCIONAL",
+                is_admin=True,
+            )
+            db.add(row)
+            db.commit()
+        return AuthUser(id=row.id, email=row.email, is_admin=True, plan="INSTITUCIONAL")
     if credentials is None or not credentials.credentials:
         raise HTTPException(401, "Autenticação necessária")
     try:

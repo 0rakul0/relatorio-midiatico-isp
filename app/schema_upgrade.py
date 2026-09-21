@@ -65,6 +65,10 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     "generated_reports": {
         "qa_status": "VARCHAR(30) DEFAULT 'PENDING'",
         "qa_findings": "JSON",
+        "current_version_id": "INTEGER",
+        "version_no": "INTEGER DEFAULT 1",
+        "content_hash": "VARCHAR(64)",
+        "request_fingerprint": "VARCHAR(64)",
     },
     "search_hits": {
         "media_origin": "VARCHAR(30) DEFAULT 'PORTAL_NOTICIAS'",

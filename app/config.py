@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     # Supabase Auth (login) — mesma URL/key do projeto.
     supabase_url: str | None = None
     supabase_key: str | None = None
+    # Somente para desenvolvimento local isolado. Nunca habilite em um
+    # ambiente acessível por outras pessoas ou ligado ao banco de produção.
+    local_auth_bypass: bool = False
     # Emails separados por vírgula promovidos a admin no login.
     admin_emails: str = ""
 
@@ -164,7 +167,9 @@ class Settings(BaseSettings):
     max_youtube_results_total: int = Field(default=120, ge=1, le=1000)
     max_youtube_results_per_task: int = Field(default=5, ge=1, le=10)
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # .env.local é um override não versionado para estações de desenvolvimento
+    # (por exemplo, SQLite quando o Postgres remoto não está acessível).
+    model_config = SettingsConfigDict(env_file=(".env", ".env.local"), extra="ignore")
 
 
 @lru_cache

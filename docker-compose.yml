@@ -12,3 +12,16 @@ services:
     volumes:
       - .:/app
     # Banco: Supabase via DATABASE_URL no .env (sem postgres local).
+
+  api-prod:
+    profiles: ["prod"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: isp-repercussao-api-prod
+    restart: unless-stopped
+    working_dir: /app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    # Sem bind mount e sem --reload: a imagem já é construída com uv sync --frozen --no-dev.

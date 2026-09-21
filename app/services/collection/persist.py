@@ -428,6 +428,7 @@ def persist_video_rows(
             media_origin = classify_media_origin(url, host)
             if not is_youtube_url(url):
                 flags.append("NON_YOUTUBE_RESULT")
+                counters["rejected"] += 1
             if (
                 task.is_priority
                 and enforce_priority_channel
@@ -447,9 +448,11 @@ def persist_video_rows(
         source_name = channel or host or "Fonte de video nao identificada"
         media_item: MediaItem | None = None
         normalized_row = {**row, "title": title, "content": description, "snippet": description}
-        if canonical and host and canonical not in existing_items and budget_remaining <= 0:
-            flags.append("OVER_NEW_ITEM_BUDGET")
-            counters["over_budget"] += 1
+        rejected = "NON_YOUTUBE_RESULT" in flags
+        if rejected or (canonical and host and canonical not in existing_items and budget_remaining <= 0):
+            if canonical and host and not rejected:
+                flags.append("OVER_NEW_ITEM_BUDGET")
+                counters["over_budget"] += 1
         elif canonical and host:
             media_item, duplicate = _consolidate_media_item(
                 db,

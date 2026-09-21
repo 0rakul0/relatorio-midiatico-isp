@@ -1,4 +1,5 @@
 from datetime import date
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
@@ -46,14 +47,15 @@ from app.services.collection.media_origin import classify_media_origin
 from app.topic_profile import requested_topic_window
 
 
-app = FastAPI(title="ISP Repercussão Midiática", version="0.3.1")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    ensure_schema()
+    yield
+
+
+app = FastAPI(title="ISP Repercussão Midiática", version="0.3.1", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(billing_router)
-
-
-@app.on_event("startup")
-def startup():
-    ensure_schema()
 
 
 def project_or_404(db: Session, user: AuthUser, project_id: int) -> Project:

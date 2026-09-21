@@ -7,8 +7,9 @@ from app.agent import get_report_agent
 from app.config import get_settings
 from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report
 from app.llm import llm_is_configured
-from app.models import Classification, GeneratedReport, MediaItem, OfficialFact, Project
+from app.models import Classification, GeneratedReport, MediaItem, OfficialFact, Project, ReportVersion
 from app.pdf_report import build_pdf
+from app.report_fingerprint import content_hash, request_fingerprint
 from app.report_qa import run_report_qa
 from app.schemas import StructuredMediaReportResponse
 from app.services.execution_profile import execution_flags
@@ -110,14 +111,52 @@ def _save_report(db: Session, project: Project, result: dict, grounding: dict) -
         "fact_evidence": grounding["fact_evidence"],
         "project": project_payload(project, for_report=True),
     }
+    digest = content_hash(payload)
+    fingerprint = request_fingerprint(project)
 
     saved = db.scalar(select(GeneratedReport).where(GeneratedReport.project_id == project.id))
+    if saved and saved.current_version_id and not saved.request_fingerprint:
+        # Legado sem fingerprint: passa a constar sem invalidar a versão atual.
+        saved.request_fingerprint = fingerprint
+        db.commit()
+    if saved and saved.current_version_id:
+        current = db.get(ReportVersion, saved.current_version_id)
+        if current and current.content_hash == digest:
+            # Mesma entrada/grounding => nenhuma versão estrutural nova.
+            return payload
+
+    previous_no = saved.version_no if saved and saved.version_no else 0
+    version = ReportVersion(
+        project_id=project.id,
+        version_no=previous_no + 1,
+        content_hash=digest,
+        body=payload,
+        qa_status="PENDING",
+        qa_findings=[],
+    )
+    db.add(version)
+    db.flush()
     if saved:
         saved.body = payload
         saved.qa_status = "PENDING"
         saved.qa_findings = []
+        saved.current_version_id = version.id
+        saved.version_no = version.version_no
+        saved.content_hash = digest
+        saved.request_fingerprint = fingerprint
     else:
-        db.add(GeneratedReport(project_id=project.id, body=payload, qa_status="PENDING", qa_findings=[]))
+        db.add(
+            GeneratedReport(
+                project_id=project.id,
+                body=payload,
+                qa_status="PENDING",
+                qa_findings=[],
+                current_version_id=version.id,
+                version_no=1,
+                content_hash=digest,
+                request_fingerprint=fingerprint,
+            )
+        )
     db.commit()
     return payload
 

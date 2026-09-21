@@ -7,7 +7,7 @@ from app.agent import get_report_agent
 from app.config import get_settings
 from app.llm import llm_is_configured
 from app.schemas import ReportQAResponse
-from app.models import GeneratedReport, Project
+from app.models import GeneratedReport, Project, ReportVersion
 
 
 FORBIDDEN_ZERO_CORPUS_PHRASES = [
@@ -195,6 +195,18 @@ def _llm_qa(payload: dict) -> list[dict]:
     return list(result.get("findings", []))
 
 
+def _dedupe_findings(findings: list[dict]) -> list[dict]:
+    severity_rank = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+    seen: dict[tuple[str, str], dict] = {}
+    for finding in findings:
+        key = (str(finding.get("code")), str(finding.get("message")))
+        rank = severity_rank.get(str(finding.get("severity")).upper(), 0)
+        previous = seen.get(key)
+        if previous is None or rank > severity_rank.get(str(previous.get("severity")).upper(), 0):
+            seen[key] = finding
+    return list(seen.values())
+
+
 def run_report_qa(db: Session, project: Project, payload: dict) -> dict:
     from app.billing import plan_allows
 
@@ -209,6 +221,7 @@ def run_report_qa(db: Session, project: Project, payload: dict) -> dict:
                 "message": "Auditoria narrativa por LLM desligada (ENABLE_LLM_QA=false); vale só o QA determinístico.",
             }
         )
+    findings = _dedupe_findings(findings)
     blocking = [finding for finding in findings if finding.get("severity") in {"CRITICAL", "HIGH"}]
     approved = not blocking
 
@@ -216,6 +229,11 @@ def run_report_qa(db: Session, project: Project, payload: dict) -> dict:
     if saved:
         saved.qa_status = "APPROVED" if approved else "REJECTED"
         saved.qa_findings = findings
+        if saved.current_version_id:
+            version = db.get(ReportVersion, saved.current_version_id)
+            if version:
+                version.qa_status = saved.qa_status
+                version.qa_findings = findings
     db.commit()
     return {
         "approved": approved,

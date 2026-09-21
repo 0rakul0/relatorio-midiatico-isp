@@ -22,6 +22,9 @@ dependencies = [
     "supabase>=2.31.0",
 ]
 
+[tool.setuptools.packages.find]
+include = ["app*"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0,<9",

@@ -1,5 +1,8 @@
 .env
+.env.local
 .venv/
+.venv-py313/
+*.egg-info/
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -13,7 +16,3 @@ tmp/
 /repercussao.db-shm
 /repercussao.db-wal
 /.agents
-/.idea
-*.xml
-/.idea
-/tests

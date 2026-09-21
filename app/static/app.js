@@ -1,6 +1,8 @@
 
 const $=s=>document.querySelector(s);
 const esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+const RAW_HTML='__raw__';
+const raw=v=>RAW_HTML+String(v??'');
 const api=async(path,opts={})=>{const r=await fetch(path,{headers:{'Content-Type':'application/json',...authHeaders()},...opts});if(r.status===401&&await refreshSession()){const r2=await fetch(path,{headers:{'Content-Type':'application/json',...authHeaders()},...opts});return handleApi(r2)}if(r.status===401){window.location.href='/login';throw new Error('Sessão expirada. Entre de novo.')}return handleApi(r)};
 async function handleApi(r){if(r.status===204)return null;const raw=await r.text();let d;try{d=raw?JSON.parse(raw):null}catch{d=null}if(!r.ok)throw new Error(d?.detail||raw||`Erro HTTP ${r.status}`);return d}
 
@@ -24,7 +26,7 @@ async function renderAuth(){
 $('#auth-logout').onclick=doLogout;
 $('#auth-refresh-quota').onclick=renderAuth;
 if(authState()){renderAuth();}else{window.location.href='/login';}
-const table=(headers,rows)=>`<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(cell=>`<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+const table=(headers,rows)=>`<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(cell=>{const s=String(cell??'');return `<td>${s.startsWith(RAW_HTML)?s.slice(RAW_HTML.length):esc(s)}</td>`}).join('')}</tr>`).join('')}</tbody></table></div>`;
 let currentProjectId=null,currentRunId=null,pollTimer=null;
 
 api('/health').then(d=>$('#api-status').textContent=`API conectada · ${d.version}`).catch(()=>$('#api-status').textContent='API indisponível');
@@ -53,34 +55,34 @@ function render(result){
   const d=result.report,p=result.project,m=result.metrics,qa=result.qa||{};
   const facts=result.fact_events||[];
   const factRows=facts.map(x=>[
-    esc(x.subject_name||'Não localizado'),
-    esc([x.institution,x.rank_or_role,x.unit].filter(Boolean).join(' / ')||'Não localizado'),
-    esc(x.death_date||x.event_date||'Não localizada'),
-    esc(x.cause||x.circumstance||'Não localizado'),
-    esc([x.address,x.neighborhood,x.city,x.state].filter(Boolean).join(', ')||'Não localizado'),
-    esc([x.death_place_name,x.death_address,x.death_neighborhood,x.death_city,x.death_state].filter(Boolean).join(', ')||'Não localizado'),
-    `<span class="${x.resolution_status==='SOURCE_CONFLICT'?'fact-conflict':x.resolution_status==='CONFIRMED'?'fact-confirmed':''}">${esc(factStatus(x.resolution_status))}</span><br><small>${esc(scopeLabel(x.primary_scope))}${x.conflict_fields?.length?` · conflito: ${esc(x.conflict_fields.join(', '))}`:''}</small>`
+    x.subject_name||'Não localizado',
+    [x.institution,x.rank_or_role,x.unit].filter(Boolean).join(' / ')||'Não localizado',
+    x.death_date||x.event_date||'Não localizada',
+    x.cause||x.circumstance||'Não localizado',
+    [x.address,x.neighborhood,x.city,x.state].filter(Boolean).join(', ')||'Não localizado',
+    [x.death_place_name,x.death_address,x.death_neighborhood,x.death_city,x.death_state].filter(Boolean).join(', ')||'Não localizado',
+    raw(`<span class="${x.resolution_status==='SOURCE_CONFLICT'?'fact-conflict':x.resolution_status==='CONFIRMED'?'fact-confirmed':''}">${esc(factStatus(x.resolution_status))}</span><br><small>${esc(scopeLabel(x.primary_scope))}${x.conflict_fields?.length?` · conflito: ${esc(x.conflict_fields.join(', '))}`:''}</small>`)
   ]);
-  const axes=(d.thematic_axes||[]).map(x=>[esc(x.axis),esc(x.anchor_data),esc(x.coverage)]);
-  const risks=(d.risk_assessment||[]).map(x=>[esc(x.dimension),esc(x.assessment),esc(x.evidence)]);
-  const kit=(d.press_kit||[]).map(x=>[esc(x.product),esc(x.purpose)]);
+  const axes=(d.thematic_axes||[]).map(x=>[x.axis,x.anchor_data,x.coverage]);
+  const risks=(d.risk_assessment||[]).map(x=>[x.dimension,x.assessment,x.evidence]);
+  const kit=(d.press_kit||[]).map(x=>[x.product,x.purpose]);
   const rawCorpus=result.corpus||[];
   const buckets=result.corpus_by_origin||bucketByOrigin(rawCorpus);
   const socialItems=buckets.redes_sociais||[];
   const youtubeItems=buckets.youtube||[];
   const portalItems=buckets.portal_noticias||[];
-  const corpusRow=(x,i)=>[String(i+1),esc(x.published_at||x.published_year||'N/D'),esc(x.source||x.domain||'Fonte aberta'),esc(x.title),x.url?`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">Abrir</a>`:'N/D'];
-  const annexTable=(rows)=>rows.length?table(['#','Data','Fonte','Título','URL'],rows.map(corpusRow)):'<p>Nenhum item validado nesta categoria para a janela observada.</p>';
-  const relatedSummary=`<p class="related-intro">${rawCorpus.length} item(ns) validado(s) como materialmente relacionados ao tema: ${socialItems.length} em mídias sociais, ${youtubeItems.length} no YouTube e ${portalItems.length} em portais de notícias. O detalhamento item a item está nos anexos.</p>`;
-  const linkCell=u=>u?`<a href="${esc(u)}" target="_blank" rel="noreferrer">Abrir</a>`:'N/D';
+  const corpusRow=(x,i)=>[String(i+1),x.published_at||x.published_year||'N/D',x.source||x.domain||'Fonte aberta',x.title,raw(`<span class="origin-badge ${originClass(x.origin)}">${esc(originLabel(x.origin))}</span>${x.search_source?`<br><small>via ${esc(x.search_source)}</small>`:''}`),x.url?raw(`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">Abrir</a>`):'N/D'];
+  const annexTable=(rows)=>rows.length?table(['#','Data','Fonte','Título','Origem','URL'],rows.map(corpusRow)):'<p>Nenhum item validado nesta categoria para a janela observada.</p>';
+  const relatedSummary=`<p class="related-intro">${rawCorpus.length} item(ns) validado(s) como materialmente relacionados ao tema: ${socialItems.length} em mídias sociais, ${youtubeItems.length} no YouTube e ${portalItems.length} em portais de notícias. O detalhamento item a item está nos anexos.</p><p class="note">Origem: <span class="origin-badge new">Nova coleta</span> = coletado desta vez; <span class="origin-badge reused">Corpus reutilizado</span> = reaproveitado de coleta anterior.</p>`;
+  const linkCell=u=>u?raw(`<a href="${esc(u)}" target="_blank" rel="noreferrer">Abrir</a>`):'N/D';
   const coveredPortals=(m.portal_checks||[]).filter(x=>x.result==='com cobertura auditável');
-  const portalSection=coveredPortals.length?`<h2>Checagem de portais prioritários</h2>${table(['Portal','Resultado','Evidência'],coveredPortals.map(x=>[esc(x.portal),esc(x.result),esc(x.evidence)]))}`:'';
+  const portalSection=coveredPortals.length?`<h2>Checagem de portais prioritários</h2>${table(['Portal','Resultado','Evidência'],coveredPortals.map(x=>[x.portal,x.result,x.evidence]))}`:'';
   const coveredChannels=(m.youtube_priority_channel_checks||[]).filter(x=>x.result==='com cobertura auditável');
-  const channelSection=coveredChannels.length?`<h2>Checagem de canais prioritários no YouTube</h2>${table(['Canal','Resultado','Vídeos','Visualizações','Link do vídeo de maior alcance'],coveredChannels.map(x=>[esc(x.channel),esc(x.result),esc(x.videos??0),esc(viewLabel(x.views)),linkCell(x.lead_url)]))}`:'';
+  const channelSection=coveredChannels.length?`<h2>Checagem de canais prioritários no YouTube</h2>${table(['Canal','Resultado','Vídeos','Visualizações','Link do vídeo de maior alcance'],coveredChannels.map(x=>[x.channel,x.result,x.videos??0,viewLabel(x.views),linkCell(x.lead_url)]))}`:'';
   const topChannels=(m.top_youtube_channels||[]);
-  const topChannelsSection=topChannels.length?`<h2>Top 5 canais no YouTube</h2>${table(['#','Canal','Vídeos validados','Visualizações','Link do vídeo de maior alcance'],topChannels.map((x,i)=>[String(i+1),esc(x.channel),esc(x.videos??0),esc(viewLabel(x.views)),linkCell(x.lead_url)]))}`:'';
+  const topChannelsSection=topChannels.length?`<h2>Top 5 canais no YouTube</h2>${table(['#','Canal','Vídeos validados','Visualizações','Link do vídeo de maior alcance'],topChannels.map((x,i)=>[String(i+1),x.channel,x.videos??0,viewLabel(x.views),linkCell(x.lead_url)]))}`:'';
   const topReach=(m.top_reach_contents||[]);
-  const topReachSection=topReach.length?`<h2>Top 5 conteúdos por alcance disponível</h2><p class="related-intro">Ranking considera apenas itens validados com métrica numérica de alcance disponível no corpus.</p>${table(['#','Plataforma','Fonte','Título','Alcance','URL'],topReach.map((x,i)=>[String(i+1),esc(x.platform),esc(x.source),esc(x.title),esc(viewLabel(x.reach)),linkCell(x.url)]))}`:'';
+  const topReachSection=topReach.length?`<h2>Top 5 conteúdos por alcance disponível</h2><p class="related-intro">Ranking considera apenas itens validados com métrica numérica de alcance disponível no corpus.</p>${table(['#','Plataforma','Fonte','Título','Alcance','URL'],topReach.map((x,i)=>[String(i+1),x.platform,x.source,x.title,viewLabel(x.reach),linkCell(x.url)]))}`:'';
   const annexBase=!!p.execution_flags?.enable_fact_layer?2:1;
   const annexLetter=i=>String.fromCharCode(65+annexBase+i);
   const windowLabel=(a,b,empty='Não delimitado')=>a&&b?`${esc(a)} a ${esc(b)}`:a?esc(a):b?esc(b):empty;
@@ -114,7 +116,7 @@ function render(result){
     <h2>Anexo ${annexLetter(0)} - Mídias Sociais</h2><p class="related-intro">Itens validados na janela de repercussão.</p>${annexTable(socialItems)}
     <h2>Anexo ${annexLetter(1)} - YouTube</h2><p class="related-intro">Itens validados na janela de repercussão.</p>${annexTable(youtubeItems)}
     <h2>Anexo ${annexLetter(2)} - Portais de Notícias</h2><p class="related-intro">Itens validados na janela de repercussão.</p>${annexTable(portalItems)}
-    ${qa.findings?.length?`<h2>Achados de QA</h2>${table(['Severidade','Código','Mensagem'],qa.findings.map(x=>[esc(x.severity),esc(x.code),esc(x.message)]))}`:''}
+    ${qa.findings?.length?`<h2>Achados de QA</h2>${table(['Severidade','Código','Mensagem'],qa.findings.map(x=>[x.severity,x.code,x.message]))}`:''}
     <div class="footer-note">Fato, fonte factual e item de repercussão são tratados como objetos distintos. Fontes posteriores podem confirmar um fato sem aumentar a repercussão do mês.</div>`;
   buildToc();
 }
@@ -398,17 +400,35 @@ async function finishRun(run){
     $('#progress').textContent=`Erro: ${run.error||run.message||'falha não identificada'}`;
   }
 }
-async function pollRun(){if(!currentRunId)return;try{const run=await api(`/runs/${currentRunId}`);renderRun(run);if(['COMPLETED','CANCELLED','FAILED'].includes(run.status))await finishRun(run)}catch(err){clearInterval(pollTimer);pollTimer=null;$('#progress').textContent=`Erro ao acompanhar execução: ${err.message}`;$('#submit').disabled=false}}
+let pollFailures=0,pollDelay=1000;
+function schedulePoll(ms){clearInterval(pollTimer);pollTimer=setInterval(pollRun,ms)}
+async function pollRun(){
+  if(!currentRunId)return;
+  try{
+    const run=await api(`/runs/${currentRunId}`);
+    pollFailures=0;pollDelay=1000;
+    renderRun(run);
+    if(['COMPLETED','CANCELLED','FAILED'].includes(run.status))await finishRun(run);
+    else schedulePoll(pollDelay);
+  }catch(err){
+    if(/sess/i.test(err.message)||err.status===401){clearInterval(pollTimer);pollTimer=null;return}
+    pollFailures+=1;
+    if(pollFailures>=10){clearInterval(pollTimer);pollTimer=null;$('#submit').disabled=false;$('#progress').textContent=`Erro ao acompanhar execução: ${err.message}`;return}
+    pollDelay=Math.min(pollDelay*2,15000);
+    schedulePoll(pollDelay);
+    $('#progress').textContent=`Conexão instável… tentando novamente em ${Math.round(pollDelay/1000)}s (tentativa ${pollFailures}).`;
+  }
+}
 
 async function loadHistory(){try{const rows=await api('/reports/history');const box=$('#history-list');if(!rows.length){box.innerHTML='<span class="note">Nenhum relatório salvo.</span>';return}box.innerHTML='';rows.forEach(row=>{const wrap=document.createElement('div');wrap.className='history-entry';const open=document.createElement('button');open.className='history-item';open.innerHTML=`<strong>${esc(row.topic)}</strong><span>${esc(row.generated_at||'')} · QA ${esc(row.qa_status||'PENDING')}</span>`;open.onclick=async()=>{const d=await api(`/reports/history/${row.id}`);currentProjectId=row.id;render(d.report)};const del=document.createElement('button');del.className='danger history-delete';del.textContent='×';del.onclick=async()=>{if(!confirm('Excluir esta versão e seus dados associados?'))return;await api(`/reports/history/${row.id}`,{method:'DELETE'});loadHistory()};wrap.append(open,del);box.appendChild(wrap)})}catch(e){$('#history-list').textContent=e.message}}
 
 $('#report-form').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#submit'),progress=$('#progress');btn.disabled=true;progress.classList.remove('hidden');$('#run-tracker').classList.add('hidden');try{
   progress.textContent='Preparando projeto…';
-  const payload={topic:$('#topic').value.trim()};
+  const payload={topic:$('#topic').value.trim(),execution_profile:$('#execution-profile').value||'AUTO'};
   for(const [id,key] of [['collection-start','collection_start'],['collection-end','collection_end'],['event-start','event_start'],['event-end','event_end']]){if($(`#${id}`).value)payload[key]=$(`#${id}`).value}
   const created=await api('/projects',{method:'POST',body:JSON.stringify(payload)});currentProjectId=created.id;
   const started=await api(`/projects/${created.id}/run-async`,{method:'POST'});currentRunId=started.run.run_id;renderRun(started.run);progress.textContent='Relatório em processamento.';
-  if(pollTimer)clearInterval(pollTimer);pollTimer=setInterval(pollRun,1000);await pollRun();
+  if(pollTimer)clearInterval(pollTimer);pollFailures=0;pollDelay=1000;schedulePoll(1000);await pollRun();
 }catch(err){progress.textContent=`Erro: ${err.message}`;btn.disabled=false;$('#stop-report').classList.add('hidden')}});
 
 $('#stop-report').onclick=async()=>{if(!currentRunId)return;try{const response=await api(`/runs/${currentRunId}/cancel`,{method:'POST'});renderRun(response.run);$('#progress').textContent='Cancelamento solicitado. A execução será encerrada no próximo ponto seguro.'}catch(e){alert(e.message)}};
