@@ -1,9 +1,9 @@
 """Conversa auditavel sobre o corpus coletado.
 
-O chat nao pesquisa a web. Antes de chamar a LLM, esta camada consolida as
-execucoes do mesmo tema, deduplica URLs e faz retrieval local sobre a pergunta.
-Tambem oferece uma visao "Todo o acervo" restrita aos projetos visiveis pelo
-usuario.
+A camada sempre faz retrieval local primeiro. O ReportAgent pode decidir chamar
+ferramentas externas (web, videos ou arXiv) quando o corpus nao bastar ou quando
+o usuario pedir pesquisa/atualizacao. Resultados externos nunca sao persistidos
+como corpus validado do relatorio.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import math
 import re
 import unicodedata
 from datetime import date
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,6 +23,7 @@ from app.cost_tracker import cost_context
 from app.llm import llm_is_configured
 from app.models import GeneratedReport, MediaItem, Project
 from app.schemas import ChatResponse
+from app.tools.registry import build_agent_tools
 
 
 _STOPWORDS = {
@@ -329,10 +331,48 @@ def _answer_from_items(
     selected = _rank_items(items, question, context_limit)
     members = _serialize_members(selected)
 
+    external_rows: list[dict] = []
+
+    def capture_search(tool_name: str):
+        def sink(rows: list[dict], provider: str, query: str) -> list[dict]:
+            for row in rows:
+                external_rows.append(
+                    {
+                        **dict(row),
+                        "_tool": tool_name,
+                        "_provider": provider,
+                        "_query": query,
+                    }
+                )
+            # Chat nunca grava esses resultados no corpus: apenas devolve as
+            # linhas intactas para a propria tool mostrar ao agente.
+            return rows
+        return sink
+
+    def capture_academic(rows: list[dict], provider: str) -> None:
+        for row in rows:
+            external_rows.append(
+                {
+                    **dict(row),
+                    "_tool": "pesquisar_artigos_arxiv",
+                    "_provider": provider,
+                    "_query": None,
+                }
+            )
+
+    tools = build_agent_tools(
+        enable_web=True,
+        enable_video=True,
+        enable_academic=True,
+        web_sink=capture_search("pesquisar_internet"),
+        video_sink=capture_search("pesquisar_videos"),
+        academic_sink=capture_academic,
+    )
+
     payload = {
         "project": project_payload,
         "retrieval": {
-            "strategy": "lexical_ranked",
+            "strategy": "lexical_ranked_then_agent_tools",
             "question": question,
             "corpus_size": len(items),
             "context_size": len(members),
@@ -346,13 +386,14 @@ def _answer_from_items(
             task="chat",
             payload=payload,
             response_model=ChatResponse,
-            tools=None,
+            tools=tools,
             max_output_tokens=4000,
+            max_tool_rounds=2,
         )
 
     used = [int(value) for value in (result.get("used_member_indices") or []) if value is not None]
     by_index = {member["index"]: member for member in members}
-    sources = []
+    sources: list[dict] = []
     for index in dict.fromkeys(used):
         member = by_index.get(index)
         if member is None:
@@ -366,8 +407,75 @@ def _answer_from_items(
                 "source_name": member.get("source_name"),
                 "media_origin": member.get("media_origin"),
                 "search_source": member.get("search_source"),
+                "source_scope": "CORPUS",
+                "tool": None,
+                "query": None,
             }
         )
+
+    captured_by_url: dict[str, dict] = {}
+    for row in external_rows:
+        url = str(row.get("url") or "").strip()
+        if not url:
+            continue
+        tool_name = str(row.get("_tool") or "pesquisar_internet")
+        if url in captured_by_url:
+            continue
+        parsed = urlparse(url)
+        if tool_name == "pesquisar_videos":
+            media_origin = "YOUTUBE"
+        elif tool_name == "pesquisar_artigos_arxiv":
+            media_origin = "ACADEMIC"
+        else:
+            media_origin = "WEB"
+
+        authors = list(row.get("authors") or [])
+        source_name = (
+            row.get("source_name")
+            or ("arXiv" if tool_name == "pesquisar_artigos_arxiv" else None)
+            or row.get("provider")
+            or row.get("_provider")
+        )
+        captured_by_url[url] = {
+            "title": row.get("title") or "Fonte externa",
+            "url": url,
+            "domain": parsed.netloc,
+            "published_at": row.get("published_at"),
+            "source_name": source_name,
+            "media_origin": media_origin,
+            "search_source": row.get("_provider") or row.get("provider"),
+            "source_scope": "EXTERNAL",
+            "tool": tool_name,
+            "query": row.get("_query"),
+            "authors": authors,
+        }
+
+    requested_external_urls = {
+        str(value).strip()
+        for value in (result.get("used_external_urls") or [])
+        if str(value).strip()
+    }
+    external_source_mode = "used"
+    if requested_external_urls:
+        external_sources = [
+            captured_by_url[url]
+            for url in requested_external_urls
+            if url in captured_by_url
+        ]
+    else:
+        # Se a tool foi chamada mas o modelo nao marcou URLs na saida final,
+        # preservamos uma lista curta como "consultada" para auditoria.
+        external_source_mode = "consulted"
+        external_sources = list(captured_by_url.values())[:12]
+
+    sources.extend(external_sources)
+    tools_used = list(
+        dict.fromkeys(
+            source.get("tool")
+            for source in external_sources
+            if source.get("tool")
+        )
+    )
 
     return {
         "answer": result.get("answer") or "",
@@ -375,7 +483,10 @@ def _answer_from_items(
         "corpus_size": len(items),
         "context_size": len(members),
         "project_count": project_payload.get("consolidated_runs") or project_payload.get("project_count") or 0,
-        "retrieval_strategy": "lexical_ranked",
+        "retrieval_strategy": "lexical_ranked_then_agent_tools",
+        "external_research_used": bool(external_sources),
+        "external_source_mode": external_source_mode if external_sources else None,
+        "tools_used": tools_used,
     }
 
 
