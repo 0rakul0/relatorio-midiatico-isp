@@ -14,7 +14,7 @@ from app.billing import check_quota, clamp_profile, plan_for, router as billing_
 from app.cost_tracker import cost_context
 from app.database import SessionLocal, get_db
 from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report, fact_events_for_report
-from app.orchestration import request_cancel, resume_run, run_snapshot, start_run
+from app.orchestration import request_cancel, resume_run, run_snapshot, start_qa_refinement, start_run
 from app.models import (
     AcademicPaper,
     Classification,
@@ -615,6 +615,16 @@ def resume_project_async(project_id: int, db: Session = Depends(get_db), user: A
     project_or_404(db, user, project_id)
     check_quota(db, user)
     return {"run": resume_run(project_id)}
+
+
+@app.post("/projects/{project_id}/refine-qa-async", status_code=202)
+def refine_project_qa_async(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project = project_or_404(db, user, project_id)
+    check_quota(db, user)
+    saved = db.scalar(select(GeneratedReport).where(GeneratedReport.project_id == project.id))
+    if not saved:
+        raise HTTPException(409, "O projeto ainda não possui relatório para refinar")
+    return {"run": start_qa_refinement(project_id)}
 
 
 @app.get("/runs/{run_id}")
