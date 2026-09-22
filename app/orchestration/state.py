@@ -284,6 +284,13 @@ def mark_run_completed(run_id: str, message: str = "Relatório concluído") -> N
         state.status = "COMPLETED"
         state.finished_at = _now()
         state.message = message
+        # Um run concluído não pode deixar etapa visualmente em RUNNING.
+        # Isso ocorria no refinamento quando a última mensagem de cobertura
+        # complementar era preservada até mark_run_completed().
+        for stage in state.stages.values():
+            if stage.status == "RUNNING":
+                stage.status = "DONE"
+                stage.finished_at = _now()
     _persist(state)
 
 
