@@ -488,12 +488,43 @@ def _query_purpose_map(db: Session, project_id: int) -> dict[int, str]:
     return {query_id: purpose for query_id, purpose in rows}
 
 
+def _is_annual_police_operation_project(project: Project) -> bool:
+    if project.project_type != "EVENT_TOPIC":
+        return False
+    if not project.event_start or not project.event_end:
+        return False
+    if (project.event_end - project.event_start).days < 180:
+        return False
+    haystack = normalized_text(
+        " ".join(
+            [
+                project.topic or "",
+                str((project.topic_profile or {}).get("event_anchor") or ""),
+            ]
+        )
+    )
+    return "operac" in haystack and "polic" in haystack
+
+
 def _item_should_feed_fact_layer(item: MediaItem, purpose_by_query: dict[int, str], project: Project) -> bool:
     purposes = set(item.discovery_purposes or [])
     if item.query_id and purpose_by_query.get(item.query_id):
         purposes.add(purpose_by_query[item.query_id])
     if purposes.intersection(FACT_PURPOSES):
         return True
+
+    # Em inventários anuais de operações policiais, matérias jornalísticas
+    # validadas também são evidência útil para individualizar operações.
+    # Antes, apenas itens vindos de consultas FACT/OFFICIAL alimentavam a
+    # extração, o que deixava operation_events vazio mesmo quando o corpus
+    # continha várias operações claramente citadas.
+    if _is_annual_police_operation_project(project) and item.status == "VALID":
+        item_text = normalized_text(
+            " ".join([item.title or "", item.snippet or "", (item.content or "")[:2000]])
+        )
+        if "operac" in item_text and ("polic" in item_text or "bope" in item_text):
+            return True
+
     # Em pauta factual, item manual também pode ser usado para prova factual.
     return project.project_type == "EVENT_TOPIC" and item.search_source == "manual"
 
@@ -512,6 +543,10 @@ def extract_project_facts(
     items = db.scalars(select(MediaItem).where(MediaItem.project_id == project.id)).all()
     settings = get_settings()
     extraction_cap = max(1, settings.max_fact_extractions)
+    if _is_annual_police_operation_project(project):
+        # Inventário anual prioriza recall: o teto factual padrão (20) era
+        # insuficiente para cobrir todas as operações/matérias ao longo de 12 meses.
+        extraction_cap = max(extraction_cap, 60)
     processed = events_extracted = errors = 0
 
     eligible_items = [item for item in items if _item_should_feed_fact_layer(item, purpose_by_query, project)]
