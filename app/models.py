@@ -371,6 +371,7 @@ class FactEvent(Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
 
     event_type: Mapped[str] = mapped_column(String(100), default="OTHER")
+    operation_name: Mapped[str | None] = mapped_column(String(300), nullable=True, index=True)
     subject_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
     normalized_subject_name: Mapped[str | None] = mapped_column(String(300), nullable=True, index=True)
     subject_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -428,6 +429,9 @@ class FactAssertion(Base):
 
     evidence_status: Mapped[str] = mapped_column(String(50), default="SUPPORTED")
     resolution_method: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Data em que a cifra/afirmação foi reportada na fonte. Em balanços de
+    # operações, isso permite distinguir atualização temporal de conflito real.
+    reported_at: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

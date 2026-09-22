@@ -257,6 +257,53 @@ def _media_task_order(tasks: list[ScoutTask]) -> list[ScoutTask]:
     return [*primary, *portals, *complementary, *other]
 
 
+_PT_MONTHS = [
+    "janeiro", "fevereiro", "marco", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+]
+
+
+def _annual_event_inventory_queries(project: Project) -> list[tuple[str, str]]:
+    """Varredura mensal para pautas anuais de operações/eventos recorrentes."""
+    settings = get_settings()
+    if not settings.enable_annual_event_inventory:
+        return []
+    if project.project_type != "EVENT_TOPIC" or not project.event_start or not project.event_end:
+        return []
+    if (project.event_end - project.event_start).days < 180:
+        return []
+
+    profile = project.topic_profile or {}
+    anchor = str(profile.get("event_anchor") or project.topic or "").strip()
+    anchor_norm = normalized_text(anchor)
+    topic_norm = normalized_text(project.topic)
+    # Ativa automaticamente para inventários de operações policiais.
+    if not ("operac" in anchor_norm or "operac" in topic_norm):
+        return []
+    if not ("polic" in anchor_norm or "polic" in topic_norm):
+        return []
+
+    locations = profile.get("locations") or ["Rio de Janeiro"]
+    location = str(locations[0] or "Rio de Janeiro")
+    start = project.event_start
+    end = project.event_end
+    queries: list[tuple[str, str]] = []
+    year_month = (start.year, start.month)
+    while year_month <= (end.year, end.month):
+        year, month = year_month
+        month_name = _PT_MONTHS[month - 1]
+        query = f'"operacao policial" "{location}" {month_name} {year}'
+        queries.append((query, f"Inventário mensal de operações policiais: {month_name}/{year}."))
+        if len(queries) >= settings.max_annual_event_inventory_queries:
+            break
+        month += 1
+        if month == 13:
+            year += 1
+            month = 1
+        year_month = (year, month)
+    return queries
+
+
 def _persist_strategy_queries(
     db: Session,
     project: Project,
@@ -326,6 +373,23 @@ def _persist_strategy_queries(
             media_added += 1
 
     if flags["enable_fact_layer"]:
+        # Para inventários anuais, a consulta única do planejador é
+        # complementada por uma varredura mensal determinística. Isso aumenta
+        # recall sem remover os limites globais nem gerar paráfrases infinitas.
+        for query, rationale in _annual_event_inventory_queries(project):
+            row = _add_query(
+                db,
+                project,
+                existing,
+                query=query,
+                kind="fact_inventory_month",
+                purpose="FACT_DISCOVERY",
+                rationale=rationale,
+                priority=1,
+            )
+            if row:
+                created.append(row)
+
         fact_query = str(strategy.get("fact_query") or "").strip()
         if settings.max_fact_queries > 0 and fact_query:
             row = _add_query(

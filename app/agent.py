@@ -229,6 +229,9 @@ Regras:
 - suspeita, hipotese, investigacao ou versao de parte nao vira fato confirmado;
 - nao complete informacao ausente;
 - preserve ambiguidades;
+- para operações policiais, extraia operation_name quando a fonte nomear a operação;
+- extraia death_count, arrest_count, weapon_count e rifle_count quando explicitamente informados;
+- cifras de balanço podem ser atualizações sucessivas da MESMA operação; não conclua conflito só porque o número mudou;
 - cada valor nao nulo deve ter evidencia textual curta da propria fonte;
 - basis=EXPLICIT para valor escrito;
 - basis=RELATIVE_TO_PUBLICATION somente para expressao relativa inequivoca;
@@ -315,6 +318,7 @@ Use exclusivamente metricas, fatos oficiais, camada factual resolvida, evidencia
 
 O recorte principal e obrigatorio. Nao crie numeros, nao amplie janelas e nao substitua dado mensal por acumulado.
 A camada factual e deterministica: nao altere nomes, datas, locais, cargos, instituicoes, causas, status ou conflitos.
+Quando fact_events trouxer count_timelines, apresente cifras sucessivas como evolução do balanço da mesma operação, com data/fonte, e não como operações distintas ou conflito automático.
 Nunca converta:
 - "nenhum item validado na amostra" em "nao houve cobertura";
 - "nao foi localizado" em "nao ocorreu";
@@ -385,6 +389,7 @@ Verifique:
 - fato nao localizado nao transformado em inexistencia;
 - itens fora da janela midiatica nao contados como repercussao;
 - conflitos entre fontes explicitamente marcados;
+- NÃO trate automaticamente como conflito cifras sucessivas do mesmo evento/operação. Se fact_events.count_timelines mostrar evolução temporal atribuída (ex.: 60 → 64 → 119 → 121), audite se o relatório a descreve como atualização de balanço. Só marque conflito bloqueador quando valores comparáveis para o mesmo momento/definição permanecerem incompatíveis;
 - porcentagem de mencoes ao ISP nao apresentada como protagonismo sem evidencia adicional;
 - em produto institucional, vinculo documental com o produto/edicao;
 - ausencia de datas ficticias, vazias ou placeholders tecnicos.

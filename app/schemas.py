@@ -370,6 +370,11 @@ class FactEventOutput(StrictLLMOutput):
     professional_status: FactFieldOutput
     event_date: FactFieldOutput
     death_date: FactFieldOutput
+    operation_name: FactFieldOutput
+    death_count: FactFieldOutput
+    arrest_count: FactFieldOutput
+    weapon_count: FactFieldOutput
+    rifle_count: FactFieldOutput
     cause_category: FactFieldOutput
     cause_description: FactFieldOutput
     circumstance: FactFieldOutput

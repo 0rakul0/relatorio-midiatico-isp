@@ -20,6 +20,7 @@ from app.topic_profile import normalized_text
 FACT_PURPOSES = {"FACT_DISCOVERY", "OFFICIAL_FACT", "NOMINAL_FOLLOWUP"}
 RESOLVABLE_FIELDS = [
     "subject_name",
+    "operation_name",
     "institution",
     "rank_or_role",
     "unit",
@@ -38,6 +39,13 @@ RESOLVABLE_FIELDS = [
     "death_neighborhood",
     "death_city",
     "death_state",
+]
+
+TIME_VARYING_COUNT_FIELDS = [
+    "death_count",
+    "arrest_count",
+    "weapon_count",
+    "rifle_count",
 ]
 
 
@@ -133,6 +141,7 @@ def event_identity_key(extracted: dict) -> str | None:
     retorna None e o chamador deve manter os eventos separados.
     """
     name = normalize_person_name((extracted.get("subject_name") or {}).get("value"))
+    operation_name = normalize_fact_value("operation_name", _extracted_value(extracted, "operation_name"))
     event_date = _parse_iso_date((extracted.get("event_date") or {}).get("value"))
     death_date = _parse_iso_date((extracted.get("death_date") or {}).get("value"))
     institution = normalize_fact_value("institution", _extracted_value(extracted, "institution"))
@@ -142,6 +151,8 @@ def event_identity_key(extracted: dict) -> str | None:
     parts: list[str] = []
     if name:
         parts.append(f"name={name}")
+    if operation_name:
+        parts.append(f"operation={operation_name}")
     event_date_iso = (event_date or death_date)
     if event_date_iso:
         parts.append(f"date={event_date_iso.isoformat()}")
@@ -154,7 +165,9 @@ def event_identity_key(extracted: dict) -> str | None:
 
     if name and (event_date_iso or institution or unit):
         return "|".join(parts)
-    if event_date_iso and institution and city:
+    if operation_name and event_date_iso and city:
+        return "|".join(parts)
+    if event_date_iso and institution and city and not operation_name:
         return "|".join(parts)
     return None
 
@@ -358,11 +371,13 @@ def _get_or_create_event(db: Session, project: Project, extracted: dict) -> Fact
         return event
 
     provisional_event_date = _parse_iso_date((extracted.get("event_date") or {}).get("value"))
+    provisional_operation_name = (extracted.get("operation_name") or {}).get("value")
     provisional_institution = (extracted.get("institution") or {}).get("value")
     provisional_city = (extracted.get("city") or {}).get("value")
     event = FactEvent(
         project_id=project.id,
         event_type=(extracted.get("event_type") or (project.topic_profile or {}).get("event_type") or "OTHER")[:100],
+        operation_name=provisional_operation_name,
         subject_name=name,
         normalized_subject_name=normalize_person_name(name),
         subject_type=extracted.get("subject_type"),
@@ -411,7 +426,7 @@ def persist_extracted_event(
     event = _get_or_create_event(db, project, extracted)
     source_type = source_type_for_item(item)
 
-    for field_name in RESOLVABLE_FIELDS:
+    for field_name in [*RESOLVABLE_FIELDS, *TIME_VARYING_COUNT_FIELDS]:
         fact = extracted.get(field_name) or {}
         value = fact.get("value")
         evidence = fact.get("evidence")
@@ -436,6 +451,7 @@ def persist_extracted_event(
                 evidence=evidence[:4000],
                 evidence_status="SUPPORTED",
                 resolution_method=basis,
+                reported_at=item.published_at,
             )
         )
 
@@ -597,6 +613,48 @@ def _set_scope_audit_marker(project: Project, event: FactEvent) -> None:
     event.extra_attributes = extra
 
 
+def _count_history(assertions: list[FactAssertion], field_name: str) -> list[dict]:
+    rows = [a for a in assertions if a.field_name == field_name and a.value_text]
+    rows.sort(key=lambda a: (a.reported_at or date.min, a.id or 0))
+    return [
+        {
+            "value": a.value_text,
+            "reported_at": a.reported_at.isoformat() if a.reported_at else None,
+            "source_name": a.source_name,
+            "source_type": a.source_type,
+            "source_url": a.source_url,
+            "evidence": a.evidence,
+        }
+        for a in rows
+    ]
+
+
+def _store_time_varying_counts(event: FactEvent, assertions: list[FactAssertion]) -> None:
+    """Preserva evolução de balanços sem convertê-la em conflito estrutural.
+
+    Uma operação em andamento pode ter 60, 64, 119, 121... mortos conforme o
+    balanço é atualizado. Esses valores são uma série temporal atribuída às
+    fontes, não valores simultâneos obrigatoriamente incompatíveis.
+    """
+    extra = dict(event.extra_attributes or {})
+    timelines = dict(extra.get("count_timelines") or {})
+    for field_name in TIME_VARYING_COUNT_FIELDS:
+        history = _count_history(assertions, field_name)
+        if not history:
+            continue
+        timelines[field_name] = history
+        latest_official = next(
+            (row for row in reversed(history) if row.get("source_type") == "OFFICIAL"),
+            None,
+        )
+        extra[f"{field_name}_latest_official"] = latest_official
+        extra[f"{field_name}_latest_reported"] = history[-1]
+    if timelines:
+        extra["count_timelines"] = timelines
+        extra["counts_are_time_varying"] = True
+    event.extra_attributes = extra
+
+
 def resolve_event(db: Session, project: Project, event: FactEvent) -> None:
     assertions = db.scalars(select(FactAssertion).where(FactAssertion.event_id == event.id)).all()
     conflict_fields: list[str] = []
@@ -625,6 +683,10 @@ def resolve_event(db: Session, project: Project, event: FactEvent) -> None:
         if field_name == "subject_name":
             event.normalized_subject_name = normalize_person_name(value)
 
+    _store_time_varying_counts(event, assertions)
+    # Campos de contagem são deliberadamente excluídos de conflict_fields:
+    # divergência temporal é representada em count_timelines. Conflito factual
+    # continua valendo para campos estáveis (data, local, identidade etc.).
     event.conflict_fields = sorted(set(conflict_fields))
     event.primary_scope = _scope_from_profile(project, event)
 
@@ -703,6 +765,7 @@ def fact_events_for_report(db: Session, project_id: int) -> list[dict]:
         {
             "id": event.id,
             "event_type": event.event_type,
+            "operation_name": event.operation_name,
             "subject_name": event.subject_name,
             "subject_type": event.subject_type,
             "institution": event.institution,
@@ -726,6 +789,10 @@ def fact_events_for_report(db: Session, project_id: int) -> list[dict]:
             "primary_scope": event.primary_scope,
             "resolution_status": event.resolution_status,
             "conflict_fields": event.conflict_fields or [],
+            "count_timelines": (event.extra_attributes or {}).get("count_timelines") or {},
+            "counts_are_time_varying": bool((event.extra_attributes or {}).get("counts_are_time_varying")),
+            "death_count_latest_official": (event.extra_attributes or {}).get("death_count_latest_official"),
+            "death_count_latest_reported": (event.extra_attributes or {}).get("death_count_latest_reported"),
             "report_exclusion_reason": fact_event_exclusion_reason(project, event) if project else None,
         }
         for event in events

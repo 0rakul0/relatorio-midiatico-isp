@@ -88,6 +88,11 @@ class Settings(BaseSettings):
     # This is a safety ceiling, not a target that the planner should fill.
     max_media_queries: int = Field(default=12, ge=1, le=30)
     max_fact_queries: int = Field(default=1, ge=0, le=5)
+    # Para pautas anuais de operações/eventos recorrentes, uma única consulta
+    # factual tem baixo recall. O modo inventário distribui a descoberta pelos
+    # meses do intervalo em vez de remover limites e gerar consultas infinitas.
+    enable_annual_event_inventory: bool = True
+    max_annual_event_inventory_queries: int = Field(default=12, ge=1, le=24)
     max_official_queries: int = Field(default=3, ge=0, le=10)
     max_nominal_queries: int = Field(default=12, ge=0, le=50)
 

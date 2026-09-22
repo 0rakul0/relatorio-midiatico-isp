@@ -87,6 +87,12 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "semantic_score": "FLOAT",
         "reranker_score": "FLOAT",
     },
+    "fact_events": {
+        "operation_name": "VARCHAR(300)",
+    },
+    "fact_assertions": {
+        "reported_at": "DATE",
+    },
     "academic_papers": {
         "title_ptbr": "TEXT",
         "abstract_ptbr": "TEXT",
