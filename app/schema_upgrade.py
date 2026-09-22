@@ -111,19 +111,27 @@ def _ddl_for_dialect(dialect_name: str, column_name: str, ddl: str) -> str:
 
 
 def ensure_schema() -> None:
-    # Cria tabelas novas (inclusive search_hits) sem tocar nas existentes.
-    Base.metadata.create_all(engine)
-
-    inspector = inspect(engine)
-    existing_tables = set(inspector.get_table_names())
     dialect_name = engine.dialect.name
 
+    # Todas as alterações de schema ficam no mesmo transaction scope. Em
+    # PostgreSQL, o advisory lock serializa startups concorrentes apontando
+    # para o mesmo banco (por exemplo, dois processos uvicorn/reload ou duas
+    # estações usando o mesmo Supabase).
     with engine.begin() as connection:
         if dialect_name == "postgresql":
-            # Defesa em profundidade no Supabase/bancos gerenciados: RLS
-            # ativado em todas as tabelas do app. Sem policies, anon e
-            # authenticated são negados por padrão; o backend acessa via
-            # role postgres/service_role, que bypassa RLS. Idempotente.
+            connection.execute(
+                text("SELECT pg_advisory_xact_lock(741983214)")
+            )
+
+        # Cria tabelas novas usando a MESMA conexão protegida pelo lock.
+        Base.metadata.create_all(bind=connection)
+
+        inspector = inspect(connection)
+        existing_tables = set(inspector.get_table_names())
+
+        if dialect_name == "postgresql":
+            # Defesa em profundidade no Supabase/bancos gerenciados: habilita
+            # RLS somente onde ainda está desativado.
             unprotected = connection.execute(
                 text(
                     "SELECT tablename FROM pg_tables "
@@ -132,15 +140,29 @@ def ensure_schema() -> None:
             ).scalars().all()
             for table_name in unprotected:
                 if table_name in Base.metadata.tables:
-                    connection.execute(text(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY"))
-            # O app nunca usa a Data API: remove GRANTs de anon/authenticated
-            # (auto-exposição do Supabase) nas tabelas do app. Idempotente.
-            api_roles = connection.execute(
-                text("SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated')")
-            ).scalars().all()
-            for table_name in Base.metadata.tables:
-                for role in api_roles:
-                    connection.execute(text(f"REVOKE ALL ON TABLE {table_name} FROM {role}"))
+                    connection.execute(
+                        text(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY")
+                    )
+
+            # REVOKE altera o catálogo do PostgreSQL. Fazer isso em todo startup
+            # sem verificar o estado causava 'tuple concurrently updated' no
+            # Supabase. Agora só revogamos quando o grant realmente existe,
+            # ainda sob o advisory lock acima.
+            granted_pairs = connection.execute(
+                text(
+                    "SELECT grantee, table_name "
+                    "FROM information_schema.role_table_grants "
+                    "WHERE table_schema = 'public' "
+                    "AND grantee IN ('anon', 'authenticated')"
+                )
+            ).all()
+            app_tables = set(Base.metadata.tables)
+            for role, table_name in granted_pairs:
+                if table_name in app_tables:
+                    connection.execute(
+                        text(f"REVOKE ALL ON TABLE {table_name} FROM {role}")
+                    )
+
         for table_name, columns in ADDITIVE_COLUMNS.items():
             if table_name not in existing_tables:
                 continue
@@ -160,9 +182,6 @@ def ensure_schema() -> None:
                 )
                 present.add(column_name)
 
-        # create_all() não cria índices novos em tabelas que já existiam.
-        # Mantemos estes índices explícitos e idempotentes porque o reuso do
-        # corpus consulta ambos os campos para deduplicação global.
         if "corpus_documents" in existing_tables:
             connection.execute(
                 text(
@@ -177,9 +196,8 @@ def ensure_schema() -> None:
                 )
             )
 
-        # Colunas de texto analítico não devem ter limite artificial de 300
-        # caracteres. Bancos PostgreSQL legados podem ter sido criados quando
-        # Classification.framing ainda era VARCHAR(300).
+        # Bancos PostgreSQL legados podem ter Classification.framing como
+        # VARCHAR(300). O conteúdo analítico deve ser TEXT.
         if dialect_name == "postgresql" and "classifications" in existing_tables:
             framing_type = next(
                 (
