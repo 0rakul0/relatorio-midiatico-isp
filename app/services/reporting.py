@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.agent import get_report_agent
 from app.config import get_settings
-from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report, operation_events_for_report
+from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report, operation_events_for_report, operation_mentions_for_report
 from app.llm import llm_is_configured
 from app.models import GeneratedReport, OfficialFact, Project, ReportVersion
 from app.pdf_report import build_pdf
@@ -28,6 +28,8 @@ def _writer_grounding(db: Session, project: Project) -> dict:
     execution_profile, flags = execution_flags(project)
     fact_events = fact_events_for_main_report(db, project.id) if flags["enable_fact_layer"] else []
     operation_events = operation_events_for_report(db, project.id) if flags["enable_fact_layer"] else []
+    if flags["enable_fact_layer"] and not operation_events:
+        operation_events = operation_mentions_for_report(db, project.id)
     fact_evidence = (
         fact_assertions_for_report(db, project.id, main_report_only=True)
         if flags["enable_fact_layer"]
