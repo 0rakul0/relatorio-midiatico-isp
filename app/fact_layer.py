@@ -942,6 +942,67 @@ def operation_events_for_report(db: Session, project_id: int) -> list[dict]:
     ]
 
 
+
+def operation_mentions_for_report(db: Session, project_id: int) -> list[dict]:
+    """Fallback auditável quando a tabela-mestra ainda não foi materializada.
+
+    Usa apenas itens VALID que citam operação no próprio título/snippet. Não
+    transforma a menção em fato confirmado: inventory_status deixa explícito
+    que se trata de uma menção midiática provisória.
+    """
+    items = db.scalars(
+        select(MediaItem)
+        .where(MediaItem.project_id == project_id, MediaItem.status == "VALID")
+        .order_by(MediaItem.published_at.asc().nullslast(), MediaItem.id.asc())
+    ).all()
+
+    grouped: dict[tuple[str, str], dict] = {}
+    named_pattern = re.compile(
+        r"\b(opera(?:ç|c)[aã]o\s+[A-ZÁÉÍÓÚÂÊÔÃÕÇ][^:;|—–-]{1,80})",
+        flags=re.IGNORECASE,
+    )
+    for item in items:
+        haystack = " ".join([item.title or "", item.snippet or ""])
+        if "operac" not in normalized_text(haystack):
+            continue
+        match = named_pattern.search(item.title or "")
+        if match:
+            label = " ".join(match.group(1).split()).strip()
+        else:
+            label = item.title or "Operação policial citada"
+        event_date = item.published_at.isoformat() if item.published_at else None
+        key = (event_date or "sem-data", normalized_text(label))
+        row = grouped.setdefault(
+            key,
+            {
+                "id": None,
+                "fact_event_id": None,
+                "operation_name": label,
+                "event_date": event_date,
+                "city": None,
+                "state": "RJ",
+                "neighborhoods": [],
+                "forces": [],
+                "resolution_status": "PROVISIONAL_MEDIA_MENTION",
+                "inventory_status": "PROVISIONAL_MEDIA_MENTION",
+                "official_supported": False,
+                "official_source_count": 0,
+                "media_source_count": 0,
+                "repercussion_count": 0,
+                "source_urls": [],
+                "official_urls": [],
+                "media_urls": [],
+                "count_timelines": {},
+            },
+        )
+        if item.url and item.url not in row["media_urls"]:
+            row["media_urls"].append(item.url)
+            row["source_urls"].append(item.url)
+        row["media_source_count"] = len(row["media_urls"])
+        row["repercussion_count"] = len(row["media_urls"])
+
+    return list(grouped.values())
+
 def operation_inventory_summary(db: Session, project: Project) -> dict:
     operations = operation_events_for_report(db, project.id)
     if not project.event_start or not project.event_end:
