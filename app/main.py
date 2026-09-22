@@ -81,7 +81,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="ISP Repercussão Midiática", version="0.3.1", lifespan=lifespan)
+app = FastAPI(title="ISP Repercussão Midiática", version="0.3.2", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(billing_router)
 
@@ -101,7 +101,8 @@ def health():
     settings = get_settings()
     return {
         "status": "ok",
-        "version": "0.3.1",
+        "version": "0.3.2",
+        "features": {"qa_history_refinement": True},
         "search_limits": {
             "max_search_results": settings.max_search_results,
             "max_results_per_query": settings.max_results_per_query,
@@ -262,6 +263,16 @@ def cached_report(
         owner_id=None if user.is_admin else user.id,
     )
     return {"cached": bool(report), "report": report}
+
+
+@app.post("/reports/history/{project_id}/refine", status_code=202)
+def refine_historical_report(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    project = project_or_404(db, user, project_id)
+    check_quota(db, user)
+    saved = db.scalar(select(GeneratedReport).where(GeneratedReport.project_id == project.id))
+    if not saved:
+        raise HTTPException(409, "O projeto ainda não possui relatório para refinar")
+    return {"run": start_qa_refinement(project_id)}
 
 
 @app.get("/reports/history/{project_id}")
