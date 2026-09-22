@@ -571,7 +571,7 @@ Exemplo de `.env`:
 DATABASE_URL=postgresql+psycopg://relatorio:relatorio@localhost:5432/repercussao
 
 OPENAI_API_KEY=...
-OPENAI_MODEL=gpt-4.1-mini
+OPENAI_MODEL=gpt-5-mini
 
 DUCKDUCKGO_REGION=br-pt
 ENABLE_CORPUS_REUSE=true
