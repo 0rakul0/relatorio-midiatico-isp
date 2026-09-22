@@ -301,6 +301,7 @@ function drawPackedWordCloud(containerSelector,cloud){
 function render(result){
   const d=result.report,p=result.project,m=result.metrics,qa=result.qa||{};
   const facts=result.fact_events||[];
+  const operations=result.operation_events||m.operation_events||[];
   const factRows=facts.map(x=>[
     x.subject_name||'Não localizado',
     [x.institution,x.rank_or_role,x.unit].filter(Boolean).join(' / ')||'Não localizado',
@@ -373,6 +374,20 @@ function render(result){
   const annexLetter=i=>String.fromCharCode(65+annexBase+i);
   const windowLabel=(a,b,empty='Não delimitado')=>a&&b?`${esc(a)} a ${esc(b)}`:a?esc(a):b?esc(b):empty;
   const factLayerEnabled=!!p.execution_flags?.enable_fact_layer;
+  const operationRows=operations.map((x,i)=>{
+    const date=String(x.event_date||'');
+    const month=/^\d{4}-\d{2}/.test(date)?date.slice(0,7):'N/D';
+    const location=[...(x.neighborhoods||[]),x.city,x.state].filter(Boolean).join(', ')||'N/D';
+    const forces=(x.forces||[]).join(' / ')||'N/D';
+    const links=[];
+    (x.official_urls||[]).forEach((u,j)=>links.push(`<a href="${esc(u)}" target="_blank" rel="noreferrer">Oficial ${j+1}</a>`));
+    (x.media_urls||[]).forEach((u,j)=>links.push(`<a href="${esc(u)}" target="_blank" rel="noreferrer">Mídia ${j+1}</a>`));
+    const linkHtml=links.length?raw(links.join(' · ')):'N/D';
+    return [String(i+1),month,date||'N/D',x.operation_name||'Operação não nomeada',location,forces,String(x.repercussion_count??0),linkHtml];
+  });
+  const operationSection=factLayerEnabled&&operations.length?
+    `<h2>Inventário de operações identificadas</h2><p class="related-intro">Cada linha representa uma operação/evento individualizado na camada factual. Os links oficiais sustentam a identificação factual; os links de mídia mostram a repercussão associada localizada no corpus.</p>${table(['#','Mês','Data','Operação','Local','Força(s)','Matérias','Links'],operationRows)}`
+    :'';
   const factSection=factLayerEnabled?`<h2>Camada de Fatos Verificados</h2><p>${esc(d.fact_layer_intro||'')}</p>${facts.length?table(['Pessoa','Vínculo','Data','Fato / causa','Local do fato','Local da morte','Situação'],factRows):'<p>Nenhum fato individual foi suficientemente estruturado na amostra factual.</p>'}`:'';
   const contextMeta=p.project_type==='INSTITUTIONAL_PRODUCT'?`<div><b>Lançamento</b><br>${esc(p.launch_date||'Não confirmado')}</div>`:`<div><b>Janela dos fatos</b><br>${windowLabel(p.event_start,p.event_end)}</div>`;
   $('#report-layout').classList.remove('hidden');
@@ -385,6 +400,7 @@ function render(result){
     ${academicSection}
     <h2>Itens relacionados encontrados</h2>
     ${relatedSummary}
+    ${operationSection}
     ${factSection}
     <h2>Abertura</h2><p>${esc(d.opening)}</p>
     <h2>I. Panorama da Repercussão</h2><p>${esc(d.panorama)}</p>
