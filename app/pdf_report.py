@@ -562,9 +562,9 @@ def build_pdf(data: dict) -> bytes:
             forces = " / ".join(operation.get("forces") or []) or "N/D"
             links = []
             for index, url in enumerate(operation.get("official_urls") or [], start=1):
-                links.append(f'<link href="{escape(str(url))}">Oficial {index}</link>')
+                links.append({"href": str(url), "label": f"Oficial {index}"})
             for index, url in enumerate(operation.get("media_urls") or [], start=1):
-                links.append(f'<link href="{escape(str(url))}">Mídia {index}</link>')
+                links.append({"href": str(url), "label": f"Mídia {index}"})
             op_rows.append([
                 month,
                 event_date or "N/D",
@@ -572,7 +572,7 @@ def build_pdf(data: dict) -> bytes:
                 location,
                 forces,
                 str(operation.get("repercussion_count") or 0),
-                Paragraph(" · ".join(links) if links else "N/D", small),
+                {"_pdf_links": links},
             ])
         story.append(_table(
             op_rows,
@@ -937,6 +937,18 @@ def _table(
     nowrap_columns = set(nowrap_columns or set())
 
     def cell_paragraph(cell: object, cell_style, row_index: int, column_index: int):
+        if isinstance(cell, dict) and "_pdf_links" in cell:
+            parts = []
+            for link_item in cell.get("_pdf_links") or []:
+                href = _text((link_item or {}).get("href")).strip()
+                label = escape(_text((link_item or {}).get("label") or "Abrir"))
+                if not href:
+                    continue
+                safe_href = escape(href, {'"': '&quot;', "'": '&apos;'})
+                parts.append(
+                    f'<link href="{safe_href}" color="#1F5E8C"><u>{label}</u></link>'
+                )
+            return Paragraph(" · ".join(parts) if parts else "N/D", cell_style)
         if isinstance(cell, dict) and "_pdf_link" in cell:
             href = _text(cell.get("_pdf_link")).strip()
             label = escape(_text(cell.get("label") or "Abrir"))
