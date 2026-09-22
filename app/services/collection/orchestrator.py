@@ -147,11 +147,18 @@ def _make_web_context(
                 "max_results": 1,
             }
 
-        per_query = (
-            settings.max_priority_results_per_query
-            if entry.kind == "media_portal"
-            else settings.max_results_per_query
-        )
+        if str(entry.purpose or "") == "OFFICIAL_FACT":
+            per_query = settings.max_official_search_results
+        elif str(entry.purpose or "") == "FACT_DISCOVERY":
+            per_query = settings.max_fact_search_results
+        elif str(entry.purpose or "") == "NOMINAL_FOLLOWUP":
+            per_query = settings.max_nominal_search_results
+        else:
+            per_query = (
+                settings.max_priority_results_per_query
+                if entry.kind == "media_portal"
+                else settings.max_results_per_query
+            )
         # Do not pre-filter at the provider by date. The query text keeps the
         # requested temporal context, while every returned hit is preserved and
         # the real window decision happens later in validation/fact extraction.

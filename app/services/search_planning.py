@@ -12,7 +12,11 @@ from app.llm import llm_is_configured
 from app.media_scout import MediaScout, ScoutTask
 from app.models import OfficialFact, Project, SearchQuery
 from app.schemas import GapFillResponse, ReportPlanResponse
-from app.source_registry import OFFICIAL_SECURITY_SOURCES, PRIORITY_MEDIA_SOURCES
+from app.source_registry import (
+    OFFICIAL_OPERATION_INVENTORY_SOURCES,
+    OFFICIAL_SECURITY_SOURCES,
+    PRIORITY_MEDIA_SOURCES,
+)
 from app.topic_profile import build_topic_profile, normalized_text
 from app.services.collection.guards import query_preserves_project_anchor
 from app.services.execution_profile import (
@@ -304,6 +308,48 @@ def _annual_event_inventory_queries(project: Project) -> list[tuple[str, str]]:
     return queries
 
 
+def _official_operation_inventory_queries(project: Project) -> list[tuple[str, str, str]]:
+    """Descoberta mensal em fontes primárias para inventários anuais.
+
+    Retorna (query, kind, rationale). A mídia continua separada: estas consultas
+    alimentam FACT/official evidence, não métricas de repercussão.
+    """
+    settings = get_settings()
+    if not settings.enable_official_annual_inventory:
+        return []
+    if not project.event_start or not project.event_end:
+        return []
+    if (project.event_end - project.event_start).days < 180:
+        return []
+
+    profile = project.topic_profile or {}
+    anchor = str(profile.get("event_anchor") or project.topic or "").strip()
+    normalized = normalized_text(anchor + " " + project.topic)
+    if "operac" not in normalized or "polic" not in normalized:
+        return []
+
+    rows: list[tuple[str, str, str]] = []
+    year_month = (project.event_start.year, project.event_start.month)
+    while year_month <= (project.event_end.year, project.event_end.month):
+        year, month = year_month
+        month_name = _PT_MONTHS[month - 1]
+        for source in OFFICIAL_OPERATION_INVENTORY_SOURCES:
+            query = f'site:{source["domain"]} operacao policial {month_name} {year}'
+            rows.append((
+                query,
+                "official_operation_inventory",
+                f'Inventário oficial mensal de operações: {source["label"]}, {month_name}/{year}.',
+            ))
+            if len(rows) >= settings.max_official_inventory_queries:
+                return rows
+        month += 1
+        if month == 13:
+            year += 1
+            month = 1
+        year_month = (year, month)
+    return rows
+
+
 def _persist_strategy_queries(
     db: Session,
     project: Project,
@@ -405,8 +451,28 @@ def _persist_strategy_queries(
             if row:
                 created.append(row)
 
-        official_base = str(strategy.get("official_query") or "").strip()
+        # Varredura oficial mensal: primeiro descobrimos operações em releases
+        # primários; depois a mídia é usada para medir repercussão. Não depende
+        # da LLM inventar dezenas de consultas.
         official_added = 0
+        for query, kind, rationale in _official_operation_inventory_queries(project):
+            if official_added >= settings.max_official_queries:
+                break
+            row = _add_query(
+                db,
+                project,
+                existing,
+                query=query,
+                kind=kind,
+                purpose="OFFICIAL_FACT",
+                rationale=rationale,
+                priority=1,
+            )
+            if row:
+                created.append(row)
+                official_added += 1
+
+        official_base = str(strategy.get("official_query") or "").strip()
         if official_base:
             for source in OFFICIAL_SECURITY_SOURCES:
                 if official_added >= settings.max_official_queries:

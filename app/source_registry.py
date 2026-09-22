@@ -8,6 +8,15 @@ OFFICIAL_SECURITY_SOURCES = [
     {"label": "Governo do RJ", "domain": "rj.gov.br", "type": "OFFICIAL"},
 ]
 
+# Fontes adequadas para descoberta nominal de operações. ISP/ISP Conecta são
+# mantidos como fontes oficiais de indicadores/validação, mas seus painéis não
+# são tratados como catálogo nominal de releases operacionais.
+OFFICIAL_OPERATION_INVENTORY_SOURCES = [
+    {"label": "PMERJ", "domain": "sepm.rj.gov.br", "type": "OFFICIAL"},
+    {"label": "Polícia Civil RJ", "domain": "policiacivil.rj.gov.br", "type": "OFFICIAL"},
+    {"label": "Governo do RJ", "domain": "rj.gov.br", "type": "OFFICIAL"},
+]
+
 PRIORITY_MEDIA_SOURCES = [
     ("G1/Globo", "g1.globo.com"),
     ("O Globo", "oglobo.globo.com"),

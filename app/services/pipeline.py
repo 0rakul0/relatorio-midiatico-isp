@@ -126,7 +126,8 @@ def run_full_methodology(
         )
         + f"; 1 consulta principal, "
         f"{complementary_count} complementar(es), {media_count} midiaticas, "
-        f"{fact_count} factual(is), {official_count} oficial(is). "
+        f"{fact_count} factual(is), {official_count} oficial(is) "
+        f"(incluindo varredura mensal em fontes primarias quando aplicavel). "
         f"Opcionais ativos: {', '.join(enabled_optional) if enabled_optional else 'nenhum'}.",
     )
 

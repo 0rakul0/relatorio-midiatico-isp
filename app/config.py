@@ -93,7 +93,12 @@ class Settings(BaseSettings):
     # meses do intervalo em vez de remover limites e gerar consultas infinitas.
     enable_annual_event_inventory: bool = True
     max_annual_event_inventory_queries: int = Field(default=12, ge=1, le=24)
-    max_official_queries: int = Field(default=3, ge=0, le=10)
+    # Inventário oficial: fontes públicas primárias são pesquisadas por mês
+    # em pautas anuais. 5 fontes x 12 meses = até 60 consultas, sem competir
+    # com o orçamento de repercussão midiática.
+    max_official_queries: int = Field(default=60, ge=0, le=120)
+    enable_official_annual_inventory: bool = True
+    max_official_inventory_queries: int = Field(default=60, ge=1, le=120)
     max_nominal_queries: int = Field(default=12, ge=0, le=50)
 
     # Post-validation corpus target. It is NEVER used to stop collection.
