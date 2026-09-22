@@ -1,530 +1,253 @@
 # Relatório de Repercussão Midiática — ISP
 
-MVP auditável para coleta, validação, classificação e análise de repercussão midiática relacionada ao Instituto de Segurança Pública do Estado do Rio de Janeiro.
+## Um pipeline auditável com modelos de linguagem, recuperação semântica e memória de corpus para análise de cobertura jornalística
 
-A aplicação foi projetada para manter separadas três camadas que não devem ser confundidas:
-
-1. **o fato ocorrido**;
-2. **a fonte que sustenta ou comprova o fato**;
-3. **o item de repercussão midiática**.
-
-O sistema utiliza um único agente LLM, ferramentas de pesquisa controladas, regras determinísticas de validação e persistência de proveniência para produzir relatórios rastreáveis e passíveis de auditoria.
+> **Status:** protótipo de pesquisa / MVP operacional  
+> **Versão do software:** 0.4.0  
+> **Domínio de aplicação:** monitoramento e análise de repercussão midiática em segurança pública  
+> **Instituição de referência:** Instituto de Segurança Pública do Estado do Rio de Janeiro (ISP-RJ)
 
 ---
 
-## Visão geral
+## Resumo
 
-O fluxo principal é:
+O acompanhamento sistemático da cobertura jornalística sobre segurança pública exige mais do que a recuperação de páginas que contenham determinadas palavras-chave. Uma mesma consulta pode recuperar notícias efetivamente relacionadas ao objeto de interesse, documentos institucionais, republicações, resultados temporalmente incompatíveis, textos apenas tangenciais ao tema e conteúdos que descrevem o fato sem constituírem repercussão midiática. A introdução de modelos de linguagem amplia a capacidade de interpretação desse material, mas também cria problemas de reprodutibilidade, proveniência e auditabilidade quando busca, seleção de fontes, inferência factual e redação são executadas como uma única operação opaca.
 
-```text
-Tema
-  ↓
-Perfil do tema
-  ↓
-Planejamento de consultas
-  ↓
-ReportAgent
-  ↓
-Tools de pesquisa
-   ↓
-DuckDuckGo (provedor único)
-   ↓
-Persistência e auditoria
-  ↓
-Validação do corpus
-  ↓
-Camada factual opcional
-  ↓
-Classificação
-   ↓
-Cobertura complementar (fase 2, se houver lacuna)
-   ↓
-Redação do relatório
-   ↓
-QA (+ revisão automática)
-   ↓
-PDF / relatório aprovado
-```
+Este trabalho apresenta o **Relatório de Repercussão Midiática — ISP**, um sistema para coleta, validação, classificação e síntese de cobertura midiática. A arquitetura combina planejamento estruturado de consultas, pesquisa na Web, persistência dos resultados brutos, recuperação do conteúdo integral das matérias, validação semântica por modelo de linguagem, regras determinísticas, extração factual opcional, classificação temática, controle de qualidade e geração de relatório. O método distingue explicitamente o **fato**, a **evidência que sustenta o fato** e a **matéria que constitui repercussão**, evitando que fontes utilizadas para comprovação sejam automaticamente contabilizadas como cobertura jornalística.
 
-A aplicação diferencia temas do tipo:
+Uma segunda contribuição é a construção incremental de uma memória de corpus. Documentos coletados são normalizados, deduplicados e armazenados globalmente, podendo ser recuperados em pesquisas posteriores por similaridade temática, lexical e semântica. As decisões de validação geram exemplos supervisionados que alimentam um reranker local, mantendo a decisão final sob a camada auditável de validação. Dessa forma, pesquisas anteriores tornam-se conhecimento reutilizável sem assumir que a relevância de uma matéria para um novo tema seja idêntica à decisão tomada no projeto original.
 
-```text
-INSTITUTIONAL_PRODUCT
-EVENT_TOPIC
-GENERAL_TOPIC
-```
-
-Exemplos:
-
-```text
-Dossiê Mulher 2026
-→ INSTITUTIONAL_PRODUCT
-
-policiais mortos em agosto de 2026 no Rio de Janeiro
-→ EVENT_TOPIC
-
-segurança pública no Rio de Janeiro
-→ GENERAL_TOPIC
-```
+**Palavras-chave:** repercussão midiática; recuperação de informação; modelos de linguagem; RAG; monitoramento de mídia; proveniência; auditoria; segurança pública; recuperação semântica.
 
 ---
 
-# Arquitetura
+## 1. Introdução
 
-A arquitetura segue uma regra central:
+A análise de repercussão midiática busca responder a uma pergunta diferente de simplesmente identificar se determinado fato ocorreu. O interesse está em observar **como, quando, onde e em que intensidade um objeto foi repercutido pelos meios de comunicação**, quais enquadramentos apareceram e quais fontes participaram dessa circulação.
 
-> Toda pesquisa externa deve ser solicitada pelo `ReportAgent` através de uma tool.
+Essa distinção é especialmente relevante no domínio da segurança pública. Uma fonte oficial pode comprovar uma ocorrência, mas não representa necessariamente repercussão jornalística. De forma análoga, uma notícia pode tratar de um fenômeno associado ao objeto pesquisado sem citar a instituição que motivou o monitoramento. Exigir a presença literal de um nome institucional tende, portanto, a reduzir artificialmente a cobertura observada; aceitar qualquer correspondência lexical, por outro lado, introduz grande quantidade de ruído.
 
-Services não acessam diretamente o DuckDuckGo.
+Sistemas contemporâneos de monitoramento em larga escala, como GDELT e Media Cloud, demonstram a utilidade de bases estruturadas e pesquisáveis para estudar atenção, eventos e conteúdo da mídia. O GDELT mantém bases de eventos, menções e conhecimento extraído de notícias, enquanto o Media Cloud foi concebido como infraestrutura aberta para coleta e análise de notícias na Web. Esses projetos evidenciam tanto o potencial da análise computacional da mídia quanto desafios relacionados a qualidade, redundância e definição do corpus.
 
-O fluxo permitido é:
+O presente projeto aborda um problema mais delimitado: **produzir relatórios auditáveis de repercussão midiática a partir de temas definidos pelo usuário**, preservando o caminho entre consulta, resultado bruto, documento consolidado, decisão de relevância, classificação e texto final. A proposta não é substituir bases globais de monitoramento, mas construir uma metodologia orientada a projetos na qual cada afirmação possa ser rastreada até sua evidência.
 
-```text
-SERVICE
-   ↓
-REPORT AGENT
-   ↓
-TOOL
-   ↓
-PROVIDER
-```
+A arquitetura parte de quatro princípios:
 
-Não deve existir:
+1. **separação entre fato, evidência factual e repercussão midiática**;
+2. **preservação da proveniência desde a busca até o relatório**;
+3. **combinação de regras determinísticas e interpretação semântica por LLM**;
+4. **reutilização do conhecimento coletado sem herdar cegamente decisões anteriores**.
 
-```text
-SERVICE → DuckDuckGo
-SERVICE → provider
-SERVICE → tool.invoke()
-```
+---
 
-A execução das tools acontece dentro do agente (`app/agent.py:354`).
+## 2. Trabalhos relacionados
 
-## Visão em camadas
+### 2.1 GDELT
 
-```mermaid
-flowchart TB
-    subgraph UI[Interface]
-        Static["app/static<br/>index.html / app.js"]
-    end
+O **Global Database of Events, Language and Tone (GDELT)** constitui uma das principais infraestruturas computacionais para análise de notícias em escala global. O GDELT 2.0 disponibiliza, entre outros componentes, uma base de eventos, uma tabela de menções e o Global Knowledge Graph (GKG). O sistema permite estudar entidades, locais, temas, volume de cobertura e medidas de tom em grandes coleções de notícias.
 
-    subgraph API[API - app/main.py]
-        FastAPI["FastAPI<br/>/projects /run-async /runs/{id}<br/>/facts /reports /costs /export.pdf"]
-    end
+A escala do GDELT é uma vantagem quando o objetivo é observar fenômenos globais e séries temporais extensas. Entretanto, estudos sobre a utilização de seus dados também ressaltam a necessidade de considerar erros de codificação, redundância e qualidade antes de empregar automaticamente os registros em análises substantivas.
 
-    subgraph ORCH[Orquestração - app/orchestration/]
-        Executor["executor.py<br/>start_run() + Thread worker"]
-        State["state.py<br/>stages + cancel cooperativo"]
-        ReportRunDB[("ReportRun<br/>status persistido")]
-    end
+O sistema proposto neste repositório possui objetivo diferente. Em vez de partir de uma base global previamente codificada, ele registra o **processo de investigação de uma pauta específica**, preservando consultas executadas, retornos do mecanismo de busca, conteúdo recuperado, decisões de inclusão e evidências utilizadas.
 
-    subgraph PIPE[Pipeline - app/services/pipeline.py]
-        Pipeline["run_full_methodology()<br/>13 stages"]
-    end
+### 2.2 Media Cloud
 
-    subgraph SVC[Services determinísticos]
-        Profile["project_profile.py<br/>topic_profile.py"]
-        Plan["search_planning.py<br/>execution_profile.py"]
-        Collect["collection/<br/>web.py youtube.py<br/>orchestrator.py guards.py<br/>persist.py common.py"]
-        Validate["news_validation.py<br/>validation.py<br/>article_hydration.py<br/>academic_research.py"]
-        Facts["fact_layer.py"]
-        Classify["classification.py<br/>metrics.py"]
-        Write["reporting.py<br/>report_qa.py<br/>pdf_report.py"]
-        Cache["cache.py<br/>corpus_reuse.py"]
-    end
+O **Media Cloud** é uma plataforma aberta dedicada à pesquisa de ecossistemas de mídia. Roberts et al. (2021) descrevem sua arquitetura de coleta, armazenamento e organização de notícias, permitindo a criação de conjuntos de dados para investigação quantitativa da mídia. A versão 2.0, apresentada em 2026, descreve uma infraestrutura reengenheirada que ultrapassa 1,8 bilhão de histórias e oferece índice pesquisável de notícias globais.
 
-    subgraph AGENT[Um único agente - app/agent.py]
-        ReportAgent["ReportAgent<br/>13 tasks: topic_profile,<br/>documentalist, collector,<br/>classification, report_writer, qa..."]
-    end
+O Media Cloud aproxima-se deste trabalho na preocupação com coleta estruturada, pesquisa de conteúdo e análise da atenção dedicada a temas. A diferença principal está na granularidade metodológica: o presente sistema registra uma trilha de auditoria específica para cada relatório, incluindo finalidade da consulta, validação semântica do item, relação com a camada factual, classificação e controle de qualidade da narrativa produzida.
 
-    subgraph TOOLS[Tools - app/tools/]
-        Registry["registry.py<br/>build_agent_tools()"]
-        SearchTools["search.py / hydration.py / academic.py<br/>pesquisar_internet<br/>pesquisar_videos<br/>pesquisar_artigos_arxiv<br/>executar_buscas_web/videos<br/>hidratar_artigos"]
-    end
+### 2.3 Recuperação aumentada por informação externa
 
-    subgraph PROV[Providers - app/tools/providers/]
-        DDG["duckduckgo.py<br/>web + videos"]
-        ARXIV["arxiv.py<br/>literatura científica"]
-    end
+Lewis et al. (2020) formalizaram a arquitetura de **Retrieval-Augmented Generation (RAG)** como combinação entre memória paramétrica de modelos de linguagem e memória não paramétrica recuperável. Uma motivação central é permitir que a geração seja condicionada por informação externa, atualizável e passível de proveniência, em vez de depender exclusivamente do conhecimento armazenado nos parâmetros do modelo.
 
-    subgraph DATA[Persistência - app/models.py]
-        DB[("PostgreSQL 16 / SQLite<br/>Project SearchQuery SearchCall<br/>SearchHit MediaItem FactEvent<br/>FactAssertion Classification<br/>GeneratedReport LLMCall<br/>CorpusDocument")]
-    end
+Embora o presente projeto não implemente a arquitetura RAG original de forma estrita, adota princípio semelhante: o modelo de linguagem recebe evidências recuperadas de um corpus persistente e de pesquisas externas. O texto jornalístico permanece armazenado independentemente do modelo, podendo ser reconsultado e reavaliado em novas pesquisas.
 
-    subgraph LLM[LLM - app/llm.py]
-        OpenAI["OpenAI gpt-4.1-mini<br/>+ cost_tracker.py"]
-    end
+### 2.4 Lacuna abordada
 
-    Static --> FastAPI
-    FastAPI --> Executor
-    Executor --> State
-    State --> ReportRunDB
-    Executor --> Pipeline
-    Pipeline --> SVC
-    SVC --> ReportAgent
-    ReportAgent --> Registry
-    Registry --> SearchTools
-    SearchTools --> DDG
-    SearchTools --> ARXIV
-    SVC --> DB
-    ReportAgent --> OpenAI
-    ReportAgent --> DB
-```
+As soluções anteriores mostram que coleta massiva, recuperação de notícias e geração apoiada por memória externa são tecnicamente viáveis. Este projeto concentra-se em uma lacuna operacional complementar: **como transformar buscas temáticas em um relatório de repercussão com rastreabilidade de ponta a ponta**.
 
-Em texto:
+A unidade central não é apenas a notícia, mas a relação:
 
 ```text
-app/static (dashboard)
-   ↓ HTTP
-app/main.py (FastAPI)
-   ↓ start_run(project_id)
-app/orchestration/executor.py (Thread) + state.py (stages/cancel)
-   ↓ run_full_methodology()
-app/services/pipeline.py (13 stages, perfil → QA)
-   ↓ prepara contexto / sinks / observers
-app/agent.py (ReportAgent.run task + payload + schema Pydantic)
-   ↓ llm.bind_tools() — a LLM decide se chama
-app/tools/registry.py → search.py / hydration.py
-   ↓
-app/tools/providers/duckduckgo.py (provedor único)
-   ↓ SearchHit / MediaItem / SearchCall / LLMCall
-PostgreSQL (app/models.py) + PDF/QA
+tema
+  → consulta
+  → resultado bruto
+  → documento
+  → decisão de relevância
+  → evidência
+  → classificação
+  → síntese
 ```
 
-## Ciclo de vida de uma execução assíncrona
+Essa relação é persistida para permitir inspeção posterior.
 
-```mermaid
-sequenceDiagram
-    participant UI as Dashboard
-    participant API as main.py
-    participant EXE as orchestration/executor
-    participant PIPE as services/pipeline
-    participant AG as ReportAgent
-    participant TOOL as Tool + Provider
-    participant DB as Postgres
+---
 
-    UI->>API: POST /projects (tema + janelas)
-    API->>DB: Project(DRAFT/CUSTOM_DATES)
-    UI->>API: POST /projects/{id}/run-async
-    API->>EXE: start_run(project_id)
-    EXE->>DB: ReportRun(PENDING→RUNNING)
-    EXE->>PIPE: run_full_methodology(progress_callback, cancel_check)
-    PIPE->>AG: topic_profile / documentalist / report_planner
-    AG->>DB: Project.topic_profile + execution_plan
-    PIPE->>AG: collector (executar_buscas_web/videos)
-    AG->>TOOL: 1 chamada bulk com plano completo
-    TOOL->>DB: SearchCall + SearchHit + MediaItem + SearchQuery status
-    PIPE->>AG: article_hydrator + media_relevance + fact_extraction...
-    AG->>DB: MediaItem validado + FactEvent/Assertion + Classification
-    PIPE->>AG: report_writer (sem tools) + qa (sem tools)
-    AG->>DB: GeneratedReport + LLMCall (custos)
-    EXE->>DB: ReportRun(DONE/FAILED/CANCELLED)
-    UI->>API: GET /runs/{run_id} (poll stages + costs)
-    UI->>API: GET /projects/{id}/export.pdf
-```
+## 3. Metodologia
 
-Cancelamento é cooperativo (`POST /runs/{id}/cancel`): o worker checa `check_cancelled()` entre stages e preserva o que já foi persistido para auditoria.
+### 3.1 Visão geral
 
-## Pipeline — etapas acompanhadas (`app/services/pipeline.py`)
+A aplicação é implementada em Python 3.12, FastAPI, SQLAlchemy e Pydantic. PostgreSQL é o banco principal, com suporte a SQLite para desenvolvimento. O DuckDuckGo é utilizado como mecanismo externo de busca Web/vídeos e o arXiv pode ser consultado para literatura científica. As tarefas semânticas são executadas por um `ReportAgent`, utilizando um modelo compatível com a API da OpenAI e suporte a fallback local compatível com esse protocolo.
+
+O pipeline operacional pode ser representado por:
 
 ```mermaid
 flowchart LR
-    P["profile<br/>descobre tipo:<br/>INSTITUTIONAL/<br/>EVENT/GENERAL"] --> SP["search_plan<br/>corpus_reuse +<br/>report_planner"]
-    SP --> C["collection<br/>web leve:<br/>hits brutos"] --> Y["youtube<br/>DDG Videos"]
-    Y --> AR["academic_research<br/>arXiv, opcional"]
-    AR --> V["validation<br/>hydrate +<br/>media_relevance"]
-    V --> F1["facts_pass_1<br/>extract"] --> R1["fact_resolution_1<br/>CONFIRMED/CONFLICT"]
-    R1 --> NP["nominal_plan"] --> NC["nominal_collection<br/>2ª coleta"]
-    NC --> F2["facts_pass_2"] --> R2["fact_resolution_2"]
-    R2 --> CL["classification<br/>tema/tom/fidelidade"] --> GF["gap_fill (fase 2)<br/>lacunas → gap_planner → web aberta"] --> RP["report<br/>sem tools"] --> QA["qa<br/>determinístico+LLM+revisão"]
+    A[Tema] --> B[Perfil do tema]
+    B --> C[Memória histórica]
+    C --> D[Planejamento de consultas]
+    D --> E[Coleta Web / vídeo]
+    E --> F[SearchHit bruto]
+    F --> G[Hidratação do artigo]
+    G --> H[Validação semântica]
+    H --> I[Camada factual opcional]
+    I --> J[Classificação]
+    J --> K[Detecção de lacunas]
+    K --> L[Busca complementar]
+    L --> M[Redação]
+    M --> N[QA]
+    N --> O[Relatório / PDF]
+    H --> P[Exemplos supervisionados]
+    P --> Q[Reranker local]
+    Q --> C
 ```
 
-Stages opcionais recebem `SKIPPED` com razão auditável quando o plano (`execution_plan.processes`) desabilita `youtube_collection`, `fact_extraction`, `nominal_followup`, etc. Ver `app/services/execution_profile.py`.
+### 3.2 Tipificação da pauta
 
-## Modelo de dados simplificado (`app/models.py`)
+Antes da pesquisa, o tema é transformado em um perfil estruturado. Atualmente são consideradas três categorias principais:
 
-```mermaid
-erDiagram
-    Project ||--o{ SearchQuery : planeja
-    Project ||--o{ MediaItem : contém
-    Project ||--o{ FactEvent : estrutura
-    Project ||--o{ GeneratedReport : gera
-    Project ||--o{ ReportRun : executa
-    SearchQuery ||--o{ SearchCall : audita
-    SearchQuery ||--o{ SearchHit : retorna
-    SearchHit }o--|| MediaItem : consolida-por-URL
-    MediaItem ||--o{ Classification : classifica
-    MediaItem ||--o{ FactAssertion : sustenta
-    FactEvent ||--o{ FactAssertion : possui
-    CorpusDocument ||--o{ ProjectCorpusLink : reutiliza
-    ProjectCorpusLink }o--|| MediaItem : vincula
-    Project ||--o{ LLMCall : custa
-```
+| Tipo | Interpretação | Exemplo |
+|---|---|---|
+| `INSTITUTIONAL_PRODUCT` | publicação, relatório ou produto institucional | `Dossiê Mulher 2026` |
+| `EVENT_TOPIC` | ocorrência ou conjunto de eventos | `policiais mortos em agosto de 2026 no Rio de Janeiro` |
+| `GENERAL_TOPIC` | pauta temática sem produto ou evento único | `segurança pública no Rio de Janeiro` |
 
-Principais tabelas: `projects`, `search_queries`, `search_calls`, `search_hits` (bruto imutável + `technical_flags`), `media_items` (consolidado por `canonical_url`), `corpus_documents` (reuso histórico global), `fact_events` + `fact_assertions`, `classifications`, `generated_reports` (snapshot imutável), `report_runs`, `llm_calls`.
+Essa classificação altera a estratégia de busca. Em produtos institucionais, o sistema preserva o nome do produto como âncora. Em eventos, são construídas variantes semanticamente equivalentes do fato. Em temas gerais, a busca pode utilizar termos e sinônimos extraídos do perfil.
 
-## Chat com ferramentas
+### 3.3 Separação temporal
 
-O chat faz retrieval local no corpus validado antes de chamar a LLM. O mesmo
-`ReportAgent` pode decidir, por pergunta, complementar a resposta com:
-
-- `pesquisar_internet` — DuckDuckGo web/notícias;
-- `pesquisar_videos` — DuckDuckGo Videos;
-- `pesquisar_artigos_arxiv` — literatura científica no arXiv.
-
-Resultados obtidos no chat são fontes transitórias da conversa: **não** viram
-`MediaItem`, não alteram o corpus validado e não modificam métricas ou
-relatórios. O histórico persiste as fontes e as ferramentas acionadas para
-auditoria posterior.
-
-## Estrutura principal
+O método diferencia:
 
 ```text
-app/
-├── main.py                 # FastAPI: projects, run/run-async, facts, reports, costs, PDF
-├── agent.py                # ReportAgent único (13 tasks, bind_tools, saída Pydantic)
-├── llm.py + cost_tracker.py# criação do chat model + registro LLMCall (tokens/custo)
-├── schemas.py              # contratos Pydantic das tasks do agente
-├── config.py               # Settings (limites de busca, lotes LLM, YouTube, corpus reuse)
-├── models.py               # SQLAlchemy: Project, SearchQuery/Call/Hit, MediaItem, Facts...
-├── database.py             # Session/engine (Postgres + SQLite dev)
-│
-├── tools/
-│   ├── registry.py         # build_agent_tools(web/video/article_fetch/academic, bulk)
-│   ├── search.py           # pesquisar_internet/videos + executar_buscas_web/videos (lote)
-│   ├── hydration.py        # hidratar_artigos (fetch paralelo com anti-SSRF)
-│   ├── academic.py         # pesquisar_artigos_arxiv
-│   ├── providers/arxiv.py  # API pública Atom do arXiv
-│   └── providers/
-│       └── duckduckgo.py   # provedor único (web + videos)
-│
-├── services/
-│   ├── pipeline.py         # run_full_methodology() — orquestra os 13 stages
-│   ├── project_profile.py  # discover_project_profile() (topic_profile + documentalist)
-│   ├── search_planning.py  # plan_report_with_llm() + plan_queries()
-│   ├── execution_profile.py# AUTO → MIDIATICO_SIMPLES / COM_FATOS / COMPLETO_NOMINAL
-│   ├── corpus_reuse.py     # reuse_prior_corpus() — reaproveita CorpusDocument
-│   ├── corpus_chat.py      # chat grounded no corpus validado
-│   ├── chat_history.py     # histórico persistente por usuário/tema
-│   ├── article_hydration.py# hydrate_media_items() — corpo completo p/ validação
-│   ├── news_validation.py  # validate_news_stage() — triagem media_relevance
-│   ├── validation.py       # validate_and_classify() e guardas de aderência
-│   ├── classification.py   # classify_with_llm() — tema/enquadramento/tom
-│   ├── reporting.py        # draft_report_with_llm() + export_report_pdf()
-│   ├── metrics.py          # agregações p/ redação e dashboard
-│   ├── cache.py            # cached_report_for_* (snapshot, sem recalcular)
-│   │
-│   └── collection/
-│       ├── orchestrator.py # collect_media_sources() — web + youtube
-│       ├── web.py          # collect_web() via agente collector
-│       ├── youtube.py      # coleta de vídeos (DDG Videos)
-│       ├── guards.py       # regras determinísticas (âncora, janela, domínio, dedup)
-│       ├── persist.py      # SearchHit → MediaItem + proveniência + media_origin
-│       ├── media_origin.py # PORTAL_NOTICIAS / REDE_SOCIAL / YOUTUBE
-│       ├── common.py       # canonicalize(), query_window()
-│       └── youtube_helpers.py
-│
-├── orchestration/
-│   ├── executor.py         # start_run() — Thread worker + cost_context
-│   └── state.py            # stages PENDING/RUNNING/DONE/SKIPPED/FAILED/CANCELLED
-│
-├── fact_layer.py           # extract/resolve_project_facts(), plan_nominal_followups()
-├── topic_profile.py        # janelas event_* vs collection_*, âncoras nominais
-├── media_scout.py          # descoberta complementar de mídia
-├── report_qa.py            # QA determinístico + LLM (CRITICAL/HIGH/MEDIUM/LOW)
-├── pdf_report.py           # PDF oficial (só se aprovado) vs rascunho
-├── schema_upgrade.py       # ensure_schema() — migração aditiva (futuro: Alembic)
-│
-└── static/
-    ├── index.html
-    ├── app.js
-    └── styles.css
+event_start / event_end
+    = período em que o fato ocorreu
+
+collection_start / collection_end
+    = período em que a repercussão será observada
 ```
 
-| Camada | Pasta | Papel | Não pode fazer |
-|---|---|---|---|
-| API | `app/main.py`, `app/static/` | HTTP, validação de entrada, `cost_context` | chamar provider direto |
-| Orquestração | `app/orchestration/` | threads, stages, cancel | chamar LLM/provider |
-| Metodologia | `app/services/pipeline.py` | ordem dos stages, flags do plano | chamar `tool.invoke()` |
-| Inteligência | `app/agent.py` | único lugar com `bind_tools` + prompts por task | acessar DB direto |
-| Acesso externo | `app/tools/` | tools + `SearchSink/Observer` + SSRF guard | decidir metodologia |
-| Prova | `app/tools/providers/` | SDK DDG isolado | ser chamado por service |
-| Prova factual | `app/fact_layer.py`, `app/report_qa.py` | regras `CONFIRMED/CONFLICT`, QA | inventar datas |
-| Dados | `app/models.py`, `database.py` | proveniência, snapshots, custos | pesquisa externa |
+Essa separação impede que uma notícia publicada posteriormente para confirmar um fato seja automaticamente contada como repercussão dentro da janela principal.
 
----
-
-# Um único agente
-
-Toda a lógica LLM passa pelo:
+Por exemplo:
 
 ```text
-ReportAgent
+Tema:
+"policiais mortos em agosto de 2026 no Rio de Janeiro"
+
+Janela factual:
+2026-08-01 → 2026-08-31
+
+Janela de repercussão:
+2026-08-01 → 2026-08-31
 ```
 
-definido em:
+A camada factual pode consultar material posterior quando necessário para confirmação, sem alterar a janela de contagem da repercussão.
+
+### 3.4 Planejamento das consultas
+
+O planejador procura produzir uma **consulta principal** e um pequeno número de consultas complementares materialmente diferentes. O objetivo é evitar matrizes extensas de paráfrases que aumentam custo e redundância sem ampliar proporcionalmente a cobertura.
+
+Consultas semanticamente muito próximas são eliminadas. O sistema também verifica deterministicamente se a consulta preserva a âncora do objeto monitorado.
+
+#### Exemplo A — produto institucional
+
+Tema:
 
 ```text
-app/agent.py
+Dossiê Mulher 2026
 ```
 
-Não existem agentes independentes para coleta, documentalista, classificação ou redação.
-
-São tarefas diferentes executadas pelo mesmo agente.
-
-Exemplos:
-
-```bash
-get_report_agent().run(
-    task="documentalist",
-    ...
-)
-
-get_report_agent().run(
-    task="collector",
-    ...
-)
-
-get_report_agent().run(
-    task="classification",
-    ...
-)
-
-get_report_agent().run(
-    task="report_writer",
-    ...
-)
-```
-
-As diferenças entre as tarefas estão no:
-
-* prompt;
-* schema Pydantic;
-* contexto;
-* tools disponibilizadas.
-
----
-
-# Tool calling
-
-As tools são opcionais para tarefas analíticas, mas podem ser obrigatórias quando a metodologia define explicitamente um plano de coleta.
-
-O agente recebe as tools por:
-
-```bash
-llm.bind_tools(tools)
-```
-
-Não é utilizado:
-
-```bash
-tool_choice="required"
-```
-
-Assim, em tarefas como `documentalist`, a LLM pode decidir:
+Estratégia determinística possível:
 
 ```text
-contexto suficiente
-→ não pesquisa
-
-faltam evidências
-→ pesquisar_internet
+"Dossiê Mulher 2026"
+"Dossiê Mulher"
+"Dossiê Mulher" "Instituto de Segurança Pública"
 ```
 
-Já na tarefa `collector`, o prompt define explicitamente que o plano de consultas deve ser executado integralmente.
-
----
-
-# Ferramentas de pesquisa
-
-As ferramentas ficam em:
+Para verificar veículos prioritários, a mesma âncora pode ser combinada com restrição de domínio:
 
 ```text
-app/tools/search.py
+site:g1.globo.com "Dossiê Mulher 2026"
+site:oglobo.globo.com "Dossiê Mulher 2026"
+site:odia.ig.com.br "Dossiê Mulher 2026"
 ```
 
-As principais tools individuais são:
+A lista configurada de veículos prioritários inclui G1/Globo, O Globo, Extra, O Dia, CNN Brasil, UOL, R7, Band e Agência Brasil.
+
+#### Exemplo B — evento
+
+Tema:
 
 ```text
-pesquisar_internet
-pesquisar_videos
+morte por intervenção de agente do Estado no RJ 2026
 ```
 
-Para a coleta obrigatória são utilizadas ferramentas em lote:
+O perfil determinístico reconhece variantes como:
 
 ```text
-executar_buscas_web
-executar_buscas_videos
+"morte por intervenção de agente do Estado" "Rio de Janeiro" 2026
+"mortes por intervenção de agentes do Estado" "Rio de Janeiro" 2026
+"morte decorrente de intervenção policial" "Rio de Janeiro" 2026
+"mortes decorrentes de intervenção policial" "Rio de Janeiro" 2026
 ```
 
-As versões em lote reduzem:
-
-* número de chamadas LLM;
-* consumo de tokens;
-* latência;
-* risco de omissão de consultas planejadas.
-
----
-
-# Provedores
-
-Os SDKs externos ficam isolados em:
+Na camada de descoberta factual podem aparecer formulações adicionais, por exemplo:
 
 ```text
-app/tools/providers/
+"morto em intervenção policial" "Rio de Janeiro" 2026
+"morto durante ação policial" "Rio de Janeiro" 2026
 ```
 
-O DuckDuckGo (`ddgs`) é o provedor único de pesquisa externa, para web
-(`News` → `Text`) e para vídeos (`Videos`).
+Essas consultas não possuem necessariamente a mesma finalidade. A primeira família procura **repercussão midiática**; a segunda pode ser usada para **descoberta/validação factual**.
 
-## Pesquisa web
+#### Exemplo C — evento nominal
+
+Tema:
 
 ```text
-DuckDuckGo News
-    ↓
-sem resultado?
-    ↓
-DuckDuckGo Text
+policiais mortos em agosto de 2026 no Rio de Janeiro
 ```
 
-## Pesquisa de vídeos
-
-A busca de vídeos utiliza `DuckDuckGo Videos`.
-
-A aplicação **não utiliza YouTube Data API**.
-
----
-
-# Origem da mídia (portal / redes / YouTube)
-
-Todo link capturado recebe um `media_origin` determinístico em
-`SearchHit`/`MediaItem` (`app/services/collection/media_origin.py`):
+Após a primeira passagem factual, nomes identificados podem originar consultas de acompanhamento. Conceitualmente:
 
 ```text
-YOUTUBE         → youtube.com / youtu.be
-REDE_SOCIAL     → facebook, instagram, x, tiktok, threads, linkedin...
-PORTAL_NOTICIAS → todo o restante (portais, blogs, sites institucionais)
+"<nome identificado>" policial Rio de Janeiro
+"<nome identificado>" morte agosto 2026
 ```
 
-A classificação acontece na persistência (`persist.py`), nunca descarta o
-item e alimenta `metrics.media_origin_counts`, `corpus_by_origin`
-(`portal_noticias` / `redes_sociais` / `youtube`) e o snapshot do relatório.
+A finalidade é registrada como `NOMINAL_FOLLOWUP`, evitando misturar a investigação de indivíduos com a consulta temática inicial.
 
-# Auditoria das pesquisas
+### 3.5 Finalidade das consultas
 
-Cada consulta planejada possui informações de execução em `SearchQuery`.
+Cada consulta possui uma finalidade explícita:
 
-Entre os campos auditáveis estão:
+| Finalidade | Uso |
+|---|---|
+| `MEDIA_REPERCUSSION` | localizar itens que podem integrar a análise de repercussão |
+| `FACT_DISCOVERY` | descobrir evidências relacionadas ao fato |
+| `OFFICIAL_FACT` | procurar confirmação em fontes institucionais |
+| `NOMINAL_FOLLOWUP` | aprofundar pessoas ou eventos identificados na primeira passagem |
 
-```text
-executed_at
-execution_status
-execution_error
-providers_attempted
-results_returned
-results_accepted
-```
+Essa distinção é fundamental. Uma fonte encontrada para confirmar um fato não entra automaticamente nas métricas de mídia.
 
-Estados possíveis incluem:
+### 3.6 Coleta e preservação do resultado bruto
+
+Toda tentativa de pesquisa gera registros de auditoria. `SearchQuery` representa a consulta planejada e `SearchCall` registra a tentativa efetiva, incluindo provedor, horário, sucesso, erro, latência e número de resultados.
+
+Cada retorno bruto é persistido como `SearchHit` **antes** das decisões semânticas posteriores. Assim, um item irrelevante, duplicado ou fora da janela não desaparece da trilha de auditoria.
+
+Os estados permitem distinguir, por exemplo:
 
 ```text
 PENDING
@@ -535,1146 +258,418 @@ FAILED
 SKIPPED
 ```
 
-Além disso, cada tentativa por provedor gera um:
+### 3.7 Consolidação e proveniência
+
+Resultados que representam o mesmo endereço são consolidados em `MediaItem`, preservando a proveniência de suas diferentes descobertas.
+
+A origem da mídia é classificada deterministicamente como:
 
 ```text
-SearchCall
+PORTAL_NOTICIAS
+REDE_SOCIAL
+YOUTUBE
 ```
 
-com informações como:
+Além da URL, são preservados título, domínio, data de publicação, snippet, corpo textual quando recuperável, fonte, consulta de origem e horário de recuperação.
+
+### 3.8 Hidratação e validação semântica
+
+O snippet retornado pelo mecanismo de busca pode ser insuficiente para decidir se uma matéria realmente pertence ao tema. Por isso, antes da validação semântica, o sistema pode recuperar o conteúdo integral da página.
+
+A decisão de relevância considera o objeto monitorado e o texto disponível. Entre as relações aceitas pelo pipeline estão categorias como cobertura direta do produto/evento e cobertura derivada materialmente relacionada ao tema. Resultados sem relação são mantidos no banco com estado de descarte, em vez de simplesmente removidos.
+
+O ponto metodológico é que:
 
 ```text
-project_id
-run_id
-search_query_id
-tool_name
-provider
-query
-started_at
-finished_at
-success
-error
-results_returned
-results_accepted
-latency_ms
+resultado da busca ≠ item válido de repercussão
 ```
 
-Isso permite diferenciar:
+A busca maximiza recuperação; a validação decide pertencimento ao corpus analítico.
+
+### 3.9 Camada factual
+
+Em pautas que exigem identificação de eventos, vítimas, locais ou circunstâncias, uma camada factual separada estrutura afirmações e suas evidências.
+
+O fluxo pode incluir duas passagens:
 
 ```text
-consulta não executada
-
-consulta executada sem resultados
-
-consulta executada com resultados
-
-consulta executada com erro
+coleta inicial
+   ↓
+extração factual
+   ↓
+resolução / conflito
+   ↓
+planejamento nominal
+   ↓
+nova coleta direcionada
+   ↓
+segunda extração
+   ↓
+resolução final
 ```
 
----
+Essa separação reduz o risco de inferir que uma matéria pertence à repercussão apenas porque foi útil para confirmar determinado fato.
 
-# Proveniência dos itens
+### 3.10 Memória global do corpus
 
-Cada `MediaItem` preserva informações sobre a origem da descoberta.
+Uma característica central do sistema é não tratar cada relatório como uma investigação isolada.
 
-O sistema registra, entre outros:
-
-```text
-search_source
-source_provenance
-discovery_purposes
-retrieved_at
-```
-
-Um mesmo item pode ser localizado por consultas ou provedores diferentes sem perder sua trilha de descoberta.
-
----
-
-# Finalidade das consultas
-
-Cada `SearchQuery` possui um propósito explícito.
-
-Os principais são:
-
-```text
-MEDIA_REPERCUSSION
-FACT_DISCOVERY
-OFFICIAL_FACT
-NOMINAL_FOLLOWUP
-```
-
-Isso impede misturar:
-
-```text
-fonte usada para confirmar um fato
-```
-
-com:
-
-```text
-item usado para medir repercussão midiática
-```
-
----
-
-# Janelas temporais
-
-A aplicação trabalha com duas janelas independentes.
-
-## Janela factual
-
-```text
-event_start
-event_end
-```
-
-Representa quando o fato ocorreu.
-
-## Janela de repercussão
-
-```text
-collection_start
-collection_end
-```
-
-Representa quando a cobertura midiática será medida.
-
-Essas duas janelas não devem ser confundidas.
-
----
-
-## Exemplo
-
-Tema:
-
-```text
-policiais mortos em agosto de 2026 no Rio de Janeiro
-```
-
-O sistema pode inferir:
-
-```text
-event_start      = 2026-08-01
-event_end        = 2026-08-31
-
-collection_start = 2026-08-01
-collection_end   = 2026-08-31
-```
-
-A camada factual pode utilizar dias adicionais de confirmação após o fim da janela sem que essas matérias sejam contadas como repercussão do período principal.
-
----
-
-# Produtos institucionais
-
-Produtos como:
-
-```text
-Dossiê Mulher 2026
-```
-
-são tratados de forma diferente de pautas factuais.
-
-O ano da edição não é automaticamente interpretado como:
-
-```text
-01/01/2026 → 31/12/2026
-```
-
-para repercussão.
-
-O sistema tenta primeiro identificar documentalmente:
-
-* existência do produto;
-* nome correto;
-* edição;
-* situação da publicação;
-* data de lançamento, quando confirmável.
-
-Essa etapa é executada pelo `ReportAgent` com a tarefa:
-
-```text
-documentalist
-```
-
-A pesquisa externa é opcional e ocorre somente através da tool:
-
-```text
-pesquisar_internet
-```
-
----
-
-# Guardas determinísticos
-
-Nem toda decisão é deixada para a LLM.
-
-Existem regras determinísticas para:
-
-* preservar a âncora nominal;
-* rejeitar edição errada de produto;
-* verificar domínio solicitado;
-* validar janela temporal;
-* eliminar URLs inválidas;
-* deduplicar resultados;
-* validar canais prioritários;
-* separar fato de repercussão;
-* impedir mistura de períodos.
-
-Essas regras ficam principalmente em:
-
-```text
-services/collection/guards.py
-services/validation.py
-topic_profile.py
-fact_layer.py
-```
-
----
-
-# Validação temporal
-
-Quando uma pauta possui janela temporal explícita, um item sem data verificável não entra diretamente como cobertura válida.
-
-Ele pode receber:
-
-```text
-DATE_UNVERIFIED
-```
-
-Itens fora da janela recebem:
-
-```text
-OUTSIDE_COLLECTION_WINDOW
-```
-
-A ausência de data nunca é convertida automaticamente em uma data fictícia.
-
----
-
-# Canonicalização de URLs
-
-A aplicação remove apenas parâmetros conhecidos de rastreamento.
-
-Exemplos removidos:
-
-```text
-utm_source
-utm_medium
-utm_campaign
-fbclid
-gclid
-```
-
-Parâmetros semanticamente importantes são preservados.
+Cada `MediaItem` pode ser associado a um `CorpusDocument` global. O documento recebe URL canônica, hash do conteúdo, fingerprint, texto, metadados e, quando necessário, representação vetorial.
 
 Assim:
 
 ```text
-https://site/a?id=1
+Projeto A ─┐
+Projeto B ─┼──> CorpusDocument
+Projeto C ─┘
 ```
 
-não é considerado igual a:
+A relação entre projeto e documento permanece separada em `ProjectCorpusLink`. Isso é necessário porque **o texto da matéria é estável, mas sua relevância depende da pergunta de pesquisa**.
+
+Uma matéria considerada válida para o Projeto A pode ser recuperada no Projeto B, porém volta a ser avaliada em relação ao novo tema.
+
+### 3.11 Recuperação semântica
+
+Antes de abrir novas pesquisas externas, projetos anteriores semanticamente próximos são examinados.
+
+O ranking do corpus histórico combina:
 
 ```text
-https://site/a?id=2
+similaridade entre projetos
+        +
+similaridade lexical documento-tema
+        +
+similaridade por embedding
+        +
+score do reranker, quando disponível
 ```
+
+Os embeddings utilizam `text-embedding-3-small` quando o endpoint OpenAI está configurado. Se embeddings externos não estiverem disponíveis, existe fallback vetorial local determinístico. Atualmente os vetores são persistidos em JSON para manter compatibilidade entre SQLite e PostgreSQL.
+
+O corpus reutilizado não elimina automaticamente novas buscas. Ele serve como ponto de partida; o planejador pode reduzir consultas redundantes e posteriormente procurar lacunas de cobertura.
+
+### 3.12 Aprendizado supervisionado incremental
+
+Após a validação, decisões `VALID` e `NOT_RELATED` são convertidas em `RelevanceTrainingExample`.
+
+Cada exemplo preserva, entre outros elementos:
+
+```text
+tema/perfil da pesquisa
+texto do documento
+rótulo de relevância
+tipo de relação
+evidência da decisão
+projeto
+documento de origem
+```
+
+Esses exemplos alimentam um reranker local leve. O modelo é treinado somente após atingir quantidade mínima de exemplos e representação mínima das duas classes.
+
+O reranker **não possui autoridade para aceitar ou rejeitar definitivamente uma matéria**. Seu papel é priorizar candidatos históricos:
+
+```text
+reranker
+   ↓
+ordenação de candidatos
+   ↓
+validação semântica auditável
+   ↓
+decisão final
+```
+
+Dessa maneira, o sistema aprende com o uso sem transformar previsões do modelo em verdade não supervisionada.
+
+### 3.13 Cobertura complementar
+
+Após validação e classificação, o sistema verifica lacunas, especialmente em veículos prioritários. Se a cobertura estiver incompleta, uma segunda fase pode gerar consultas adicionais.
+
+O `gap_fill` ocorre **depois** da primeira análise. Portanto, a pergunta deixa de ser “o que mais posso pesquisar?” e passa a ser “qual dimensão relevante ainda não foi coberta?”.
+
+Essa estratégia reduz buscas redundantes.
+
+### 3.14 Geração e controle de qualidade
+
+A redação é produzida apenas após consolidação do corpus, fatos e métricas. O relatório gerado é submetido a QA determinístico e, quando habilitado, QA por LLM.
+
+Achados críticos ou de alta severidade podem provocar nova rodada de redação. A exportação do PDF final exige aprovação; versões não aprovadas permanecem disponíveis apenas como rascunho para revisão.
 
 ---
 
-# Segurança de coleta HTTP
+## 4. Resultados
 
-O fetch de páginas externas aplica proteção contra SSRF.
+### 4.1 Resultados de engenharia
 
-São bloqueados destinos como:
-
-```text
-localhost
-127.0.0.1
-10.0.0.0/8
-172.16.0.0/12
-192.168.0.0/16
-169.254.0.0/16
-::1
-```
-
-Redirecionamentos também são validados antes de serem seguidos.
-
-Isso evita que resultados de pesquisa sejam utilizados para acessar recursos internos da rede.
-
----
-
-# Camada factual
-
-Quando habilitada, a camada factual tenta extrair informações como:
+No estado atual, o protótipo implementa integralmente a cadeia:
 
 ```text
-nome
-instituição
-posto/cargo
-unidade
-data do fato
-data da morte
-causa
-circunstância
-local do fato
-local da morte
-```
-
-Cada informação é armazenada como afirmação vinculada a uma fonte.
-
-A estrutura principal é:
-
-```text
-FactEvent
-    ↓
-FactAssertion
-```
-
----
-
-# Resolução de fatos
-
-A aplicação não resolve conflitos silenciosamente.
-
-Os estados principais são:
-
-```text
-CONFIRMED
-PARTIALLY_CONFIRMED
-SOURCE_CONFLICT
-NOT_FOUND_IN_SAMPLE
-```
-
-Duas fontes independentes concordando podem confirmar um campo.
-
-Fontes conflitantes resultam em:
-
-```text
-SOURCE_CONFLICT
-```
-
-e não em escolha arbitrária de um valor.
-
----
-
-# Identidade factual
-
-O sistema evita fundir automaticamente pessoas ou eventos apenas porque compartilham o mesmo nome.
-
-A comparação considera atributos como:
-
-```text
-nome
-data
-instituição
-unidade
-cidade
-cargo
-```
-
-Quando ainda há ambiguidade, eventos permanecem separados e podem ser marcados como possíveis duplicidades para revisão.
-
----
-
-# Datas relativas
-
-Expressões como:
-
-```text
-ontem
-na terça-feira
-no dia anterior
-```
-
-só podem ser resolvidas quando existe uma data de publicação confiável para servir de referência.
-
-Caso contrário, a data é descartada como não confirmada.
-
----
-
-# Perfis de execução
-
-O projeto suporta diferentes níveis de processamento.
-
-```text
-AUTO
-MIDIATICO_SIMPLES
-MIDIATICO_COM_FATOS
-COMPLETO_NOMINAL
-```
-
-## MIDIATICO_SIMPLES
-
-Executa principalmente:
-
-```text
-perfil
 planejamento
-coleta
-validação
-classificação
-relatório
-QA
+→ busca
+→ persistência bruta
+→ consolidação
+→ hidratação
+→ validação
+→ fatos
+→ classificação
+→ memória
+→ redação
+→ QA
+→ exportação
 ```
 
-## MIDIATICO_COM_FATOS
+Os principais resultados funcionais são:
 
-Adiciona:
+- preservação dos resultados brutos e das tentativas de pesquisa;
+- distinção entre pesquisa factual e pesquisa de repercussão;
+- suporte a portais de notícias, redes sociais e YouTube;
+- tratamento independente das janelas factual e midiática;
+- recuperação do corpo integral de artigos antes da decisão semântica;
+- deduplicação por URL e conteúdo;
+- reutilização de corpus histórico entre projetos;
+- recuperação semântica por embeddings;
+- criação automática de exemplos supervisionados;
+- treinamento incremental de reranker local;
+- detecção de lacunas de cobertura;
+- registro de chamadas e custos de LLM;
+- geração versionada de relatório;
+- QA antes da exportação final.
+
+### 4.2 Reutilização do conhecimento
+
+A inclusão da memória global modifica o comportamento esperado do sistema em pesquisas recorrentes.
+
+No fluxo sem memória:
 
 ```text
-extração factual
-resolução factual
+tema
+→ pesquisa externa completa
+→ validação
+→ corpus
 ```
 
-## COMPLETO_NOMINAL
-
-Adiciona ainda:
+No fluxo atual:
 
 ```text
-busca nominal
-segunda coleta
-segunda passagem factual
+tema
+→ recuperação do corpus histórico
+→ ranking semântico
+→ revalidação
+→ identificação de lacunas
+→ pesquisa externa complementar
+→ corpus atualizado
 ```
 
-`AUTO` escolhe o perfil a partir do tipo de pauta.
+Essa arquitetura é particularmente útil para temas recorrentes. Uma pesquisa sobre uma edição já investigada de um produto institucional, por exemplo, pode reaproveitar matérias históricas e concentrar novas consultas em lacunas ou conteúdo publicado posteriormente.
+
+### 4.3 Auditabilidade
+
+O resultado metodológico mais importante não é apenas a geração automática do relatório, mas a capacidade de reconstruir seu processo.
+
+Para uma matéria analisada, é possível representar a cadeia:
+
+```text
+Qual tema originou a investigação?
+        ↓
+Qual consulta encontrou a URL?
+        ↓
+Qual ferramenta/provedor executou a busca?
+        ↓
+Qual foi o retorno bruto?
+        ↓
+Qual conteúdo foi recuperado?
+        ↓
+Por que o item foi considerado relacionado?
+        ↓
+Qual classificação recebeu?
+        ↓
+Em qual métrica ou trecho do relatório foi utilizado?
+```
+
+Essa característica diferencia a proposta de um uso direto de chatbot ou de uma chamada isolada a um modelo de linguagem.
+
+### 4.4 Resultados ainda não estabelecidos
+
+Os resultados acima são **resultados de implementação e comportamento do protótipo**, e não devem ser interpretados como evidência de superioridade estatística.
+
+O repositório ainda não contém um benchmark anotado independente suficiente para reportar, de forma cientificamente defensável:
+
+- precisão, revocação e F1 da seleção de matérias;
+- ganho quantitativo do reranker em relação ao ranking lexical;
+- redução média de chamadas externas produzida pelo reuso;
+- redução de custo de LLM;
+- concordância entre avaliadores humanos e o classificador;
+- cobertura relativa frente a GDELT, Media Cloud ou buscas manuais;
+- taxa de erro factual do relatório final.
+
+Essas métricas constituem a etapa experimental natural para transformar o protótipo em um estudo empírico completo.
 
 ---
 
-# Acompanhamento da execução
+## 5. Discussão
 
-A execução assíncrona possui acompanhamento por etapa.
+A arquitetura adota uma posição intermediária entre automação puramente determinística e delegação integral ao modelo de linguagem.
 
-Estados visuais:
+Regras determinísticas são adequadas para propriedades objetivamente verificáveis, como janela temporal, domínio, URL, âncora nominal e deduplicação. Modelos de linguagem são empregados onde a decisão depende de interpretação contextual, como determinar se uma matéria repercute materialmente um tema mesmo sem repetir literalmente seus termos.
 
-```text
-PENDING
-RUNNING
-DONE
-SKIPPED
-FAILED
-CANCELLED
-```
+A memória de corpus também exige esse equilíbrio. O fato de uma matéria ter sido relevante anteriormente é evidência útil, mas não prova que ela seja relevante para uma nova pergunta. Por isso, o sistema reutiliza **documentos**, mas reavalia **relações**.
 
-Etapas monitoradas:
+O mesmo princípio orienta o aprendizado incremental. Os rótulos produzidos durante a operação podem melhorar a priorização futura, mas o reranker permanece subordinado à validação final. Essa escolha procura evitar ciclos de retroalimentação nos quais erros históricos passem a ser aceitos automaticamente.
 
-```text
-Perfil do tema
-Planejamento de buscas
-Coleta em sites
-Coleta no YouTube
-Validação cruzada
-Extração factual - 1ª passagem
-Consolidação factual - 1ª passagem
-Planejamento de buscas nominais
-Coleta nominal
-Extração factual - 2ª passagem
-Consolidação factual - 2ª passagem
-Validação do corpus
-Análise e classificação
-Cobertura complementar
-Redação do relatório
-Auditoria QA final (+ revisão automática)
-```
+Outra limitação decorre da própria Web. Ausência de resultado não equivale a ausência de cobertura: mecanismos de busca possuem índices, rankings e limitações próprios. Da mesma forma, páginas removidas, paywalls, conteúdo dinâmico e metadados incompletos podem afetar a recuperação.
 
 ---
 
-# Cancelamento
+## 6. Conclusão
 
-A interface possui:
+Este trabalho apresentou uma arquitetura auditável para análise automatizada de repercussão midiática. A proposta trata a construção do corpus como problema metodológico independente da geração textual e separa explicitamente fato, evidência factual e cobertura jornalística.
 
-```text
-Parar relatório
-```
+O sistema combina planejamento compacto de consultas, coleta externa, preservação dos resultados brutos, hidratação de documentos, validação semântica, regras determinísticas, extração factual, classificação, memória histórica, recuperação semântica, aprendizado supervisionado incremental e controle de qualidade.
 
-O cancelamento é cooperativo.
+A introdução de `CorpusDocument`, `ProjectCorpusLink` e `RelevanceTrainingExample` permite que pesquisas sucessivas deixem de ser operações independentes. O conhecimento documental é preservado e reutilizado, enquanto decisões dependentes do tema permanecem específicas de cada projeto. Embeddings e reranking tornam essa memória progressivamente mais útil sem remover a etapa final de validação.
 
-Quando solicitado, a execução é interrompida no próximo ponto seguro.
-
-Dados já persistidos permanecem disponíveis para auditoria.
+Como trabalhos futuros, destacam-se: construção de um corpus de referência anotado por especialistas; avaliação de precisão, revocação e F1; experimentos de ablação para medir a contribuição de cada componente do ranking; migração da busca vetorial para `pgvector` em coleções maiores; avaliação longitudinal de custo e cobertura; e, em cenários com múltiplas instituições e corpora privados, investigação de **aprendizado federado** para compartilhar parâmetros do modelo de relevância sem compartilhar os textos locais.
 
 ---
 
-# Persistência dos runs
+## 7. Reprodutibilidade e execução
 
-O estado das execuções é mantido em:
+### 7.1 Requisitos
 
-```text
-ReportRun
-```
+- Python 3.12+
+- PostgreSQL recomendado; SQLite suportado para desenvolvimento
+- chave OpenAI ou endpoint compatível para as tarefas LLM
+- acesso à Internet para pesquisas externas
 
-São persistidos:
+### 7.2 Instalação
 
-```text
-run_id
-project_id
-status
-message
-error
-cancel_requested
-started_at
-finished_at
-stages
-```
+```bash
+git clone https://github.com/0rakul0/relatorio-midiatico-isp.git
+cd relatorio-midiatico-isp
 
-Isso permite consultar o estado da execução mesmo fora da memória imediata do processo.
-
----
-
-# Classificação do corpus
-
-Depois da validação, os itens podem receber classificação analítica contendo:
-
-```text
-theme
-framing
-isp_mentioned
-tone_toward_institution
-fidelity_status
-evidence
-errors
-```
-
-A classificação é feita pelo `ReportAgent`, mas somente sobre itens previamente validados.
-
----
-
-# Redação do relatório
-
-A redação também utiliza o mesmo `ReportAgent`.
-
-O agente recebe somente:
-
-* dados do projeto;
-* métricas;
-* fatos oficiais;
-* fatos validados;
-* itens do corpus validados;
-* classificações.
-
-A redação não recebe ferramentas de pesquisa.
-
-Isso impede que o redator introduza novas evidências externas sem passar pelas etapas anteriores do pipeline.
-
----
-
-# QA
-
-O relatório passa por duas camadas de QA:
-
-```text
-QA determinístico
-+
-QA por LLM
-```
-
-O QA verifica, entre outros:
-
-* números sem sustentação;
-* percentuais inconsistentes;
-* mistura de períodos;
-* uso de fatos excluídos;
-* conclusões superiores à evidência;
-* URLs ausentes;
-* duplicidade;
-* conflito entre fonte factual e repercussão.
-
-O PDF oficial só deve ser liberado quando o relatório estiver aprovado.
-
-Caso contrário, pode ser gerado apenas como rascunho para revisão interna.
-
-## Refinamento automático (QA → revisão)
-
-Quando o QA reprova com achados bloqueadores (`CRITICAL`/`HIGH`), o pipeline
-não para na reclamação: o task `report_reviser` reescreve o rascunho guiado
-pelos achados (correções mínimas, sem inventar dados) e o QA roda de novo —
-até `MAX_QA_REFINEMENTS=2` rodadas (cada uma custa 1 redação + 1 QA; `0`
-desliga). O que sobrar vai para revisão humana.
-
-`ENABLE_LLM_QA=false` desliga só a camada narrativa (modo econômico);
-o determinístico continua obrigatório.
-
----
-
-# Histórico e snapshots
-
-O relatório persistido armazena um snapshot do contexto utilizado na geração.
-
-São preservados no corpo salvo:
-
-```text
-report
-metrics
-corpus
-traditional_corpus
-social_corpus
-fact_events
-fact_evidence
-project
-```
-
-Ao consultar um relatório antigo, esses dados não são recalculados sobre o estado atual do banco.
-
-Isso evita alterar retrospectivamente um relatório já produzido.
-
----
-
-# Monitoramento de custos da LLM
-
-Cada chamada OpenAI gera um:
-
-```text
-LLMCall
-```
-
-com informações como:
-
-```text
-project_id
-run_id
-operation
-schema_name
-caller
-model
-input_tokens
-output_tokens
-cached_input_tokens
-cost_usd
-success
-error
-```
-
-Existem endpoints para consulta dos custos globais e por projeto.
-
----
-
-# Interface
-
-A interface permite:
-
-* informar o tema;
-* informar janela de repercussão;
-* informar janela factual;
-* iniciar relatório;
-* acompanhar as etapas;
-* cancelar execução;
-* acessar histórico;
-* visualizar relatório;
-* baixar PDF;
-* baixar rascunho.
-
-Os quatro campos de data aparecem lado a lado em telas desktop.
-
----
-
-# Instalação
-
-## Requisitos
-
-Recomendado:
-
-```text
-Python 3.12+
-PostgreSQL 16+
-```
-
-Também existe suporte de desenvolvimento com SQLite.
-
----
-
-## Criar ambiente e instalar dependências (recomendado, `uv`)
-
-No PowerShell:
-
-```powershell
-uv sync
-```
-
-Isso cria `.venv` e instala as dependências de `pyproject.toml` + `uv.lock`.
-Para incluir as dependências de desenvolvimento (pytest):
-
-```powershell
-uv sync --group dev
-```
-
-Comandos passam a rodar no env do projeto:
-
-```powershell
-uv run --group dev pytest
-uv run uvicorn app.main:app --reload
-```
-
-Alternativa sem `uv`:
-
-```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
 ```
 
----
-
-# Configuração
-
-Crie o arquivo:
-
-```text
-.env
-```
-
-a partir de:
-
-```text
-.env.example
-```
-
-No PowerShell:
+Windows:
 
 ```powershell
-Copy-Item .env.example .env
+.venv\Scripts\activate
+pip install -e .
 ```
 
-Configuração mínima:
+Linux/macOS:
 
-```dotenv
+```bash
+source .venv/bin/activate
+pip install -e .
+```
+
+### 7.3 Configuração mínima
+
+Exemplo de `.env`:
+
+```env
 DATABASE_URL=postgresql+psycopg://relatorio:relatorio@localhost:5432/repercussao
 
-OPENAI_API_KEY=
+OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-4.1-mini
+
+DUCKDUCKGO_REGION=br-pt
+ENABLE_CORPUS_REUSE=true
+CORPUS_EMBEDDING_MODEL=text-embedding-3-small
+RERANKER_AUTO_TRAIN=true
 ```
 
-DuckDuckGo não exige chave e é o provedor único de pesquisa externa.
+Fallback local compatível com OpenAI:
 
----
-
-## Limites principais
-
-Exemplo:
-
-```dotenv
-MAX_SEARCH_RESULTS=250
-MAX_SEARCH_QUERIES=50
-MAX_RESULTS_PER_QUERY=5
-
-# Teto de custo LLM: maximo de URLs NOVAS consolidadas por projeto.
-# Hits excedentes viram SearchHit com flag OVER_NEW_ITEM_BUDGET
-# (auditoria preservada, sem seguir para validacao/classificacao).
-# Itens REUSED do historico nao consomem esse teto.
-MAX_NEW_MEDIA_ITEMS=40
-
-# Consultas web abertas da cobertura complementar (fase 2; 1 rodada por projeto)
-MAX_GAP_FILL_QUERIES=4
-
-MAX_FACT_SOURCE_CHARS=16000
-
-MAX_SEMANTIC_REVIEWS=250
-MAX_FACT_EXTRACTIONS=40
-MAX_CLASSIFICATIONS=250
-MAX_CROSS_VALIDATIONS=20
-
-MAX_YOUTUBE_TASKS=12
+```env
+OPENAI_FALLBACK_BASE_URL=http://localhost:11434/v1
+OPENAI_FALLBACK_MODEL=gemma4:12b
+OPENAI_FALLBACK_API_KEY=ollama
 ```
 
-Outros limites podem ser configurados através de `app/config.py`.
+### 7.4 Execução
 
----
-
-# Executando localmente
-
-```powershell
+```bash
 uvicorn app.main:app --reload
 ```
 
-Abra:
+Interface local:
 
 ```text
 http://127.0.0.1:8000
 ```
 
----
+### 7.5 Testes
 
-# Docker
-
-Para desenvolvimento:
-
-```powershell
-docker compose up -d --build
-```
-
-API:
-
-```text
-http://127.0.0.1:8000
-```
-
-O `docker-compose.yml` atual é voltado principalmente para ambiente de desenvolvimento.
-
----
-
-# Endpoints principais
-
-## Saúde
-
-```http
-GET /health
-```
-
----
-
-## Projetos
-
-```http
-POST /projects
-```
-
----
-
-## Descoberta de perfil
-
-```http
-POST /projects/{project_id}/discover-profile
-```
-
----
-
-## Planejamento
-
-```http
-POST /projects/{project_id}/plan-searches
-
-POST /projects/{project_id}/ai/plan-searches
-```
-
----
-
-## Coleta
-
-```http
-POST /projects/{project_id}/collect
-```
-
----
-
-## Execução completa síncrona
-
-```http
-POST /projects/{project_id}/run
-```
-
----
-
-## Execução assíncrona
-
-```http
-POST /projects/{project_id}/run-async
-```
-
----
-
-## Acompanhamento
-
-```http
-GET /runs/{run_id}
-```
-
----
-
-## Cancelamento
-
-```http
-POST /runs/{run_id}/cancel
-```
-
----
-
-## Fatos oficiais
-
-```http
-POST /projects/{project_id}/official-facts
-
-GET /projects/{project_id}/official-facts
-```
-
----
-
-## Fatos estruturados
-
-```http
-GET /projects/{project_id}/facts
-
-GET /projects/{project_id}/facts/{event_id}/evidence
-```
-
----
-
-## Histórico
-
-```http
-GET /reports/history
-
-GET /reports/history/{project_id}
-
-DELETE /reports/history/{project_id}
-```
-
----
-
-## Cache
-
-```http
-GET /reports/cache
-```
-
----
-
-## Custos
-
-```http
-GET /costs
-
-GET /costs/summary
-
-GET /projects/{project_id}/costs
-```
-
----
-
-# Exemplo de teste
-
-Um bom tema para testar a camada factual é:
-
-```text
-policiais mortos em agosto de 2026 no Rio de Janeiro
-```
-
-O sistema deve reconhecer:
-
-```text
-project_type = EVENT_TOPIC
-```
-
-e inferir:
-
-```text
-event_start = 2026-08-01
-event_end   = 2026-08-31
-```
-
-Outro teste importante é:
-
-```text
-Dossiê Mulher 2026
-```
-
-O sistema deve reconhecer:
-
-```text
-project_type = INSTITUTIONAL_PRODUCT
-product_anchor = Dossiê Mulher
-```
-
-sem interpretar automaticamente `2026` como janela de repercussão anual.
-
----
-
-# Testes
-
-Execute:
-
-```powershell
+```bash
 pytest
 ```
 
-Os testes atuais cobrem áreas como:
+---
+
+## 8. Estrutura resumida do software
 
 ```text
-coleta executada pelo agente
-busca em lote
-auditoria de consultas
-provedor único DuckDuckGo
-separação portal/redes/YouTube
-segurança SSRF
-perfil temático
-janelas temporais
-resolução factual
-MediaScout
-QA
-custos da LLM
+app/
+├── main.py
+├── agent.py
+├── models.py
+├── schemas.py
+├── config.py
+├── topic_profile.py
+├── fact_layer.py
+├── report_qa.py
+├── pdf_report.py
+│
+├── orchestration/
+│   ├── executor.py
+│   └── state.py
+│
+├── services/
+│   ├── pipeline.py
+│   ├── search_planning.py
+│   ├── corpus_reuse.py
+│   ├── relevance_learning.py
+│   ├── validation.py
+│   ├── classification.py
+│   ├── reporting.py
+│   └── collection/
+│
+└── tools/
+    ├── search.py
+    ├── hydration.py
+    ├── academic.py
+    └── providers/
 ```
 
 ---
 
-# Migração de banco
+## 9. Referências
 
-A aplicação possui atualmente uma migração aditiva em:
+BERMEJO, F.; BHARGAVA, R.; BUDNE, P.; et al. **Media Cloud 2.0: An Updated Open Web News Archive**. *Proceedings of the International AAAI Conference on Web and Social Media*, v. 20, n. 1, p. 2735–2746, 2026. DOI: 10.1609/icwsm.v20i1.42778.
 
-```text
-app/schema_upgrade.py
-```
+LEWIS, P.; PEREZ, E.; PIKTUS, A.; et al. **Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks**. In: *Advances in Neural Information Processing Systems 33 (NeurIPS 2020)*, 2020.
 
-Ela preserva bases existentes e adiciona novas tabelas e colunas quando necessário.
+ROBERTS, H.; BHARGAVA, R.; VALIUKAS, L.; et al. **Media Cloud: Massive Open Source Collection of Global News on the Open Web**. *Proceedings of the International AAAI Conference on Web and Social Media*, v. 15, n. 1, p. 1034–1045, 2021. DOI: 10.1609/icwsm.v15i1.18127.
 
-No startup:
+THE GDELT PROJECT. **GDELT 2.0: Events Database, Global Knowledge Graph and Mentions**. Documentação técnica do projeto.
 
-```text
-ensure_schema()
-```
-
-é executado automaticamente.
-
-Para ambientes de produção e evolução de schema mais complexa, o próximo passo recomendado é migrar esse mecanismo para Alembic.
+WILLIAMS, S. **Exploration of the Global Database of Events, Language and Tone (GDELT), with specific application to disaster reporting**. Office for National Statistics, 2020.
 
 ---
 
-# Princípios do projeto
+## 10. Citação do software
 
-## 1. Pesquisa externa somente através do agente
+Enquanto não houver publicação acadêmica associada ao projeto, o software pode ser referenciado como:
 
 ```text
-ReportAgent
-    ↓
-Tool
-    ↓
-Provider
+Relatório de Repercussão Midiática — ISP.
+Sistema auditável para coleta, validação e análise de repercussão midiática.
+Versão 0.4.0. 2026.
 ```
 
 ---
 
-## 2. DuckDuckGo como provedor único
+## Licença e responsabilidade
 
-```text
-DuckDuckGo News → DuckDuckGo Text
-DuckDuckGo Videos
-```
-
----
-
-## 3. Fato não é repercussão
-
-Uma fonte posterior pode confirmar um fato sem aumentar a repercussão no período analisado.
-
----
-
-## 4. Ausência de evidência não é evidência de ausência
-
-O sistema deve preferir:
-
-```text
-não localizado na amostra
-```
-
-a:
-
-```text
-não ocorreu
-```
-
-quando não houver sustentação.
-
----
-
-## 5. Conflitos não são resolvidos silenciosamente
-
-Quando fontes divergem:
-
-```text
-SOURCE_CONFLICT
-```
-
----
-
-## 6. O corpus utilizado deve ser auditável
-
-Cada item deve preservar:
-
-```text
-fonte
-URL
-consulta
-provider
-data de recuperação
-finalidade da busca
-```
-
----
-
-## 7. A LLM não substitui regras metodológicas
-
-Decisões como:
-
-```text
-janela temporal
-deduplicação
-âncora nominal
-prioridade de fontes
-elegibilidade
-persistência
-```
-
-possuem validações determinísticas.
-
----
-
-# SaaS: auth, planos e billing
-
-Todos os endpoints exigem Bearer JWT do Supabase Auth (exceto `/health`).
-Projetos têm dono (`owner_id`); sem dono (legado), só admin enxerga.
-Admin via `ADMIN_EMAILS`.
-
-Planos (`FREE`/`PRO`/`INSTITUCIONAL`) limitam relatórios/mês, US$ LLM/mês
-(402 ao estourar, calculado de `report_runs` + `llm_calls`) e recursos
-(perfis, YouTube, fatos, gap-fill). `POST /projects` ajusta o pedido ao
-plano e avisa em `plan_notice`.
-
-Billing Mercado Pago: `POST /billing/checkout` (501, MOCK) e
-`POST /billing/webhook` (MOCK por `user_email`/`user_id`; o real valida
-assinatura MP e resolve pelo `preapproval_id`). `GET /billing/me` mostra
-plano + uso do mês; `GET /billing/subscriptions` é admin.
-
----
-
-# Limitações e próximos passos
-
-A arquitetura atual já implementa o núcleo do MVP auditável, mas ainda existem melhorias planejadas:
-* bloqueio transacional de runs simultâneos em múltiplos workers;
-* recuperação ou marcação de runs interrompidos após restart;
-* auditoria `SearchCall` também para buscas opcionais do documentalista;
-* política rígida de consultas permitidas nas tools;
-* versionamento real de múltiplos relatórios para o mesmo projeto;
-* fingerprint completo para cache;
-* exposição da auditoria de buscas na interface;
-* migração do schema para Alembic;
-* CI automatizado;
-* migração para `pyproject.toml` e `uv.lock`;
-* autenticação dos endpoints administrativos;
-* configuração Docker específica para produção.
-
----
-
-# Status atual
-
-O núcleo arquitetural está organizado em:
-
-```text
-ReportAgent
-   ↓
-Tools
-   ↓
-Providers
-```
-
-com:
-
-```text
-Pydantic
-+
-auditoria de LLM
-+
-auditoria de pesquisas
-+
-validação determinística
-+
-proveniência
-+
-QA
-```
+Este repositório constitui uma ferramenta de apoio à pesquisa e à análise. Classificações automáticas, inferências factuais e sínteses produzidas por modelos de linguagem devem permanecer sujeitas à inspeção das fontes e à validação humana, especialmente quando utilizadas em contextos institucionais, científicos ou decisórios.
