@@ -330,10 +330,28 @@ def backfill_global_corpus(db: Session) -> int:
     return len(items)
 
 
+def _corpus_document_date(document: CorpusDocument) -> date | None:
+    if document.published_at:
+        return document.published_at
+    for text_value in (document.url, document.title):
+        for match in re.finditer(
+            r"(?<!\\d)(20\\d{2})[/-](\\d{1,2})[/-](\\d{1,2})(?!\\d)",
+            text_value or "",
+        ):
+            try:
+                return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+            except ValueError:
+                continue
+    return None
+
+
 def _in_requested_window(project: Project, document: CorpusDocument) -> bool:
-    if not project.has_custom_date_window or document.published_at is None:
+    if not project.has_custom_date_window:
         return True
-    return project.collection_start <= document.published_at <= project.collection_end
+    publication_date = _corpus_document_date(document)
+    if publication_date is None:
+        return False
+    return project.collection_start <= publication_date <= project.collection_end
 
 
 def _document_reference_date(document: CorpusDocument) -> date | None:

@@ -226,12 +226,23 @@ def deduplicate_corpus(corpus: list[dict]) -> list[dict]:
 
 
 def corpus_for_project(db: Session, project_id: int) -> list[dict]:
+    project = db.get(Project, project_id)
     rows = db.execute(
         select(MediaItem, Classification)
         .outerjoin(Classification, Classification.media_item_id == MediaItem.id)
         .where(MediaItem.project_id == project_id, MediaItem.status == "VALID")
         .order_by(MediaItem.published_at.desc().nullslast(), MediaItem.id.desc())
     ).all()
+    if project and project.has_custom_date_window:
+        rows = [
+            (item, classification)
+            for item, classification in rows
+            if (
+                (publication_date := inferred_publication_date(item)) is not None
+                and project.collection_start <= publication_date <= project.collection_end
+            )
+        ]
+
     raw_corpus = [
         {
             "title": item.title,

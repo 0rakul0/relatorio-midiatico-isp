@@ -723,6 +723,20 @@ $('#report-form').addEventListener('submit',async e=>{e.preventDefault();const b
 
 $('#stop-report').onclick=async()=>{if(!currentRunId)return;try{const response=await api(`/runs/${currentRunId}/cancel`,{method:'POST'});renderRun(response.run);$('#progress').textContent='Cancelamento solicitado. A execução será encerrada no próximo ponto seguro.'}catch(e){alert(e.message)}};
 $('#refresh-report').onclick=async()=>{if(!currentProjectId)return alert('Abra ou gere um relatório primeiro.');try{const d=await api(`/reports/history/${currentProjectId}`);render(d.report)}catch(e){alert(e.message)}};
-$('#save-pdf').onclick=()=>{if(!currentProjectId)return;window.open(`/projects/${currentProjectId}/export.pdf`,'_blank')};
-$('#save-draft').onclick=()=>{if(!currentProjectId)return;window.open(`/projects/${currentProjectId}/export-draft.pdf`,'_blank')};
+async function downloadAuthenticatedPdf(path){
+  let response=await fetch(path,{headers:{...authHeaders()}});
+  if(response.status===401&&await refreshSession()){response=await fetch(path,{headers:{...authHeaders()}})}
+  if(response.status===401){window.location.href='/login';throw new Error('Sessão expirada. Entre de novo.');}
+  if(!response.ok){const raw=await response.text();let detail=raw;try{detail=JSON.parse(raw)?.detail||raw}catch(_error){}throw new Error(detail||`Erro HTTP ${response.status}`);}
+  const blob=await response.blob();
+  const disposition=response.headers.get('Content-Disposition')||'';
+  const match=disposition.match(/filename="?([^";]+)"?/i);
+  const filename=match?.[1]||'relatorio.pdf';
+  const objectUrl=URL.createObjectURL(blob);
+  const anchor=document.createElement('a');
+  anchor.href=objectUrl;anchor.download=filename;document.body.appendChild(anchor);anchor.click();anchor.remove();
+  setTimeout(()=>URL.revokeObjectURL(objectUrl),30000);
+}
+$('#save-pdf').onclick=async()=>{if(!currentProjectId)return;try{await downloadAuthenticatedPdf(`/projects/${currentProjectId}/export.pdf`)}catch(e){alert(e.message)}};
+$('#save-draft').onclick=async()=>{if(!currentProjectId)return;try{await downloadAuthenticatedPdf(`/projects/${currentProjectId}/export-draft.pdf`)}catch(e){alert(e.message)}};
 loadHistory();
