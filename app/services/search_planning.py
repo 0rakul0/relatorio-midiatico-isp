@@ -350,6 +350,69 @@ def _official_operation_inventory_queries(project: Project) -> list[tuple[str, s
     return rows
 
 
+def plan_missing_month_operation_inventory_queries(
+    db: Session,
+    project: Project,
+    months: list[str],
+) -> list[SearchQuery]:
+    """Adiciona apenas consultas mensais ausentes do inventario anual."""
+    wanted = {
+        str(value)
+        for value in months
+        if isinstance(value, str) and len(value) == 7 and value[4] == "-"
+    }
+    if not wanted or not project.event_start or not project.event_end:
+        return []
+
+    existing = _existing_queries(db, project.id)
+    created: list[SearchQuery] = []
+
+    def month_key_for_query(query: str) -> str | None:
+        normalized_query = normalized_text(query)
+        for month_index, month_name in enumerate(_PT_MONTHS, start=1):
+            if month_name not in normalized_query:
+                continue
+            for year in range(project.event_start.year, project.event_end.year + 1):
+                if str(year) in normalized_query:
+                    return f"{year:04d}-{month_index:02d}"
+        return None
+
+    for query, rationale in _annual_event_inventory_queries(project):
+        if month_key_for_query(query) not in wanted:
+            continue
+        row = _add_query(
+            db, project, existing,
+            query=query,
+            kind="fact_inventory_month",
+            purpose="FACT_DISCOVERY",
+            rationale=f"[refinamento inventario] {rationale}",
+            priority=1,
+        )
+        if row:
+            created.append(row)
+
+    settings = get_settings()
+    official_added = 0
+    for query, kind, rationale in _official_operation_inventory_queries(project):
+        if month_key_for_query(query) not in wanted:
+            continue
+        if official_added >= settings.max_official_queries:
+            break
+        row = _add_query(
+            db, project, existing,
+            query=query,
+            kind=kind,
+            purpose="OFFICIAL_FACT",
+            rationale=f"[refinamento inventario] {rationale}",
+            priority=1,
+        )
+        if row:
+            created.append(row)
+            official_added += 1
+
+    db.commit()
+    return created
+
 def _persist_strategy_queries(
     db: Session,
     project: Project,
