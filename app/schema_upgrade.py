@@ -177,6 +177,23 @@ def ensure_schema() -> None:
                 )
             )
 
+        # Colunas de texto analítico não devem ter limite artificial de 300
+        # caracteres. Bancos PostgreSQL legados podem ter sido criados quando
+        # Classification.framing ainda era VARCHAR(300).
+        if dialect_name == "postgresql" and "classifications" in existing_tables:
+            framing_type = next(
+                (
+                    column["type"]
+                    for column in inspect(connection).get_columns("classifications")
+                    if column["name"] == "framing"
+                ),
+                None,
+            )
+            if framing_type is not None and str(framing_type).upper() != "TEXT":
+                connection.execute(
+                    text("ALTER TABLE classifications ALTER COLUMN framing TYPE TEXT")
+                )
+
         if "projects" in existing_tables:
             connection.execute(text("UPDATE projects SET event_start = collection_start WHERE event_start IS NULL"))
             connection.execute(text("UPDATE projects SET event_end = collection_end WHERE event_end IS NULL"))

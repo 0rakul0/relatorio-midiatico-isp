@@ -437,7 +437,10 @@ class Classification(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     media_item_id: Mapped[int] = mapped_column(ForeignKey("media_items.id", ondelete="CASCADE"), unique=True)
     theme: Mapped[str] = mapped_column(String(150))
-    framing: Mapped[str] = mapped_column(String(300))
+    # Enquadramento é texto analítico produzido pela classificação e pode
+    # ultrapassar facilmente 300 caracteres. TEXT evita truncamento no
+    # PostgreSQL durante classificação inicial ou cobertura complementar.
+    framing: Mapped[str] = mapped_column(Text)
     isp_mentioned: Mapped[bool] = mapped_column(default=False)
     tone_toward_institution: Mapped[str] = mapped_column(String(30), default="NEUTRO")
     fidelity_status: Mapped[str] = mapped_column(String(30), default="PENDENTE")
