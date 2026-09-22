@@ -64,6 +64,32 @@ def document_content_hash(
     ).hexdigest()
 
 
+def document_content_fingerprint(
+    title: str | None,
+    snippet: str | None,
+    content: str | None,
+) -> str:
+    """Fuzzy fingerprint used only to find cross-URL duplicate candidates."""
+    body = _compact(content)
+    basis = body if len(body) >= 160 else _document_text(title, snippet, content)
+    tokens = re.findall(r"[a-z0-9]+", normalized_text(basis))
+    if not tokens:
+        return hashlib.sha256(b"").hexdigest()
+    shingles = [
+        " ".join(tokens[index:index + 5])
+        for index in range(max(1, len(tokens) - 4))
+    ]
+    if len(tokens) < 5:
+        shingles = [" ".join(tokens)]
+    hashes = sorted(
+        hashlib.blake2b(shingle.encode("utf-8"), digest_size=8).hexdigest()
+        for shingle in shingles
+    )
+    # A small bottom-k signature tolerates tracking/footer differences while
+    # remaining deterministic and cheap to compare in SQL.
+    return hashlib.sha256("|".join(hashes[:32]).encode("utf-8")).hexdigest()
+
+
 def _hash_embedding(text: str, dimensions: int = 256) -> list[float]:
     vector = [0.0] * dimensions
     tokens = re.findall(r"[a-z0-9]+", normalized_text(text))
@@ -159,6 +185,9 @@ def backfill_content_hashes(db: Session, *, limit: int) -> int:
     ).all()
     for document in documents:
         document.content_hash = document_content_hash(
+            document.title, document.snippet, document.content
+        )
+        document.content_fingerprint = document_content_fingerprint(
             document.title, document.snippet, document.content
         )
         urls = list(document.alternate_urls or [])

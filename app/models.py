@@ -187,6 +187,7 @@ class CorpusDocument(Base):
     # matéria encontrada por URLs diferentes; embedding é reutilizado entre
     # projetos e nunca substitui a validação semântica final.
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    content_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     alternate_urls: Mapped[list] = mapped_column(JSON, default=list)
     embedding: Mapped[list] = mapped_column(JSON, default=list)
     embedding_model: Mapped[str | None] = mapped_column(String(120), nullable=True)

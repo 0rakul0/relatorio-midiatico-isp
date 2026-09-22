@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.models import CorpusDocument, MediaItem, Project, ProjectCorpusLink
 from app.services.relevance_learning import (
     backfill_content_hashes,
+    document_content_fingerprint,
     document_content_hash,
     reranker_scores_for_documents,
     semantic_scores_for_documents,
@@ -187,11 +188,15 @@ def sync_media_item_to_corpus(
 ) -> CorpusDocument:
     canonical = _compact(item.canonical_url or item.url)
     incoming_hash = document_content_hash(item.title, item.snippet, item.content)
+    incoming_fingerprint = document_content_fingerprint(
+        item.title, item.snippet, item.content
+    )
     document = db.scalar(
         select(CorpusDocument).where(
             or_(
                 CorpusDocument.canonical_url == canonical,
                 CorpusDocument.content_hash == incoming_hash,
+                CorpusDocument.content_fingerprint == incoming_fingerprint,
             )
         )
     )
@@ -213,6 +218,7 @@ def sync_media_item_to_corpus(
             or classify_media_origin(item.url, item.domain),
             source_provenance=list(item.source_provenance or []),
             content_hash=incoming_hash,
+            content_fingerprint=incoming_fingerprint,
             alternate_urls=[item.url] if item.url else [],
             embedding=[],
             embedding_model=None,
@@ -251,6 +257,10 @@ def sync_media_item_to_corpus(
     # Atualiza o hash com o conteúdo mais rico e invalida o embedding apenas
     # quando o snapshot textual realmente mudou.
     current_hash = document_content_hash(document.title, document.snippet, document.content)
+    current_fingerprint = document_content_fingerprint(
+        document.title, document.snippet, document.content
+    )
+    document.content_fingerprint = current_fingerprint
     if document.content_hash != current_hash:
         document.content_hash = current_hash
         document.embedding = []

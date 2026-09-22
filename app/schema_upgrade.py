@@ -68,6 +68,7 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "current_version_id": "INTEGER",
         "version_no": "INTEGER DEFAULT 1",
         "content_hash": "VARCHAR(64)",
+        "content_fingerprint": "VARCHAR(64)",
         "request_fingerprint": "VARCHAR(64)",
     },
     "search_hits": {
