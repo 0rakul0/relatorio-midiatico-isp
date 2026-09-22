@@ -5,7 +5,7 @@ from datetime import date
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report
+from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report, operation_events_for_report
 from app.models import GeneratedReport, Project
 from app.services.academic_research import academic_papers_for_project
 from app.services.execution_profile import execution_flags
@@ -38,6 +38,10 @@ def hydrate_cached_report(db: Session, project: Project, generated: GeneratedRep
     if "fact_events" not in payload:
         payload["fact_events"] = (
             fact_events_for_main_report(db, project.id) if flags["enable_fact_layer"] else []
+        )
+    if "operation_events" not in payload:
+        payload["operation_events"] = (
+            operation_events_for_report(db, project.id) if flags["enable_fact_layer"] else []
         )
     if "fact_evidence" not in payload:
         payload["fact_evidence"] = (
