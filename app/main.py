@@ -467,28 +467,48 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db), user: 
     today = date.today()
     inferred_window = requested_topic_window(payload.topic)
 
-    if payload.collection_start or payload.collection_end:
+    explicit_collection = bool(payload.collection_start or payload.collection_end)
+    explicit_event = bool(payload.event_start or payload.event_end)
+
+    # Regra temporal:
+    # 1) janela de repercussão explicitamente informada sempre vence;
+    # 2) se o usuário informou apenas a janela factual, a repercussão herda
+    #    exatamente essa janela (comportamento mais seguro e previsível);
+    # 3) caso contrário, um ano/mês explícito no tema define ambas as janelas;
+    # 4) sem qualquer recorte, a pesquisa permanece temática.
+    if explicit_collection:
         collection_start = payload.collection_start or payload.collection_end
         collection_end = payload.collection_end or payload.collection_start
+        collection_window_source = "USER"
+        has_custom_window = True
+    elif explicit_event:
+        collection_start = payload.event_start or payload.event_end
+        collection_end = payload.event_end or payload.event_start
+        collection_window_source = "EVENT_WINDOW"
         has_custom_window = True
     elif inferred_window:
         collection_start, collection_end = inferred_window
+        collection_window_source = "TOPIC"
         has_custom_window = True
     else:
         collection_start = collection_end = today
+        collection_window_source = "TOPIC_DRIVEN"
         has_custom_window = False
 
-    if payload.event_start or payload.event_end:
+    if explicit_event:
         event_start = payload.event_start or payload.event_end
         event_end = payload.event_end or payload.event_start
+        event_window_source = "USER"
     elif inferred_window:
         event_start, event_end = inferred_window
+        event_window_source = "TOPIC"
     elif has_custom_window:
         event_start, event_end = collection_start, collection_end
+        event_window_source = "COLLECTION_WINDOW"
     else:
         # Sem datas explícitas, não inventamos uma janela factual de um único dia.
-        # O pipeline pesquisará pelo tema e pelas entidades descobertas no perfil.
         event_start = event_end = None
+        event_window_source = "TOPIC_DRIVEN"
 
     if collection_end < collection_start:
         raise HTTPException(422, "collection_end deve ser posterior ao início")
@@ -505,6 +525,8 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db), user: 
         }.items()
         if value is not None
     }
+    execution_options["collection_window_source"] = collection_window_source
+    execution_options["event_window_source"] = event_window_source
     # O campo launch_date do banco continua preenchido por compatibilidade com
     # instalações antigas, mas só deve ser exibido como dado editorial quando
     # o usuário o informou ou quando o agente documentalista o confirmou.

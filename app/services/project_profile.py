@@ -81,6 +81,8 @@ def project_payload(project: Project, *, for_report: bool = False) -> dict:
         "event_start": project.event_start.isoformat() if project.event_start else None,
         "event_end": project.event_end.isoformat() if project.event_end else None,
         "fact_grace_days": project.fact_grace_days,
+        "collection_window_source": (project.execution_options or {}).get("collection_window_source"),
+        "event_window_source": (project.execution_options or {}).get("event_window_source"),
     }
 
 
