@@ -1,5 +1,5 @@
 """Camada de orquestração: estado do run, executor e, futuramente, estágios."""
-from app.orchestration.executor import start_run
+from app.orchestration.executor import resume_run, start_run
 from app.orchestration.state import (
     RUN_STAGES,
     RunCancelled,
@@ -36,5 +36,6 @@ __all__ = [
     "request_cancel",
     "run_snapshot",
     "start_run",
+    "resume_run",
     "update_stage",
 ]

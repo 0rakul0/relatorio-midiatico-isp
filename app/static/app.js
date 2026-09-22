@@ -688,6 +688,22 @@ async function finishRun(run){
     $('#progress').textContent='Relatório interrompido. Os dados já coletados permanecem salvos para auditoria.';
   }else if(run.status==='FAILED'){
     $('#progress').textContent=`Erro: ${run.error||run.message||'falha não identificada'}`;
+    if(run.project_id){
+      const resume=document.createElement('button');
+      resume.className='secondary';
+      resume.textContent='Continuar da redação / rever QA';
+      resume.style.marginLeft='12px';
+      resume.onclick=async()=>{
+        try{
+          resume.disabled=true;
+          const response=await api(`/projects/${run.project_id}/resume-async`,{method:'POST'});
+          currentProjectId=run.project_id;currentRunId=response.run.run_id;
+          renderRun(response.run);$('#progress').textContent='Retomando sem repetir coleta e análise.';
+          pollFailures=0;pollDelay=1000;schedulePoll(1000);await pollRun();
+        }catch(e){alert(e.message);resume.disabled=false}
+      };
+      $('#progress').appendChild(resume);
+    }
   }
 }
 let pollFailures=0,pollDelay=1000;
