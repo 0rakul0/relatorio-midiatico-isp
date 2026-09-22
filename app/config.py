@@ -158,6 +158,30 @@ class Settings(BaseSettings):
     # 0 desliga a validade.
     corpus_reuse_max_age_days: int = Field(default=180, ge=0, le=3650)
 
+    # Memória semântica do corpus. OpenAI é tentado quando configurado; caso
+    # contrário (ou se o endpoint não expuser embeddings), há fallback local
+    # determinístico. Os vetores ficam em JSON para manter SQLite/PostgreSQL
+    # compatíveis; pgvector pode ser introduzido depois sem mudar o pipeline.
+    corpus_embedding_provider: str = "openai"
+    corpus_embedding_model: str = "text-embedding-3-small"
+    corpus_embedding_max_chars: int = Field(default=10000, ge=1000, le=50000)
+    corpus_embedding_batch_size: int = Field(default=32, ge=1, le=128)
+    corpus_embedding_fallback_local: bool = True
+    corpus_learning_backfill_limit: int = Field(default=5000, ge=100, le=200000)
+    corpus_semantic_weight: float = Field(default=0.23, ge=0.0, le=0.6)
+
+    # Reranker local treinado a partir das próprias decisões VALID/NOT_RELATED.
+    # Ele só prioriza candidatos; a validação semântica final continua sendo
+    # obrigatória para preservar auditabilidade.
+    reranker_auto_train: bool = True
+    reranker_model_path: str = "data/relevance_reranker.json"
+    reranker_min_training_examples: int = Field(default=80, ge=20, le=1000000)
+    reranker_min_examples_per_class: int = Field(default=15, ge=5, le=100000)
+    reranker_retrain_delta: int = Field(default=25, ge=1, le=100000)
+    reranker_max_features: int = Field(default=40000, ge=1000, le=250000)
+    reranker_weight: float = Field(default=0.10, ge=0.0, le=0.5)
+    relevance_training_max_chars: int = Field(default=7000, ge=1000, le=50000)
+
     max_fact_source_chars: int = Field(default=16000, ge=1000, le=100000)
 
     # Chat/RAG sobre o corpus. O ranking inicial e local/deterministico e

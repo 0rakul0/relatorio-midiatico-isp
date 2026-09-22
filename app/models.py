@@ -182,6 +182,16 @@ class CorpusDocument(Base):
     view_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     search_source: Mapped[str] = mapped_column(String(50), default="unknown")
     source_provenance: Mapped[list] = mapped_column(JSON, default=list)
+
+    # Metadados de memória global. content_hash permite deduplicar a mesma
+    # matéria encontrada por URLs diferentes; embedding é reutilizado entre
+    # projetos e nunca substitui a validação semântica final.
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    alternate_urls: Mapped[list] = mapped_column(JSON, default=list)
+    embedding: Mapped[list] = mapped_column(JSON, default=list)
+    embedding_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    embedded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     # Origem do link: PORTAL_NOTICIAS | REDE_SOCIAL | YOUTUBE.
     media_origin: Mapped[str] = mapped_column(String(30), default="PORTAL_NOTICIAS")
     first_seen_at: Mapped[datetime] = mapped_column(
@@ -215,9 +225,45 @@ class ProjectCorpusLink(Base):
     relation_status: Mapped[str] = mapped_column(String(40), default="PENDING")
     relation_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     relevance_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    semantic_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reranker_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), server_default=func.now()
+    )
+
+
+class RelevanceTrainingExample(Base):
+    """Exemplo supervisionado derivado da validação auditável do corpus."""
+
+    __tablename__ = "relevance_training_examples"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "media_item_id",
+            name="uq_relevance_training_project_item",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    media_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("media_items.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    corpus_document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("corpus_documents.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    query_text: Mapped[str] = mapped_column(Text)
+    document_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    document_text: Mapped[str] = mapped_column(Text)
+    label: Mapped[int] = mapped_column(Integer, index=True)
+    relation_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    decision_source: Mapped[str] = mapped_column(String(80), default="semantic_validation")
+    decision_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
     )
 
 

@@ -21,6 +21,10 @@ from app.topic_profile import (
 )
 from app.services.collection.common import inferred_publication_date, media_window
 from app.services.corpus_reuse import sync_media_item_to_corpus
+from app.services.relevance_learning import (
+    maybe_train_reranker,
+    record_relevance_training_examples,
+)
 from app.services.collection.guards import (
     collection_guard,
     institutional_product_version_guard_text,
@@ -432,6 +436,13 @@ def validate_and_classify(
             item,
             origin=item.corpus_origin or "SEARCH",
         )
+    training_examples = record_relevance_training_examples(
+        db,
+        project,
+        items,
+        decision_source="llm" if use_llm else "heuristic",
+    )
+    reranker_training = maybe_train_reranker(db)
     db.commit()
 
     return {
@@ -445,6 +456,8 @@ def validate_and_classify(
         "already_decided": already_decided,
         "pending_after_quota": pending_after_quota,
         "temporal_mode": "explicit_window" if enforce_window else "topic_driven",
+        "training_examples": training_examples,
+        "reranker_training": reranker_training,
     }
 
 

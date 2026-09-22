@@ -75,6 +75,15 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     },
     "corpus_documents": {
         "media_origin": "VARCHAR(30) DEFAULT 'PORTAL_NOTICIAS'",
+        "content_hash": "VARCHAR(64)",
+        "alternate_urls": "JSON",
+        "embedding": "JSON",
+        "embedding_model": "VARCHAR(120)",
+        "embedded_at": "TIMESTAMP",
+    },
+    "project_corpus_links": {
+        "semantic_score": "FLOAT",
+        "reranker_score": "FLOAT",
     },
     "academic_papers": {
         "title_ptbr": "TEXT",

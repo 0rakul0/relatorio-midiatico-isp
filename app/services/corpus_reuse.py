@@ -5,11 +5,17 @@ import re
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import CorpusDocument, MediaItem, Project, ProjectCorpusLink
+from app.services.relevance_learning import (
+    backfill_content_hashes,
+    document_content_hash,
+    reranker_scores_for_documents,
+    semantic_scores_for_documents,
+)
 from app.services.collection.media_origin import classify_media_origin
 from app.topic_profile import normalized_text
 from app.year_utils import find_years
@@ -176,10 +182,18 @@ def sync_media_item_to_corpus(
     *,
     origin: str | None = None,
     source_project_id: int | None = None,
+    semantic_score: float | None = None,
+    reranker_score: float | None = None,
 ) -> CorpusDocument:
     canonical = _compact(item.canonical_url or item.url)
+    incoming_hash = document_content_hash(item.title, item.snippet, item.content)
     document = db.scalar(
-        select(CorpusDocument).where(CorpusDocument.canonical_url == canonical)
+        select(CorpusDocument).where(
+            or_(
+                CorpusDocument.canonical_url == canonical,
+                CorpusDocument.content_hash == incoming_hash,
+            )
+        )
     )
     now = datetime.now(timezone.utc)
 
@@ -198,6 +212,11 @@ def sync_media_item_to_corpus(
             media_origin=item.media_origin
             or classify_media_origin(item.url, item.domain),
             source_provenance=list(item.source_provenance or []),
+            content_hash=incoming_hash,
+            alternate_urls=[item.url] if item.url else [],
+            embedding=[],
+            embedding_model=None,
+            embedded_at=None,
             first_seen_at=now,
             last_seen_at=now,
         )
@@ -229,6 +248,20 @@ def sync_media_item_to_corpus(
             document.source_provenance, item.source_provenance
         )
 
+    # Atualiza o hash com o conteúdo mais rico e invalida o embedding apenas
+    # quando o snapshot textual realmente mudou.
+    current_hash = document_content_hash(document.title, document.snippet, document.content)
+    if document.content_hash != current_hash:
+        document.content_hash = current_hash
+        document.embedding = []
+        document.embedding_model = None
+        document.embedded_at = None
+    urls = list(document.alternate_urls or [])
+    for candidate_url in (document.url, item.url):
+        if candidate_url and candidate_url not in urls:
+            urls.append(candidate_url)
+    document.alternate_urls = urls[:50]
+
     item.corpus_document_id = document.id
     item.corpus_origin = origin or item.corpus_origin or "SEARCH"
 
@@ -248,6 +281,8 @@ def sync_media_item_to_corpus(
             relation_status=item.status or "PENDING",
             relation_type=item.relation_type,
             relevance_evidence=item.relevance_evidence,
+            semantic_score=semantic_score,
+            reranker_score=reranker_score,
             created_at=now,
             updated_at=now,
         ))
@@ -257,6 +292,10 @@ def sync_media_item_to_corpus(
         link.relation_status = item.status or link.relation_status
         link.relation_type = item.relation_type or link.relation_type
         link.relevance_evidence = item.relevance_evidence or link.relevance_evidence
+        if semantic_score is not None:
+            link.semantic_score = semantic_score
+        if reranker_score is not None:
+            link.reranker_score = reranker_score
         if origin:
             link.origin = origin
         if source_project_id is not None:
@@ -276,6 +315,7 @@ def backfill_global_corpus(db: Session) -> int:
         sync_media_item_to_corpus(
             db, item, origin=item.corpus_origin or "HISTORICAL"
         )
+    backfill_content_hashes(db, limit=settings.corpus_learning_backfill_limit)
     db.flush()
     return len(items)
 
@@ -360,8 +400,10 @@ def reuse_prior_corpus(
     existing = set(db.scalars(
         select(MediaItem.canonical_url).where(MediaItem.project_id == project.id)
     ).all())
-    best: dict[int, tuple[float, Project, CorpusDocument]] = {}
 
+    # Primeiro reduzimos o universo por similaridade entre projetos; depois
+    # embeddings e reranker ordenam os documentos dentro desse conjunto.
+    candidate_sources: dict[int, tuple[float, Project, CorpusDocument]] = {}
     for previous, project_score in related:
         rows = db.execute(
             select(ProjectCorpusLink, CorpusDocument)
@@ -371,13 +413,42 @@ def reuse_prior_corpus(
         for _link, document in rows:
             if not _in_requested_window(project, document):
                 continue
-            document_score = document_similarity(project, document)
-            combined = (0.58 * project_score) + (0.42 * document_score)
-            if combined < settings.corpus_reuse_min_document_score:
-                continue
-            current = best.get(document.id)
-            if current is None or combined > current[0]:
-                best[document.id] = (combined, previous, document)
+            current = candidate_sources.get(document.id)
+            if current is None or project_score > current[0]:
+                candidate_sources[document.id] = (project_score, previous, document)
+
+    candidate_documents = [row[2] for row in candidate_sources.values()]
+    semantic_scores = semantic_scores_for_documents(db, project, candidate_documents)
+    reranker_scores = reranker_scores_for_documents(project, candidate_documents)
+
+    best: dict[int, tuple[float, Project, CorpusDocument, float, float | None]] = {}
+    for document_id, (project_score, previous, document) in candidate_sources.items():
+        document_score = document_similarity(project, document)
+        semantic_score = float(semantic_scores.get(document_id, 0.0))
+        reranker_score = reranker_scores.get(document_id)
+        if reranker_score is None:
+            combined = (
+                (0.50 * project_score)
+                + (0.30 * document_score)
+                + (0.20 * semantic_score)
+            )
+        else:
+            semantic_weight = float(settings.corpus_semantic_weight)
+            reranker_weight = float(settings.reranker_weight)
+            lexical_weight = 0.25
+            project_weight = max(0.0, 1.0 - semantic_weight - reranker_weight - lexical_weight)
+            combined = (
+                (project_weight * project_score)
+                + (lexical_weight * document_score)
+                + (semantic_weight * semantic_score)
+                + (reranker_weight * float(reranker_score))
+            )
+        if combined < settings.corpus_reuse_min_document_score:
+            continue
+        best[document_id] = (
+            combined, previous, document, semantic_score,
+            float(reranker_score) if reranker_score is not None else None,
+        )
 
     ranked = sorted(best.values(), key=lambda row: row[0], reverse=True)
     ranked = ranked[: settings.corpus_reuse_max_candidates]
@@ -391,7 +462,7 @@ def reuse_prior_corpus(
     source_project_ids: set[int] = set()
     exact_topic_match = False
 
-    for _score, previous, document in ranked:
+    for _score, previous, document, semantic_score, reranker_score in ranked:
         if document.canonical_url in existing:
             continue
         if _document_expired(document, project, today, max_age_days):
@@ -445,7 +516,12 @@ def reuse_prior_corpus(
         db.add(item)
         db.flush()
         sync_media_item_to_corpus(
-            db, item, origin="REUSED", source_project_id=previous.id
+            db,
+            item,
+            origin="REUSED",
+            source_project_id=previous.id,
+            semantic_score=semantic_score,
+            reranker_score=reranker_score,
         )
         existing.add(document.canonical_url)
         reused += 1
@@ -461,6 +537,8 @@ def reuse_prior_corpus(
         "covered_domains": sorted(domains),
         "coverage_start": min(dates).isoformat() if dates else None,
         "coverage_end": max(dates).isoformat() if dates else None,
+        "embedding_candidates": len(semantic_scores),
+        "reranker_used": bool(reranker_scores),
     }
     profile = dict(project.topic_profile or {})
     profile["corpus_reuse"] = summary
