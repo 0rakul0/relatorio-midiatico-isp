@@ -435,28 +435,6 @@ def build_pdf(data: dict) -> bytes:
         )
 
     story.append(Paragraph("PARTE 1 - PANORAMA DA REPERCUSSÃO", heading))
-    add_section("Resumo Executivo", report["executive_summary"])
-
-    story.append(Paragraph("Itens relacionados encontrados", heading))
-    duplicate_total = sum(int(item.get("duplicate_count") or 0) for item in corpus)
-    duplicate_note = (
-        f" {duplicate_total} entrada(s) repetida(s) foram consolidadas para evitar dupla contagem."
-        if duplicate_total
-        else ""
-    )
-    story.append(
-        Paragraph(
-            f"{len(corpus)} item(ns) único(s) validado(s) como materialmente relacionados ao tema: "
-            f"{len(social_items)} em mídias sociais, {len(youtube_items)} no YouTube e "
-            f"{len(portal_items)} em portais de notícias."
-            f"{duplicate_note} O detalhamento item a item está nos anexos.",
-            small,
-        )
-    )
-
-    add_section("Abertura", report["opening"])
-    add_section("I. Panorama da Repercussão", report["panorama"])
-
     cloud_words = list(word_cloud.get("words") or [])
     if cloud_words:
         cloud_visual = _pdf_word_cloud_flowable(
@@ -494,6 +472,30 @@ def build_pdf(data: dict) -> bytes:
                 ]
             )
         )
+
+
+    add_section("Resumo Executivo", report["executive_summary"])
+
+    story.append(Paragraph("Itens relacionados encontrados", heading))
+    duplicate_total = sum(int(item.get("duplicate_count") or 0) for item in corpus)
+    duplicate_note = (
+        f" {duplicate_total} entrada(s) repetida(s) foram consolidadas para evitar dupla contagem."
+        if duplicate_total
+        else ""
+    )
+    story.append(
+        Paragraph(
+            f"{len(corpus)} item(ns) único(s) validado(s) como materialmente relacionados ao tema: "
+            f"{len(social_items)} em mídias sociais, {len(youtube_items)} no YouTube e "
+            f"{len(portal_items)} em portais de notícias."
+            f"{duplicate_note} O detalhamento item a item está nos anexos.",
+            small,
+        )
+    )
+
+    add_section("Abertura", report["opening"])
+    add_section("I. Panorama da Repercussão", report["panorama"])
+
 
 
     thematic_fronts = len(report.get("thematic_axes", []))
