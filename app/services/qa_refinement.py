@@ -12,7 +12,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.fact_layer import extract_project_facts, resolve_project_facts
+from app.fact_layer import extract_project_facts, operation_inventory_summary, resolve_project_facts
 from app.models import GeneratedReport, Project, SearchQuery
 from app.report_qa import run_report_qa
 from app.services.cache import hydrate_cached_report
@@ -21,6 +21,7 @@ from app.services.collection.web import collect_web
 from app.services.execution_profile import execution_flags
 from app.services.news_validation import validate_news_stage
 from app.services.reporting import draft_report_with_llm, refine_report_with_qa
+from app.services.search_planning import plan_missing_month_operation_inventory_queries
 from app.source_registry import OFFICIAL_OPERATION_INVENTORY_SOURCES
 from app.topic_profile import normalized_text
 
@@ -162,7 +163,23 @@ def refine_historical_report_until_qa(
                 f"Rodada QA {round_no}: analisando {len(blocking)} bloqueio(s)",
             )
 
-        queries = _plan_corrective_queries(db, project, blocking)
+        inventory = operation_inventory_summary(db, project)
+        missing_months = list(inventory.get("months_missing_operations") or [])
+        monthly_queries = plan_missing_month_operation_inventory_queries(
+            db,
+            project,
+            missing_months,
+        )
+        if progress and missing_months:
+            progress(
+                "gap_fill",
+                "RUNNING",
+                f"Rodada QA {round_no}: inventário mensal pendente em "
+                f"{len(missing_months)} mês(es); {len(monthly_queries)} consulta(s) adicionada(s)",
+            )
+
+        corrective_queries = _plan_corrective_queries(db, project, blocking)
+        queries = [*monthly_queries, *corrective_queries]
         collected = 0
 
         if queries:
