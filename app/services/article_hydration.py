@@ -68,8 +68,15 @@ def hydrate_media_items(
         if item is None:
             return
         if status == "FETCHED" and content:
-            item.content = content
-            counters["fetched"] += 1
+            # Defesa final antes da persistência: PostgreSQL rejeita NUL em
+            # campos textuais. A origem deve filtrar binário, mas nunca deixamos
+            # um único site derrubar todo o lote de validação.
+            safe_content = str(content).replace("\\x00", "")
+            if safe_content.strip():
+                item.content = safe_content
+                counters["fetched"] += 1
+            else:
+                counters["empty"] += 1
         elif status == "ERROR":
             counters["errors"] += 1
         else:

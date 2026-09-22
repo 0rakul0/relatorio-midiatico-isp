@@ -7,6 +7,9 @@ exclusivamente por ``app.tools.search``.
 
 from __future__ import annotations
 
+import gzip
+import zlib
+
 import ipaddress
 import random
 import socket
@@ -321,6 +324,9 @@ def fetch_url_text(
             ),
             "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.7",
             "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.6",
+            # urllib não garante descompressão automática de Content-Encoding.
+            # Pedimos identidade e ainda tratamos gzip/deflate defensivamente.
+            "Accept-Encoding": "identity",
         },
     )
     try:
@@ -329,9 +335,38 @@ def fetch_url_text(
             if "text/html" not in content_type and "application/xhtml+xml" not in content_type:
                 return None
             raw = response.read(512_000)
+            content_encoding = str(response.headers.get("Content-Encoding") or "").lower()
             charset = response.headers.get_content_charset() or "utf-8"
     except Exception:
         return None
+
+    # Alguns servidores ignoram Accept-Encoding e devolvem corpo comprimido.
+    # Sem esta etapa, bytes gzip podem virar caracteres de controle/NUL e
+    # quebrar INSERT/UPDATE no PostgreSQL.
+    try:
+        if "gzip" in content_encoding or raw[:2] == b"\\x1f\\x8b":
+            raw = gzip.decompress(raw)
+        elif "deflate" in content_encoding:
+            try:
+                raw = zlib.decompress(raw)
+            except zlib.error:
+                raw = zlib.decompress(raw, -zlib.MAX_WBITS)
+    except (OSError, EOFError, zlib.error):
+        return None
+
+    # NUL não é texto HTML válido para nosso corpus e PostgreSQL não o aceita
+    # em TEXT/VARCHAR. Uma proporção elevada de controles indica payload
+    # binário/malformado: nesse caso abandonamos a hidratação da página.
+    if b"\\x00" in raw:
+        raw = raw.replace(b"\\x00", b"")
+    sample = raw[:8192]
+    if sample:
+        control_bytes = sum(
+            1 for byte in sample
+            if byte < 32 and byte not in (9, 10, 13)
+        )
+        if control_bytes / len(sample) > 0.02:
+            return None
 
     try:
         html = raw.decode(charset, errors="replace")
