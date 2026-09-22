@@ -81,7 +81,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="ISP Repercussão Midiática", version="0.3.2", lifespan=lifespan)
+app = FastAPI(title="ISP Repercussão Midiática", version="0.3.3", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(billing_router)
 
@@ -101,8 +101,8 @@ def health():
     settings = get_settings()
     return {
         "status": "ok",
-        "version": "0.3.2",
-        "features": {"qa_history_refinement": True},
+        "version": "0.3.3",
+        "features": {"qa_history_refinement": True, "qa_refinement_paths": ["/reports/history/{project_id}/refine", "/projects/{project_id}/refine-qa-async"]},
         "search_limits": {
             "max_search_results": settings.max_search_results,
             "max_results_per_query": settings.max_results_per_query,
