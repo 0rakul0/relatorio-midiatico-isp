@@ -84,11 +84,20 @@ def web_queries_pending(project_id: int) -> list[str]:
         counts: dict[str, int] = {}
         for row in rows:
             purpose = str(row.purpose or "MEDIA_REPERCUSSION")
-            limit = max(0, int(_query_budget_for_purpose(settings, purpose)))
-            if counts.get(purpose, 0) >= limit:
+            kind = str(row.kind or "")
+            if kind == "fact_inventory_month":
+                budget_key = "FACT_INVENTORY_MONTH"
+                limit = max(0, int(settings.max_annual_event_inventory_queries))
+            elif kind == "official_operation_inventory":
+                budget_key = "OFFICIAL_OPERATION_INVENTORY"
+                limit = max(0, int(settings.max_official_inventory_queries))
+            else:
+                budget_key = purpose
+                limit = max(0, int(_query_budget_for_purpose(settings, purpose)))
+            if counts.get(budget_key, 0) >= limit:
                 continue
             selected.append(row.query)
-            counts[purpose] = counts.get(purpose, 0) + 1
+            counts[budget_key] = counts.get(budget_key, 0) + 1
         return selected
     finally:
         session.close()
