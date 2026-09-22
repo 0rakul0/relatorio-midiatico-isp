@@ -81,7 +81,7 @@ def research_academic_literature(
                 captured[(provider, external_id)] = dict(row)
 
     if progress_detail:
-        progress_detail("Consultando literatura cientifica relacionada no arXiv")
+        progress_detail("Consultando SciELO, OpenAlex, Crossref, Semantic Scholar e arXiv")
 
     tools = build_agent_tools(enable_academic=True, academic_sink=sink)
     result = get_report_agent().run(
@@ -109,7 +109,7 @@ def research_academic_literature(
     persisted = 0
     selected = 0
     for paper in result.get("papers") or []:
-        key = (str(paper.get("provider") or "arxiv"), str(paper.get("external_id") or ""))
+        key = (str(paper.get("provider") or ""), str(paper.get("external_id") or ""))
         raw = captured.get(key)
         if raw is None:
             # Guardrail: nunca persiste artigo que a LLM citou mas a tool nao retornou.

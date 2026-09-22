@@ -138,13 +138,13 @@ class AgentAcademicSearchArgs(BaseModel):
     queries: list[str] = Field(
         min_length=1,
         max_length=3,
-        description="One to three scientific literature queries for arXiv",
+        description="One to three scientific literature queries for multiple academic databases",
     )
     max_results_per_query: int = Field(default=6, ge=1, le=10)
 
 
 class AcademicToolPaper(StrictLLMOutput):
-    provider: Literal["arxiv"]
+    provider: Literal["scielo", "openalex", "crossref", "semantic_scholar", "arxiv"]
     external_id: str
     arxiv_id: str | None = None
     doi: str | None = None
@@ -162,14 +162,14 @@ class AcademicToolPaper(StrictLLMOutput):
 
 class AcademicSearchToolResponse(StrictLLMOutput):
     queries: list[str] = Field(default_factory=list, max_length=3)
-    provider: Literal["arxiv"]
+    provider: Literal["multi"]
     status: Literal["OK", "NO_RESULTS", "ERROR"]
     results: list[AcademicToolPaper] = Field(default_factory=list, max_length=20)
     errors: list[str] = Field(default_factory=list, max_length=10)
 
 
 class AcademicPaperSelection(StrictLLMOutput):
-    provider: Literal["arxiv"]
+    provider: Literal["scielo", "openalex", "crossref", "semantic_scholar", "arxiv"]
     external_id: str
 
     # Deve reproduzir o titulo original retornado pela tool. Os campos pt-BR
