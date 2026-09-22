@@ -341,9 +341,12 @@ def _mark_possible_duplicate(event: FactEvent, name: str | None) -> None:
 
 def _find_conservative_unnamed_event(db: Session, project: Project, event: dict) -> FactEvent | None:
     event_date = _parse_iso_date((event.get("event_date") or {}).get("value"))
+    operation_name = normalize_fact_value(
+        "operation_name", (event.get("operation_name") or {}).get("value")
+    )
     institution = normalize_fact_value("institution", (event.get("institution") or {}).get("value"))
     city = normalize_fact_value("city", (event.get("city") or {}).get("value"))
-    if not event_date or not institution or not city:
+    if not event_date or not city:
         return None
 
     candidates = db.scalars(
@@ -353,12 +356,23 @@ def _find_conservative_unnamed_event(db: Session, project: Project, event: dict)
             FactEvent.event_date == event_date,
         )
     ).all()
-    matching = [
-        candidate
-        for candidate in candidates
-        if normalize_fact_value("institution", candidate.institution) == institution
-        and normalize_fact_value("city", candidate.city) == city
-    ]
+    matching: list[FactEvent] = []
+    for candidate in candidates:
+        candidate_operation = normalize_fact_value("operation_name", candidate.operation_name)
+        if operation_name:
+            # Nome da operação + data + cidade é identidade muito mais segura
+            # que instituição + cidade para dias com várias ações policiais.
+            if candidate_operation != operation_name:
+                continue
+        elif candidate_operation:
+            # Não funde uma ocorrência genérica em uma operação já nomeada.
+            continue
+        if normalize_fact_value("city", candidate.city) != city:
+            continue
+        if institution and candidate.institution:
+            if normalize_fact_value("institution", candidate.institution) != institution:
+                continue
+        matching.append(candidate)
     return matching[0] if len(matching) == 1 else None
 
 

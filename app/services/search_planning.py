@@ -292,7 +292,7 @@ def _annual_event_inventory_queries(project: Project) -> list[tuple[str, str]]:
     while year_month <= (end.year, end.month):
         year, month = year_month
         month_name = _PT_MONTHS[month - 1]
-        query = f'"operacao policial" "{location}" {month_name} {year}'
+        query = f'"{anchor}" "{location}" {month_name} {year}'
         queries.append((query, f"Inventário mensal de operações policiais: {month_name}/{year}."))
         if len(queries) >= settings.max_annual_event_inventory_queries:
             break
