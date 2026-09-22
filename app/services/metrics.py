@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.fact_layer import fact_event_validation_summary, fact_events_for_main_report
+from app.fact_layer import fact_event_validation_summary, fact_events_for_main_report, operation_events_for_report, operation_inventory_summary
 from app.media_scout import MediaScout
 from app.models import Classification, MediaItem, Project, SearchQuery
 from app.source_registry import PRIORITY_PORTALS, PRIORITY_YOUTUBE_CHANNELS
@@ -585,6 +585,21 @@ def metrics(db: Session, project_id: int) -> dict:
     ]
 
     _, metric_flags = execution_flags(project) if project else ("MIDIATICO_SIMPLES", EXECUTION_PROFILE_DEFAULTS["MIDIATICO_SIMPLES"])
+    operation_inventory = (
+        operation_inventory_summary(db, project)
+        if project and metric_flags["enable_fact_layer"]
+        else {
+            "operations": 0,
+            "months_expected": 0,
+            "months_with_operations": [],
+            "months_with_official_support": [],
+            "months_missing_operations": [],
+            "months_missing_official_support": [],
+            "coverage_ratio": None,
+            "official_coverage_ratio": None,
+        }
+    )
+    operation_events = operation_events_for_report(db, project_id) if project and metric_flags["enable_fact_layer"] else []
     facts = fact_events_for_main_report(db, project_id) if metric_flags["enable_fact_layer"] else []
     fact_validation = (
         fact_event_validation_summary(db, project_id)
@@ -624,6 +639,8 @@ def metrics(db: Session, project_id: int) -> dict:
             "Ranking considera apenas itens validados com métrica numérica de alcance disponível no corpus; "
             "itens sem visualizações/alcance verificável não são ordenados como se tivessem alcance zero."
         ),
+        "operation_inventory": operation_inventory,
+        "operation_events": operation_events,
         "facts": {
             "events": len(facts),
             "confirmed": sum(item["resolution_status"] == "CONFIRMED" for item in facts),

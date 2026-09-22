@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.agent import get_report_agent
 from app.config import get_settings
-from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report
+from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report, operation_events_for_report
 from app.llm import llm_is_configured
 from app.models import GeneratedReport, OfficialFact, Project, ReportVersion
 from app.pdf_report import build_pdf
@@ -27,6 +27,7 @@ def _writer_grounding(db: Session, project: Project) -> dict:
     official_facts = db.scalars(select(OfficialFact).where(OfficialFact.project_id == project.id)).all()
     execution_profile, flags = execution_flags(project)
     fact_events = fact_events_for_main_report(db, project.id) if flags["enable_fact_layer"] else []
+    operation_events = operation_events_for_report(db, project.id) if flags["enable_fact_layer"] else []
     fact_evidence = (
         fact_assertions_for_report(db, project.id, main_report_only=True)
         if flags["enable_fact_layer"]
@@ -43,6 +44,7 @@ def _writer_grounding(db: Session, project: Project) -> dict:
         "official_facts": official_facts,
         "flags": flags,
         "fact_events": fact_events,
+        "operation_events": operation_events,
         "fact_evidence": fact_evidence,
         "academic_papers": academic_papers,
     }
@@ -87,6 +89,7 @@ def _agent_payload(db: Session, project: Project, grounding: dict) -> dict:
             for fact in grounding["official_facts"]
         ],
         "fact_events": grounding["fact_events"],
+        "operation_events": grounding["operation_events"],
         "academic_context": grounding["academic_papers"],
         "validated_items": [
             {

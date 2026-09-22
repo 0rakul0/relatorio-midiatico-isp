@@ -103,6 +103,32 @@ def deterministic_report_qa(payload: dict) -> list[dict]:
                 }
             )
 
+    operation_inventory = metrics.get("operation_inventory") or {}
+    months_expected = int(operation_inventory.get("months_expected") or 0)
+    if months_expected >= 6:
+        missing_operations = list(operation_inventory.get("months_missing_operations") or [])
+        missing_official = list(operation_inventory.get("months_missing_official_support") or [])
+        if missing_operations:
+            findings.append({
+                "severity": "MEDIUM",
+                "code": "OPERATION_INVENTORY_MONTH_GAPS",
+                "message": (
+                    f"Cobertura factual do inventário: {months_expected - len(missing_operations)}/{months_expected} mês(es) "
+                    f"com pelo menos uma operação identificada. Sem operação identificada na amostra em: "
+                    f"{', '.join(missing_operations)}. Isso não prova ausência de operações nesses meses."
+                ),
+            })
+        elif missing_official:
+            findings.append({
+                "severity": "LOW",
+                "code": "OPERATION_INVENTORY_OFFICIAL_GAPS",
+                "message": (
+                    f"O inventário tem operação identificada em todos os {months_expected} meses, mas faltou "
+                    f"suporte oficial localizado em: {', '.join(missing_official)}. "
+                    "Ausência na amostra oficial não prova inexistência da operação."
+                ),
+            })
+
     project = payload.get("project") or {}
 
     if project.get("project_type") == "AUTO":

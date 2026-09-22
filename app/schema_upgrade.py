@@ -87,9 +87,6 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "semantic_score": "FLOAT",
         "reranker_score": "FLOAT",
     },
-    "fact_events": {
-        "operation_name": "VARCHAR(300)",
-    },
     "fact_assertions": {
         "reported_at": "DATE",
     },
@@ -99,6 +96,7 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "original_language": "VARCHAR(20)",
     },
     "fact_events": {
+        "operation_name": "VARCHAR(300)",
         "death_place_name": "VARCHAR(300)",
         "death_address": "TEXT",
         "death_neighborhood": "VARCHAR(200)",

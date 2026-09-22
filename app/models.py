@@ -435,6 +435,73 @@ class FactAssertion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class OperationEvent(Base):
+    """Tabela-mestra de operações policiais identificadas no projeto.
+
+    É uma projeção auditável da camada factual: cada registro aponta para o
+    FactEvent que o originou e agrega fontes oficiais, repercussão e balanços.
+    """
+
+    __tablename__ = "operation_events"
+    __table_args__ = (
+        UniqueConstraint("project_id", "fact_event_id", name="uq_operation_project_fact_event"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    fact_event_id: Mapped[int] = mapped_column(
+        ForeignKey("fact_events.id", ondelete="CASCADE"), index=True
+    )
+    operation_name: Mapped[str | None] = mapped_column(String(300), nullable=True, index=True)
+    event_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    city: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
+    state: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    neighborhoods: Mapped[list] = mapped_column(JSON, default=list)
+    forces: Mapped[list] = mapped_column(JSON, default=list)
+
+    resolution_status: Mapped[str] = mapped_column(String(50), default="PARTIALLY_CONFIRMED")
+    official_supported: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    official_source_count: Mapped[int] = mapped_column(Integer, default=0)
+    media_source_count: Mapped[int] = mapped_column(Integer, default=0)
+    repercussion_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_urls: Mapped[list] = mapped_column(JSON, default=list)
+    official_urls: Mapped[list] = mapped_column(JSON, default=list)
+    media_urls: Mapped[list] = mapped_column(JSON, default=list)
+    count_timelines: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class OperationMediaLink(Base):
+    """Relação auditável operação ↔ item coletado."""
+
+    __tablename__ = "operation_media_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "operation_event_id", "media_item_id",
+            name="uq_operation_media_item",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    operation_event_id: Mapped[int] = mapped_column(
+        ForeignKey("operation_events.id", ondelete="CASCADE"), index=True
+    )
+    media_item_id: Mapped[int] = mapped_column(
+        ForeignKey("media_items.id", ondelete="CASCADE"), index=True
+    )
+    relation_type: Mapped[str] = mapped_column(String(40), default="EVIDENCE")
+    source_type: Mapped[str] = mapped_column(String(40), default="MEDIA")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class Classification(Base):
     __tablename__ = "classifications"
 
