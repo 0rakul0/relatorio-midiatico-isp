@@ -77,6 +77,7 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
     "corpus_documents": {
         "media_origin": "VARCHAR(30) DEFAULT 'PORTAL_NOTICIAS'",
         "content_hash": "VARCHAR(64)",
+        "content_fingerprint": "VARCHAR(64)",
         "alternate_urls": "JSON",
         "embedding": "JSON",
         "embedding_model": "VARCHAR(120)",
@@ -158,6 +159,23 @@ def ensure_schema() -> None:
                     )
                 )
                 present.add(column_name)
+
+        # create_all() não cria índices novos em tabelas que já existiam.
+        # Mantemos estes índices explícitos e idempotentes porque o reuso do
+        # corpus consulta ambos os campos para deduplicação global.
+        if "corpus_documents" in existing_tables:
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_corpus_documents_content_hash "
+                    "ON corpus_documents (content_hash)"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_corpus_documents_content_fingerprint "
+                    "ON corpus_documents (content_fingerprint)"
+                )
+            )
 
         if "projects" in existing_tables:
             connection.execute(text("UPDATE projects SET event_start = collection_start WHERE event_start IS NULL"))
