@@ -434,6 +434,29 @@ def build_pdf(data: dict) -> bytes:
             )
         )
 
+    story.append(Paragraph("PARTE 1 - PANORAMA DA REPERCUSSÃO", heading))
+    add_section("Resumo Executivo", report["executive_summary"])
+
+    story.append(Paragraph("Itens relacionados encontrados", heading))
+    duplicate_total = sum(int(item.get("duplicate_count") or 0) for item in corpus)
+    duplicate_note = (
+        f" {duplicate_total} entrada(s) repetida(s) foram consolidadas para evitar dupla contagem."
+        if duplicate_total
+        else ""
+    )
+    story.append(
+        Paragraph(
+            f"{len(corpus)} item(ns) único(s) validado(s) como materialmente relacionados ao tema: "
+            f"{len(social_items)} em mídias sociais, {len(youtube_items)} no YouTube e "
+            f"{len(portal_items)} em portais de notícias."
+            f"{duplicate_note} O detalhamento item a item está nos anexos.",
+            small,
+        )
+    )
+
+    add_section("Abertura", report["opening"])
+    add_section("I. Panorama da Repercussão", report["panorama"])
+
     cloud_words = list(word_cloud.get("words") or [])
     if cloud_words:
         cloud_visual = _pdf_word_cloud_flowable(
@@ -472,157 +495,6 @@ def build_pdf(data: dict) -> bytes:
             )
         )
 
-    add_section("Resumo Executivo", report["executive_summary"])
-
-    if academic_papers:
-        story.append(Paragraph("Literatura científica relacionada", heading))
-        story.append(
-            Paragraph(
-                "Trabalhos recuperados no arXiv para contextualização científica. "
-                "Eles não são contados como repercussão midiática e não confirmam "
-                "automaticamente fatos noticiados.",
-                small,
-            )
-        )
-        rows = [["Ano", "Autores", "Artigo", "Relação com o tema", "Fonte"]]
-        for paper in academic_papers:
-            authors = list(paper.get("authors") or [])
-            author_text = ", ".join(authors[:4]) + (" et al." if len(authors) > 4 else "")
-            published = _text(paper.get("published_at"))
-            rows.append(
-                [
-                    published[:4] if published else "N/D",
-                    author_text or "N/D",
-                    (
-                        (paper.get("title") or "Sem título")
-                        + (
-                            "\nOriginal: " + str(paper.get("title_original"))
-                            if paper.get("title_original")
-                            and paper.get("title_original") != paper.get("title")
-                            else ""
-                        )
-                    ),
-                    paper.get("relation_to_topic") or "Contexto científico relacionado",
-                    _pdf_link(paper.get("url")),
-                ]
-            )
-        story.append(
-            _table(
-                rows,
-                [1.0 * cm, 3.2 * cm, 4.1 * cm, 5.4 * cm, 2.9 * cm],
-                small,
-            )
-        )
-
-    story.append(Paragraph("Itens relacionados encontrados", heading))
-    duplicate_total = sum(int(item.get("duplicate_count") or 0) for item in corpus)
-    duplicate_note = (
-        f" {duplicate_total} entrada(s) repetida(s) foram consolidadas para evitar dupla contagem."
-        if duplicate_total
-        else ""
-    )
-    story.append(
-        Paragraph(
-            f"{len(corpus)} item(ns) único(s) validado(s) como materialmente relacionados ao tema: "
-            f"{len(social_items)} em mídias sociais, {len(youtube_items)} no YouTube e "
-            f"{len(portal_items)} em portais de notícias."
-            f"{duplicate_note} O detalhamento item a item está nos anexos.",
-            small,
-        )
-    )
-
-    if fact_layer_enabled and operations:
-        provisional_operations = any(
-            operation.get("inventory_status") == "PROVISIONAL_MEDIA_MENTION"
-            or operation.get("resolution_status") == "PROVISIONAL_MEDIA_MENTION"
-            for operation in operations
-        )
-        story.append(Paragraph(
-            "Operações citadas na amostra (inventário provisório)"
-            if provisional_operations
-            else "Inventário de operações identificadas",
-            heading,
-        ))
-        story.append(Paragraph(
-            (
-                "A camada factual estruturada ainda não individualizou as operações; esta tabela é um fallback auditável "
-                "construído apenas a partir de itens validados que citam operações."
-                if provisional_operations
-                else "Cada linha representa uma operação/evento individualizado na camada factual. Links oficiais sustentam "
-                "a identificação factual e links de mídia apontam a repercussão associada localizada."
-            ),
-            small,
-        ))
-        op_rows = [["Mês", "Data", "Operação", "Local", "Força(s)", "Matérias", "Links"]]
-        for operation in operations:
-            event_date = str(operation.get("event_date") or "")
-            month = event_date[:7] if len(event_date) >= 7 else "N/D"
-            location_values = [*(operation.get("neighborhoods") or []), operation.get("city"), operation.get("state")]
-            location = ", ".join(value for value in location_values if value) or "N/D"
-            forces = " / ".join(operation.get("forces") or []) or "N/D"
-            links = []
-            for index, url in enumerate(operation.get("official_urls") or [], start=1):
-                links.append({"href": str(url), "label": f"Oficial {index}"})
-            for index, url in enumerate(operation.get("media_urls") or [], start=1):
-                links.append({"href": str(url), "label": f"Mídia {index}"})
-            op_rows.append([
-                month,
-                event_date or "N/D",
-                operation.get("operation_name") or "Operação não nomeada",
-                location,
-                forces,
-                str(operation.get("repercussion_count") or 0),
-                {"_pdf_links": links},
-            ])
-        story.append(_table(
-            op_rows,
-            [1.25 * cm, 1.55 * cm, 3.2 * cm, 3.0 * cm, 2.5 * cm, 1.2 * cm, 4.0 * cm],
-            small,
-        ))
-    if fact_layer_enabled:
-        story.append(Paragraph("Camada de Fatos Verificados", heading))
-        story.append(Paragraph(escape(_text(report.get("fact_layer_intro", ""))), body))
-        if facts:
-            rows = [["Pessoa", "Vínculo", "Data", "Fato / causa", "Local do fato", "Local da morte", "Situação"]]
-            for event in facts:
-                link = " / ".join(
-                    value for value in [event.get("institution"), event.get("rank_or_role"), event.get("unit")] if value
-                )
-                location = ", ".join(
-                    value
-                    for value in [event.get("address"), event.get("neighborhood"), event.get("city"), event.get("state")]
-                    if value
-                )
-                death_location = ", ".join(
-                    value
-                    for value in [
-                        event.get("death_place_name"), event.get("death_address"),
-                        event.get("death_neighborhood"), event.get("death_city"), event.get("death_state")
-                    ]
-                    if value
-                )
-                cause = event.get("cause") or event.get("circumstance") or "Não localizado"
-                status = _status_label(event.get("resolution_status"))
-                if event.get("conflict_fields"):
-                    status += " - " + ", ".join(event["conflict_fields"])
-                status += f"; {_scope_label(event.get('primary_scope'))}"
-                rows.append(
-                    [
-                        event.get("subject_name") or "Não localizado",
-                        link or "Não localizado",
-                        event.get("death_date") or event.get("event_date") or "Não localizada",
-                        cause,
-                        location or "Não localizado",
-                        death_location or "Não localizado",
-                        status,
-                    ]
-                )
-            story.append(_table(rows, [2.3 * cm, 2.5 * cm, 1.6 * cm, 2.8 * cm, 2.7 * cm, 2.7 * cm, 2.0 * cm], small))
-        else:
-            story.append(Paragraph("Nenhum fato individual foi suficientemente estruturado na amostra factual.", small))
-
-    add_section("Abertura", report["opening"])
-    add_section("I. Panorama da Repercussão", report["panorama"])
 
     thematic_fronts = len(report.get("thematic_axes", []))
     metric_content = [
@@ -779,6 +651,57 @@ def build_pdf(data: dict) -> bytes:
             )
         )
 
+    story.append(Paragraph("PARTE 2 - OPERAÇÕES POLICIAIS IDENTIFICADAS", heading))
+    if fact_layer_enabled and operations:
+        provisional_operations = any(
+            operation.get("inventory_status") == "PROVISIONAL_MEDIA_MENTION"
+            or operation.get("resolution_status") == "PROVISIONAL_MEDIA_MENTION"
+            for operation in operations
+        )
+        story.append(Paragraph(
+            "Operações citadas na amostra (inventário provisório)"
+            if provisional_operations
+            else "Inventário de operações identificadas",
+            heading,
+        ))
+        story.append(Paragraph(
+            (
+                "A camada factual estruturada ainda não individualizou as operações; esta tabela é um fallback auditável "
+                "construído apenas a partir de itens validados que citam operações."
+                if provisional_operations
+                else "Cada linha representa uma operação/evento individualizado na camada factual. Links oficiais sustentam "
+                "a identificação factual e links de mídia apontam a repercussão associada localizada."
+            ),
+            small,
+        ))
+        op_rows = [["Mês", "Data", "Operação", "Local", "Força(s)", "Matérias", "Links"]]
+        for operation in operations:
+            event_date = str(operation.get("event_date") or "")
+            month = event_date[:7] if len(event_date) >= 7 else "N/D"
+            location_values = [*(operation.get("neighborhoods") or []), operation.get("city"), operation.get("state")]
+            location = ", ".join(value for value in location_values if value) or "N/D"
+            forces = " / ".join(operation.get("forces") or []) or "N/D"
+            links = []
+            for index, url in enumerate(operation.get("official_urls") or [], start=1):
+                links.append({"href": str(url), "label": f"Oficial {index}"})
+            for index, url in enumerate(operation.get("media_urls") or [], start=1):
+                links.append({"href": str(url), "label": f"Mídia {index}"})
+            op_rows.append([
+                month,
+                event_date or "N/D",
+                operation.get("operation_name") or "Operação não nomeada",
+                location,
+                forces,
+                str(operation.get("repercussion_count") or 0),
+                {"_pdf_links": links},
+            ])
+        story.append(_table(
+            op_rows,
+            [1.25 * cm, 1.55 * cm, 3.2 * cm, 3.0 * cm, 2.5 * cm, 1.2 * cm, 4.0 * cm],
+            small,
+        ))
+
+    story.append(Paragraph("PARTE 3 - ANÁLISE DA COBERTURA", heading))
     add_section("II. Enquadramento Dominante", report["dominant_framing"])
     story.append(Paragraph("III. Um Estudo, Muitas Pautas", heading))
     story.append(
@@ -802,6 +725,95 @@ def build_pdf(data: dict) -> bytes:
         )
     )
 
+    story.append(Paragraph("PARTE 4 - VERIFICAÇÃO FACTUAL", heading))
+    if fact_layer_enabled:
+        story.append(Paragraph("Camada de Fatos Verificados", heading))
+        story.append(Paragraph(escape(_text(report.get("fact_layer_intro", ""))), body))
+        if facts:
+            rows = [["Pessoa", "Vínculo", "Data", "Fato / causa", "Local do fato", "Local da morte", "Situação"]]
+            for event in facts:
+                link = " / ".join(
+                    value for value in [event.get("institution"), event.get("rank_or_role"), event.get("unit")] if value
+                )
+                location = ", ".join(
+                    value
+                    for value in [event.get("address"), event.get("neighborhood"), event.get("city"), event.get("state")]
+                    if value
+                )
+                death_location = ", ".join(
+                    value
+                    for value in [
+                        event.get("death_place_name"), event.get("death_address"),
+                        event.get("death_neighborhood"), event.get("death_city"), event.get("death_state")
+                    ]
+                    if value
+                )
+                cause = event.get("cause") or event.get("circumstance") or "Não localizado"
+                status = _status_label(event.get("resolution_status"))
+                if event.get("conflict_fields"):
+                    status += " - " + ", ".join(event["conflict_fields"])
+                status += f"; {_scope_label(event.get('primary_scope'))}"
+                rows.append(
+                    [
+                        event.get("subject_name") or "Não localizado",
+                        link or "Não localizado",
+                        event.get("death_date") or event.get("event_date") or "Não localizada",
+                        cause,
+                        location or "Não localizado",
+                        death_location or "Não localizado",
+                        status,
+                    ]
+                )
+            story.append(_table(rows, [2.3 * cm, 2.5 * cm, 1.6 * cm, 2.8 * cm, 2.7 * cm, 2.7 * cm, 2.0 * cm], small))
+        else:
+            story.append(Paragraph("Nenhum fato individual foi suficientemente estruturado na amostra factual.", small))
+
+
+    story.append(Paragraph("PARTE 5 - CONTEXTUALIZAÇÃO CIENTÍFICA", heading))
+    if academic_papers:
+        story.append(Paragraph("Literatura científica relacionada", heading))
+        story.append(
+            Paragraph(
+                "Trabalhos recuperados em bases acadêmicas para contextualização científica. "
+                "Eles não são contados como repercussão midiática e não confirmam "
+                "automaticamente fatos noticiados.",
+                small,
+            )
+        )
+        rows = [["Ano", "Autores", "Artigo", "Relação com o tema", "Fonte"]]
+        for paper in academic_papers:
+            authors = list(paper.get("authors") or [])
+            author_text = ", ".join(authors[:4]) + (" et al." if len(authors) > 4 else "")
+            published = _text(paper.get("published_at"))
+            rows.append(
+                [
+                    published[:4] if published else "N/D",
+                    author_text or "N/D",
+                    (
+                        (paper.get("title") or "Sem título")
+                        + (
+                            "\nOriginal: " + str(paper.get("title_original"))
+                            if paper.get("title_original")
+                            and paper.get("title_original") != paper.get("title")
+                            else ""
+                        )
+                    ),
+                    paper.get("relation_to_topic") or "Contexto científico relacionado",
+                    _pdf_link(paper.get("url")),
+                ]
+            )
+        story.append(
+            _table(
+                rows,
+                [1.0 * cm, 3.2 * cm, 4.1 * cm, 5.4 * cm, 2.9 * cm],
+                small,
+            )
+        )
+
+
+    story.append(Paragraph("PARTE 6 - SÍNTESE E ENCAMINHAMENTOS", heading))
+    add_section("VIII. Síntese", report["synthesis"])
+
     story.append(Paragraph("VII. Recomendações e Kit de Imprensa", heading))
     story.extend([Paragraph("• " + escape(_text(item)), body) for item in report["recommendations"]])
     story.append(
@@ -811,7 +823,7 @@ def build_pdf(data: dict) -> bytes:
             small,
         )
     )
-    add_section("VIII. Síntese", report["synthesis"])
+    story.append(Paragraph("ANEXOS AUDITÁVEIS", heading))
     add_section("Anexo A - Nota Metodológica", report["methodological_note"])
 
     if fact_layer_enabled:
