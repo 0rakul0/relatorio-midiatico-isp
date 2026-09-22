@@ -385,8 +385,9 @@ function render(result){
     const linkHtml=links.length?raw(links.join(' · ')):'N/D';
     return [String(i+1),month,date||'N/D',x.operation_name||'Operação não nomeada',location,forces,String(x.repercussion_count??0),linkHtml];
   });
+  const provisionalOperations=operations.some(x=>x.inventory_status==='PROVISIONAL_MEDIA_MENTION'||x.resolution_status==='PROVISIONAL_MEDIA_MENTION');
   const operationSection=factLayerEnabled&&operations.length?
-    `<h2>Inventário de operações identificadas</h2><p class="related-intro">Cada linha representa uma operação/evento individualizado na camada factual. Os links oficiais sustentam a identificação factual; os links de mídia mostram a repercussão associada localizada no corpus.</p>${table(['#','Mês','Data','Operação','Local','Força(s)','Matérias','Links'],operationRows)}`
+    `<h2>${provisionalOperations?'Operações citadas na amostra (inventário provisório)':'Inventário de operações identificadas'}</h2><p class="related-intro">${provisionalOperations?'A camada factual estruturada ainda não individualizou as operações; esta tabela é um fallback auditável construído apenas a partir de itens validados que citam operações.':'Cada linha representa uma operação/evento individualizado na camada factual. Os links oficiais sustentam a identificação factual; os links de mídia mostram a repercussão associada localizada no corpus.'}</p>${table(['#','Mês','Data','Operação','Local','Força(s)','Matérias','Links'],operationRows)}`
     :'';
   const factSection=factLayerEnabled?`<h2>Camada de Fatos Verificados</h2><p>${esc(d.fact_layer_intro||'')}</p>${facts.length?table(['Pessoa','Vínculo','Data','Fato / causa','Local do fato','Local da morte','Situação'],factRows):'<p>Nenhum fato individual foi suficientemente estruturado na amostra factual.</p>'}`:'';
   const contextMeta=p.project_type==='INSTITUTIONAL_PRODUCT'?`<div><b>Lançamento</b><br>${esc(p.launch_date||'Não confirmado')}</div>`:`<div><b>Janela dos fatos</b><br>${windowLabel(p.event_start,p.event_end)}</div>`;
