@@ -532,10 +532,25 @@ def build_pdf(data: dict) -> bytes:
     )
 
     if fact_layer_enabled and operations:
-        story.append(Paragraph("Inventário de operações identificadas", heading))
+        provisional_operations = any(
+            operation.get("inventory_status") == "PROVISIONAL_MEDIA_MENTION"
+            or operation.get("resolution_status") == "PROVISIONAL_MEDIA_MENTION"
+            for operation in operations
+        )
         story.append(Paragraph(
-            "Cada linha representa uma operação/evento individualizado na camada factual. "
-            "Links oficiais sustentam a identificação factual e links de mídia apontam a repercussão associada localizada.",
+            "Operações citadas na amostra (inventário provisório)"
+            if provisional_operations
+            else "Inventário de operações identificadas",
+            heading,
+        ))
+        story.append(Paragraph(
+            (
+                "A camada factual estruturada ainda não individualizou as operações; esta tabela é um fallback auditável "
+                "construído apenas a partir de itens validados que citam operações."
+                if provisional_operations
+                else "Cada linha representa uma operação/evento individualizado na camada factual. Links oficiais sustentam "
+                "a identificação factual e links de mídia apontam a repercussão associada localizada."
+            ),
             small,
         ))
         op_rows = [["Mês", "Data", "Operação", "Local", "Força(s)", "Matérias", "Links"]]
