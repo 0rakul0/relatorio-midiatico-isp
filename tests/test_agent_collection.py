@@ -181,3 +181,63 @@ def test_collect_media_sources_marks_unavailable_when_agent_fails(monkeypatch):
     assert result["web"]["status"] == "UNAVAILABLE"
     assert "agente fora do ar" in result["web"]["error"]
     assert "agente fora do ar" in result["youtube"]["error"]
+
+
+def test_collector_forces_required_web_tool_when_model_initially_skips(monkeypatch):
+    from langchain_core.messages import AIMessage
+
+    class _SkippingBoundModel:
+        def __init__(self, *, tool_choice=None):
+            self.tool_choice = tool_choice
+            self.calls = 0
+
+        def invoke(self, _messages):
+            self.calls += 1
+            if self.tool_choice:
+                return AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": self.tool_choice,
+                            "args": {"queries": ["consulta web"]},
+                            "id": "forced-call",
+                        }
+                    ],
+                )
+            return AIMessage(content="sem ferramenta")
+
+    class _FakeLLM:
+        def bind_tools(self, _tools, tool_choice=None):
+            return _SkippingBoundModel(tool_choice=tool_choice)
+
+        def with_structured_output(self, response_model, **_kwargs):
+            class _Structured:
+                def invoke(self, _messages):
+                    parsed = response_model(status="COMPLETED", detail="ok")
+                    return {"parsed": parsed, "raw": AIMessage(content=""), "parsing_error": None}
+
+            return _Structured()
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+    session = session_factory()
+    project = _make_project(session)
+    _pending_web_query(session, project)
+
+    monkeypatch.setattr(orchestrator, "SessionLocal", session_factory)
+    monkeypatch.setattr(orchestrator, "search_providers_available", lambda: True)
+    monkeypatch.setattr(collection_web, "search_providers_available", lambda: True)
+    monkeypatch.setattr(tools_search, "_search_web", lambda query, **_kwargs: ("duckduckgo", [_web_row()]))
+
+    from app import agent as agent_module
+
+    monkeypatch.setattr(agent_module, "create_chat_model", lambda **_kwargs: _FakeLLM())
+
+    added = collection_web.collect_web(session, project.id)
+
+    assert added == 1
+    query = session.scalar(select(SearchQuery).where(SearchQuery.project_id == project.id))
+    assert query is not None
+    assert query.executed_at is not None
+    assert query.execution_status in {"SUCCEEDED", "SUCCEEDED_FLAGGED"}
