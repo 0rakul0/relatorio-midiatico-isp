@@ -84,6 +84,30 @@ def deterministic_report_qa(payload: dict) -> list[dict]:
                 }
             )
 
+    youtube_videos = int(metrics.get("youtube_videos") or 0)
+    if youtube_videos > 0:
+        lowered_summary = executive_summary.casefold()
+        misleading_absence = (
+            "youtube não foi consultado",
+            "youtube nao foi consultado",
+            "coleta no youtube não foi realizada",
+            "coleta no youtube nao foi realizada",
+            "não houve coleta no youtube",
+            "nao houve coleta no youtube",
+        )
+        if any(phrase in lowered_summary for phrase in misleading_absence):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "code": "YOUTUBE_CORPUS_CONTRADICTION",
+                    "message": (
+                        f"O resumo executivo sugere ausência de coleta no YouTube, mas o corpus "
+                        f"contém {youtube_videos} vídeo(s) validado(s). Priorize a evidência do "
+                        "corpus e deixe estados operacionais apenas na nota metodológica."
+                    ),
+                }
+            )
+
     if metrics.get("valid_items", 0) == 0:
         for phrase in FORBIDDEN_ZERO_CORPUS_PHRASES:
             if phrase in text:
