@@ -463,34 +463,32 @@ class ReportAgent:
     ) -> dict[str, Any]:
         resolved_schema_name = schema_name or response_model.__name__
         prompt = self.prompt_for(task, extra_instructions)
-        llm = create_chat_model(max_output_tokens=max_output_tokens)
         tool_list = list(tools or [])
 
+        # O collector nao decide estrategia: ele recebe um plano fechado e
+        # aprovado pelos estagios anteriores. Executar esse plano via LLM cria
+        # uma dependencia desnecessaria (e fragil) de tool-calling. A execucao
+        # continua dentro do ReportAgent, portanto a arquitetura permanece:
+        # services -> agent -> tools -> providers.
+        if task == "collector":
+            return self._run_collector(
+                payload=payload,
+                response_model=response_model,
+                tools=tool_list,
+            )
+
+        llm = create_chat_model(max_output_tokens=max_output_tokens)
         messages: list[Any] = [
             SystemMessage(content=prompt),
             HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
         ]
 
         if tool_list:
-            optional_bound_llm = llm.bind_tools(tool_list)
+            bound_llm = llm.bind_tools(tool_list)
             tool_map = {tool.name: tool for tool in tool_list}
-
-            # A maior parte das tarefas pode decidir livremente se precisa de
-            # ferramentas. O collector e diferente: ele recebe um plano que ja
-            # foi aprovado deterministicamente e sua unica funcao e EXECUTA-LO.
-            # Nessa tarefa, cada modalidade presente no payload precisa chamar
-            # exatamente a respectiva bulk tool pelo menos uma vez.
-            required_tool_names: list[str] = []
-            if task == "collector":
-                if payload.get("web_queries") and "executar_buscas_web" in tool_map:
-                    required_tool_names.append("executar_buscas_web")
-                if payload.get("youtube_queries") and "executar_buscas_videos" in tool_map:
-                    required_tool_names.append("executar_buscas_videos")
-
-            completed_required_tools: set[str] = set()
             settings = get_settings()
             rounds = max(
-                len(required_tool_names) + 1,
+                0,
                 int(
                     max_tool_rounds
                     if max_tool_rounds is not None
@@ -499,22 +497,8 @@ class ReportAgent:
             )
 
             for round_index in range(rounds):
-                pending_required = next(
-                    (
-                        name
-                        for name in required_tool_names
-                        if name not in completed_required_tools
-                    ),
-                    None,
-                )
-                decision_llm = (
-                    llm.bind_tools(tool_list, tool_choice=pending_required)
-                    if pending_required
-                    else optional_bound_llm
-                )
-
                 try:
-                    message = decision_llm.invoke(messages)
+                    message = bound_llm.invoke(messages)
                 except Exception as exc:
                     record_llm_usage(
                         caller="report_agent_tool_decision",
@@ -534,18 +518,12 @@ class ReportAgent:
 
                 tool_calls = list(getattr(message, "tool_calls", None) or [])
                 if not tool_calls:
-                    if pending_required:
-                        raise RuntimeError(
-                            "O agente coletor nao executou a ferramenta obrigatoria "
-                            f"'{pending_required}' para o plano aprovado"
-                        )
                     break
 
                 for call in tool_calls:
                     name = str(call.get("name") or "")
                     args = call.get("args") or {}
                     tool = tool_map.get(name)
-                    tool_executed = False
                     if tool is None:
                         observation: Any = {
                             "status": "ERROR",
@@ -554,12 +532,8 @@ class ReportAgent:
                     else:
                         try:
                             observation = tool.invoke(args)
-                            tool_executed = True
                         except Exception as exc:
                             observation = {"status": "ERROR", "error": str(exc)}
-
-                    if tool_executed and name in required_tool_names:
-                        completed_required_tools.add(name)
 
                     content = (
                         observation
@@ -574,17 +548,6 @@ class ReportAgent:
                         )
                     )
 
-            missing_required = [
-                name
-                for name in required_tool_names
-                if name not in completed_required_tools
-            ]
-            if missing_required:
-                raise RuntimeError(
-                    "O agente coletor nao concluiu as ferramentas obrigatorias: "
-                    + ", ".join(missing_required)
-                )
-
         return self._finalize(
             llm=llm,
             messages=messages,
@@ -592,6 +555,70 @@ class ReportAgent:
             response_model=response_model,
             schema_name=resolved_schema_name,
         )
+
+    def _run_collector(
+        self,
+        *,
+        payload: dict[str, Any],
+        response_model: type[ResponseModelT],
+        tools: list[BaseTool],
+    ) -> dict[str, Any]:
+        """Executa deterministicamente o plano de coleta ja aprovado."""
+        tool_map = {tool.name: tool for tool in tools}
+        required: list[tuple[str, list[str]]] = []
+
+        web_queries = list(payload.get("web_queries") or [])
+        if web_queries:
+            required.append(("executar_buscas_web", web_queries))
+
+        video_queries = list(payload.get("youtube_queries") or [])
+        if video_queries:
+            required.append(("executar_buscas_videos", video_queries))
+
+        if not required:
+            result = response_model(
+                status="COMPLETED",
+                detail="Nenhuma consulta pendente no plano aprovado.",
+            )
+            return result.model_dump(mode="json")
+
+        summaries: list[str] = []
+        partial = False
+        for tool_name, queries in required:
+            tool = tool_map.get(tool_name)
+            if tool is None:
+                raise RuntimeError(
+                    f"Ferramenta obrigatoria '{tool_name}' nao esta disponivel "
+                    "para executar o plano aprovado"
+                )
+
+            try:
+                observation = tool.invoke({"queries": queries})
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Falha ao executar a ferramenta obrigatoria '{tool_name}': {exc}"
+                ) from exc
+
+            result_rows = []
+            if isinstance(observation, dict):
+                result_rows = list(observation.get("results") or [])
+            errors = [
+                row for row in result_rows
+                if str(row.get("status") or "").upper() in {"ERROR", "SKIPPED"}
+            ]
+            if errors:
+                partial = True
+
+            summaries.append(
+                f"{tool_name}: {len(queries)} consulta(s) executada(s)"
+                + (f", {len(errors)} com erro/skip" if errors else "")
+            )
+
+        result = response_model(
+            status="PARTIAL" if partial else "COMPLETED",
+            detail="; ".join(summaries),
+        )
+        return result.model_dump(mode="json")
 
     def _finalize(
         self,
