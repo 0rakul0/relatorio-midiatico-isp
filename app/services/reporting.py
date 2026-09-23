@@ -37,14 +37,25 @@ def _editorial_metrics(metrics_data: dict) -> dict:
     """Remove códigos internos do contexto entregue ao redator.
 
     O snapshot persistido continua contendo os campos técnicos para auditoria;
-    somente a camada editorial recebida pelo agente é simplificada.
+    somente a camada editorial recebida pelo agente é simplificada. Quando o
+    corpus já contém vídeos validados, essa evidência editorial prevalece sobre
+    um status operacional legado ou referente apenas à execução corrente.
     """
     editorial = dict(metrics_data or {})
     status = str(editorial.pop("youtube_collection_status", "") or "").upper()
     editorial.pop("youtube_collection_error", None)
 
-    note = str(editorial.get("youtube_collection_note") or "").strip()
-    summary = note or YOUTUBE_COLLECTION_EDITORIAL_LABELS.get(status)
+    youtube_videos = int(editorial.get("youtube_videos") or 0)
+    if youtube_videos > 0:
+        summary = (
+            f"A amostra auditável inclui {youtube_videos} vídeo(s) validado(s) "
+            "no YouTube. Eventuais estados operacionais da execução não devem "
+            "ser interpretados como ausência desse conteúdo no corpus."
+        )
+    else:
+        note = str(editorial.get("youtube_collection_note") or "").strip()
+        summary = note or YOUTUBE_COLLECTION_EDITORIAL_LABELS.get(status)
+
     if summary:
         editorial["youtube_collection_summary"] = summary
     return editorial
@@ -89,7 +100,8 @@ def _writer_instructions(flags: dict) -> str:
         + "Nunca a descreva como protagonismo, liderança, destaque institucional ou centralidade editorial sem evidência específica. "
         + "No resumo executivo e nas seções narrativas, escreva para público não técnico: nunca reproduza nomes de campos internos, "
         + "identificadores em snake_case, códigos de status em inglês ou valores como NOT_ATTEMPTED, UNAVAILABLE, DISABLED ou NOT_CONFIGURED. "
-        + "Traduza estados operacionais para linguagem editorial, por exemplo: 'A coleta no YouTube não foi realizada nesta execução'. "
+        + "Traduza estados operacionais para linguagem editorial. Quando houver vídeos validados no corpus, priorize a evidência do corpus "
+        + "e informe a quantidade disponível; não trate um status operacional legado ou da execução corrente como ausência de conteúdo no YouTube. "
     )
     if flags["enable_fact_layer"]:
         instructions += (
