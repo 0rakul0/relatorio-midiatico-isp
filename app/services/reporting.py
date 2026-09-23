@@ -20,6 +20,36 @@ from app.services.word_cloud import word_cloud_for_project
 from app.services.cache import hydrate_cached_report
 
 
+YOUTUBE_COLLECTION_EDITORIAL_LABELS = {
+    "NOT_ATTEMPTED": "A coleta no YouTube não foi realizada nesta execução.",
+    "DISABLED": "O YouTube não integrou o escopo desta execução.",
+    "UNAVAILABLE": (
+        "A consulta ao YouTube ficou indisponível nesta execução; "
+        "isso não permite concluir ausência de cobertura na plataforma."
+    ),
+    "NOT_CONFIGURED": "O YouTube não pôde ser consultado nesta execução.",
+    "PARTIAL": "A coleta no YouTube foi realizada parcialmente nesta execução.",
+    "COMPLETED": "A coleta no YouTube foi realizada nesta execução.",
+}
+
+
+def _editorial_metrics(metrics_data: dict) -> dict:
+    """Remove códigos internos do contexto entregue ao redator.
+
+    O snapshot persistido continua contendo os campos técnicos para auditoria;
+    somente a camada editorial recebida pelo agente é simplificada.
+    """
+    editorial = dict(metrics_data or {})
+    status = str(editorial.pop("youtube_collection_status", "") or "").upper()
+    editorial.pop("youtube_collection_error", None)
+
+    note = str(editorial.get("youtube_collection_note") or "").strip()
+    summary = note or YOUTUBE_COLLECTION_EDITORIAL_LABELS.get(status)
+    if summary:
+        editorial["youtube_collection_summary"] = summary
+    return editorial
+
+
 def _writer_grounding(db: Session, project: Project) -> dict:
     """Dados de fundamentação compartilhados por redação e revisão."""
     data = metrics(db, project.id)
@@ -57,6 +87,9 @@ def _writer_instructions(flags: dict) -> str:
         "Estruture o texto nas seções fornecidas pelo schema. "
         + "A métrica isp_mentioned_items/isp_mention_percent mede somente MENÇÃO textual à instituição. "
         + "Nunca a descreva como protagonismo, liderança, destaque institucional ou centralidade editorial sem evidência específica. "
+        + "No resumo executivo e nas seções narrativas, escreva para público não técnico: nunca reproduza nomes de campos internos, "
+        + "identificadores em snake_case, códigos de status em inglês ou valores como NOT_ATTEMPTED, UNAVAILABLE, DISABLED ou NOT_CONFIGURED. "
+        + "Traduza estados operacionais para linguagem editorial, por exemplo: 'A coleta no YouTube não foi realizada nesta execução'. "
     )
     if flags["enable_fact_layer"]:
         instructions += (
@@ -75,7 +108,7 @@ def _writer_instructions(flags: dict) -> str:
 def _agent_payload(db: Session, project: Project, grounding: dict) -> dict:
     return {
         "project": project_payload(project, for_report=True),
-        "metrics": grounding["metrics"],
+        "metrics": _editorial_metrics(grounding["metrics"]),
         "official_facts": [
             {
                 "label": fact.label,
