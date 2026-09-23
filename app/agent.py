@@ -472,11 +472,25 @@ class ReportAgent:
         ]
 
         if tool_list:
-            bound_llm = llm.bind_tools(tool_list)
+            optional_bound_llm = llm.bind_tools(tool_list)
             tool_map = {tool.name: tool for tool in tool_list}
+
+            # A maior parte das tarefas pode decidir livremente se precisa de
+            # ferramentas. O collector e diferente: ele recebe um plano que ja
+            # foi aprovado deterministicamente e sua unica funcao e EXECUTA-LO.
+            # Nessa tarefa, cada modalidade presente no payload precisa chamar
+            # exatamente a respectiva bulk tool pelo menos uma vez.
+            required_tool_names: list[str] = []
+            if task == "collector":
+                if payload.get("web_queries") and "executar_buscas_web" in tool_map:
+                    required_tool_names.append("executar_buscas_web")
+                if payload.get("youtube_queries") and "executar_buscas_videos" in tool_map:
+                    required_tool_names.append("executar_buscas_videos")
+
+            completed_required_tools: set[str] = set()
             settings = get_settings()
             rounds = max(
-                0,
+                len(required_tool_names) + 1,
                 int(
                     max_tool_rounds
                     if max_tool_rounds is not None
@@ -485,8 +499,22 @@ class ReportAgent:
             )
 
             for round_index in range(rounds):
+                pending_required = next(
+                    (
+                        name
+                        for name in required_tool_names
+                        if name not in completed_required_tools
+                    ),
+                    None,
+                )
+                decision_llm = (
+                    llm.bind_tools(tool_list, tool_choice=pending_required)
+                    if pending_required
+                    else optional_bound_llm
+                )
+
                 try:
-                    message = bound_llm.invoke(messages)
+                    message = decision_llm.invoke(messages)
                 except Exception as exc:
                     record_llm_usage(
                         caller="report_agent_tool_decision",
@@ -506,12 +534,18 @@ class ReportAgent:
 
                 tool_calls = list(getattr(message, "tool_calls", None) or [])
                 if not tool_calls:
+                    if pending_required:
+                        raise RuntimeError(
+                            "O agente coletor nao executou a ferramenta obrigatoria "
+                            f"'{pending_required}' para o plano aprovado"
+                        )
                     break
 
                 for call in tool_calls:
                     name = str(call.get("name") or "")
                     args = call.get("args") or {}
                     tool = tool_map.get(name)
+                    tool_executed = False
                     if tool is None:
                         observation: Any = {
                             "status": "ERROR",
@@ -520,8 +554,12 @@ class ReportAgent:
                     else:
                         try:
                             observation = tool.invoke(args)
+                            tool_executed = True
                         except Exception as exc:
                             observation = {"status": "ERROR", "error": str(exc)}
+
+                    if tool_executed and name in required_tool_names:
+                        completed_required_tools.add(name)
 
                     content = (
                         observation
@@ -535,6 +573,17 @@ class ReportAgent:
                             name=name or None,
                         )
                     )
+
+            missing_required = [
+                name
+                for name in required_tool_names
+                if name not in completed_required_tools
+            ]
+            if missing_required:
+                raise RuntimeError(
+                    "O agente coletor nao concluiu as ferramentas obrigatorias: "
+                    + ", ".join(missing_required)
+                )
 
         return self._finalize(
             llm=llm,
