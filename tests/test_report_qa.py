@@ -35,3 +35,28 @@ def test_no_fact_cannot_become_no_occurrence_claim():
     payload["report"]["synthesis"] = "Não houve ocorrência no período."
     findings = deterministic_report_qa(payload)
     assert any(x["code"] == "FACT_ABSENCE_OVERCLAIM" for x in findings)
+
+
+def test_executive_summary_rejects_internal_collection_status():
+    payload = base_payload()
+    payload["report"]["executive_summary"] = (
+        "A situação do YouTube foi youtube_collection_status=NOT_ATTEMPTED."
+    )
+    findings = deterministic_report_qa(payload)
+    assert any(
+        x["code"] == "TECHNICAL_TERM_IN_EXECUTIVE_SUMMARY"
+        for x in findings
+    )
+
+
+def test_executive_summary_accepts_editorial_collection_wording():
+    payload = base_payload()
+    payload["report"]["executive_summary"] = (
+        "A coleta no YouTube não foi realizada nesta execução."
+    )
+    findings = deterministic_report_qa(payload)
+    assert not [
+        x
+        for x in findings
+        if x["code"] == "TECHNICAL_TERM_IN_EXECUTIVE_SUMMARY"
+    ]
