@@ -60,3 +60,30 @@ def test_executive_summary_accepts_editorial_collection_wording():
         for x in findings
         if x["code"] == "TECHNICAL_TERM_IN_EXECUTIVE_SUMMARY"
     ]
+
+
+def test_executive_summary_cannot_imply_no_youtube_when_corpus_has_videos():
+    payload = base_payload()
+    payload["metrics"]["youtube_videos"] = 12
+    payload["report"]["executive_summary"] = (
+        "A coleta no YouTube não foi realizada nesta execução."
+    )
+    findings = deterministic_report_qa(payload)
+    assert any(
+        x["code"] == "YOUTUBE_CORPUS_CONTRADICTION"
+        for x in findings
+    )
+
+
+def test_executive_summary_prefers_validated_youtube_corpus():
+    payload = base_payload()
+    payload["metrics"]["youtube_videos"] = 12
+    payload["report"]["executive_summary"] = (
+        "A amostra auditável inclui 12 vídeos validados no YouTube."
+    )
+    findings = deterministic_report_qa(payload)
+    assert not [
+        x
+        for x in findings
+        if x["code"] == "YOUTUBE_CORPUS_CONTRADICTION"
+    ]
