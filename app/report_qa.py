@@ -28,6 +28,24 @@ FORBIDDEN_NO_FACT_PHRASES = [
     "nao ocorreu",
 ]
 
+EXECUTIVE_TECHNICAL_TERMS = [
+    "youtube_collection_status",
+    "youtube_collection_error",
+    "execution_profile",
+    "execution_flags",
+    "enable_youtube",
+    "enable_fact_layer",
+    "enable_nominal_followup",
+    "NOT_ATTEMPTED",
+    "NOT_CONFIGURED",
+    "UNAVAILABLE",
+    "DISABLED",
+    "MEDIA_REPERCUSSION",
+    "FACT_DISCOVERY",
+    "OFFICIAL_FACT",
+    "NOMINAL_FOLLOWUP",
+]
+
 
 def _string_values(value: object) -> list[str]:
     if isinstance(value, str):
@@ -51,6 +69,20 @@ def deterministic_report_qa(payload: dict) -> list[dict]:
     facts = payload.get("fact_events") or []
     findings: list[dict] = []
     text = " ".join(_string_values(report)).casefold()
+    executive_summary = str(report.get("executive_summary") or "")
+
+    for technical_term in EXECUTIVE_TECHNICAL_TERMS:
+        if technical_term.casefold() in executive_summary.casefold():
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "code": "TECHNICAL_TERM_IN_EXECUTIVE_SUMMARY",
+                    "message": (
+                        f"O resumo executivo expõe o identificador técnico '{technical_term}'. "
+                        "Substitua-o por linguagem editorial compreensível para público não técnico."
+                    ),
+                }
+            )
 
     if metrics.get("valid_items", 0) == 0:
         for phrase in FORBIDDEN_ZERO_CORPUS_PHRASES:
