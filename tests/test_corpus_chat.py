@@ -162,7 +162,7 @@ def test_chat_with_corpus_returns_answer_and_mapped_sources(monkeypatch):
 
     assert payload["project"]["topic"] == "tema"
     assert len(payload["corpus"]) == 3
-    assert payload["conversation"][0]["content"] == "oi"
+    assert payload["conversation"][0]["content"] == "o que as fontes dizem sobre o tema?"
     session.close()
 
 
