@@ -75,3 +75,16 @@ def test_youtube_execution_preserves_every_priority_channel_when_budget_is_lower
     tasks = youtube_tasks_for_execution(project)
     priority_targets = [task.target for task in tasks if task.is_priority]
     assert priority_targets == [label for label, _ in PRIORITY_YOUTUBE_CHANNELS]
+
+
+def test_general_scout_prefers_canonical_location_variant():
+    topic = "produção habitacional milícia mazuema"
+    profile = heuristic_topic_profile(topic)
+    tasks = MediaScout(topic, profile).web_tasks(max_complementary=2)
+
+    primary = next(task.query for task in tasks if task.role == "PRIMARY")
+    complementaries = [task.query for task in tasks if task.role == "COMPLEMENTARY"]
+
+    assert "Muzema" in primary
+    assert "mazuema" not in primary.lower()
+    assert any("mazuema" in query.lower() for query in complementaries)
