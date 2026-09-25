@@ -84,6 +84,14 @@ Para EVENT_TOPIC:
 - fact_discovery_variants podem usar formas jornalisticas equivalentes, mas nunca "morte", "policia" ou "Rio" isoladamente;
 - preserve ano e local explicitos.
 
+Para localidades:
+- identifique bairros, comunidades, municipios, estados e outros toponimos quando
+  estiverem explicitos ou forem semanticamente inequívocos no pedido;
+- quando houver uma grafia claramente variante/incorreta de um toponimo conhecido,
+  use a forma canonica em locations sem apagar a forma original do contexto;
+- nao invente localidade quando houver ambiguidade;
+- exemplos inequívocos podem ser normalizados, como "Mazuema" -> "Muzema".
+
 Nao identifique pessoas que ainda nao estejam nas fontes.
 """,
 
