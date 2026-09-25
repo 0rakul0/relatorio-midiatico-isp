@@ -207,9 +207,8 @@ class Settings(BaseSettings):
     apify_api_base_url: str = "https://api.apify.com/v2"
     apify_instagram_comments_actor_id: str | None = "apify/instagram-comment-scraper"
     apify_facebook_comments_actor_id: str | None = "apify/facebook-comments-scraper"
-    # Para X usamos Actor configurado explicitamente no .env. Nao existe um
-    # equivalente oficial da Apify com contrato tao estavel quanto IG/FB.
-    apify_x_comments_actor_id: str | None = None
+    # X usa Actor comunitario e permanece sobrescrevivel no .env.
+    apify_x_comments_actor_id: str | None = "scraper_one/x-post-replies-scraper"
     apify_social_max_posts_per_platform: int = Field(default=8, ge=1, le=50)
     apify_social_comments_per_post: int = Field(default=50, ge=1, le=1000)
     apify_social_timeout_seconds: int = Field(default=240, ge=30, le=295)
