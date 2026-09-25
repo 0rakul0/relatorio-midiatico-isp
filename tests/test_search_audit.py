@@ -7,7 +7,7 @@ from app.config import Settings
 from app.database import Base
 from app.models import Project, SearchCall, SearchQuery
 from app.services.collection import orchestrator
-from app.services.collection.common import canonicalize, parse_provider_date
+from app.services.collection.common import canonicalize, parse_provider_date, query_window
 from app.services.collection.web import new_web_counters
 from app.tools import search as tools_search
 
@@ -100,3 +100,30 @@ def test_parse_provider_date_handles_common_formats():
     assert parse_provider_date("12/08/2026") == date(2026, 8, 12)
     assert parse_provider_date(None) is None
     assert parse_provider_date("sem data") is None
+
+
+def test_topic_driven_project_does_not_apply_single_day_search_window():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    project = Project(
+        topic="produção habitacional milícia Muzema",
+        launch_date=date(2026, 9, 25),
+        # Datas técnicas permanecem por compatibilidade do schema legado.
+        collection_start=date(2026, 9, 25),
+        collection_end=date(2026, 9, 25),
+        has_custom_date_window=False,
+        project_type="GENERAL_TOPIC",
+        topic_profile={"locations": ["Muzema"]},
+    )
+    query = SearchQuery(
+        project_id=1,
+        query='"Muzema" milicia imoveis',
+        kind="media_primary",
+        purpose="MEDIA_REPERCUSSION",
+        rationale="teste",
+        priority=1,
+    )
+
+    assert query_window(project, query) == (None, None)
+    session.close()
