@@ -39,10 +39,9 @@ def _actor_input(platform: str, urls: list[str], limit: int) -> dict:
         }
     if platform == "x":
         return {
-            "urls": urls,
-            "category": "replies",
-            "resultsPerCategory": limit,
-            "scrapeAll": True,
+            "postUrls": urls,
+            "resultsLimit": limit,
+            "includeOriginalPost": False,
         }
     raise SocialCollectionUnavailable(
         f"Plataforma social nao suportada: {platform}"
