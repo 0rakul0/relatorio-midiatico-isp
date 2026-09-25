@@ -320,7 +320,7 @@ class ReportPlanResponse(StrictLLMOutput):
 
     web_collection: ProcessDecision
     youtube_collection: ProcessDecision
-    social_repercussion: ProcessDecision
+    social_repercussion: ProcessDecision | None = None
     academic_research: ProcessDecision
     media_validation: ProcessDecision
     fact_extraction: ProcessDecision
