@@ -472,69 +472,106 @@ def run_full_methodology(
     # viram consultas abertas (web como um todo, sem site:).
     from app.services.search_planning import detect_coverage_gaps, plan_gap_fill_queries
 
-    gap_fill: dict = {"created": 0, "collected": 0, "validated": 0, "status": "SKIPPED", "reason": ""}
+    gap_fill: dict = {
+        "created": 0,
+        "collected": 0,
+        "validated": 0,
+        "status": "SKIPPED",
+        "reason": "",
+        "zero_corpus_recovery": False,
+    }
     check()
+    gaps = detect_coverage_gaps(db, project)
+    zero_corpus = bool(gaps.get("zero_corpus"))
+    gap_fill["zero_corpus_recovery"] = zero_corpus
     gap_state = (project.execution_plan or {}).get("gap_fill") or {}
-    if gap_state.get("completed"):
+    zero_recovery_already_done = bool(gap_state.get("zero_corpus_recovery"))
+
+    if gap_state.get("completed") and (not zero_corpus or zero_recovery_already_done):
         gap_fill["reason"] = "Cobertura complementar já executada neste projeto"
         stage("gap_fill", "SKIPPED", gap_fill["reason"])
     elif not flags.get("enable_web_collection", True):
         gap_fill["reason"] = "Coleta web desativada pelo plano"
         stage("gap_fill", "SKIPPED", gap_fill["reason"])
-    elif not plan_allows(db, project, "gap_fill"):
+    elif not zero_corpus and not plan_allows(db, project, "gap_fill"):
+        # A recuperação de corpus zero é parte da própria coleta web e não pode
+        # ser pulada apenas porque o plano comercial não incluiu gap-fill.
         gap_fill["reason"] = "Plano atual não inclui cobertura complementar"
         stage("gap_fill", "SKIPPED", gap_fill["reason"])
+    elif not gaps["needs_fill"]:
+        gap_fill["reason"] = "Sem lacunas acionáveis após a validação"
+        stage("gap_fill", "SKIPPED", gap_fill["reason"])
     else:
-        gaps = detect_coverage_gaps(db, project)
-        if not gaps["needs_fill"]:
-            gap_fill["reason"] = "Sem lacunas de portais prioritários"
-            stage("gap_fill", "SKIPPED", gap_fill["reason"])
+        portals = ", ".join(entry["portal"] for entry in gaps["uncovered_portals"])
+        if zero_corpus:
+            detail = (
+                "Corpus jornalístico zero: executando recuperação obrigatória "
+                "com grafias alternativas, vocabulário jornalístico e consulta mais ampla"
+            )
         else:
-            portals = ", ".join(entry["portal"] for entry in gaps["uncovered_portals"])
-            stage("gap_fill", "RUNNING", f"Lacunas em: {portals[:180]}")
-            created = plan_gap_fill_queries(db, project, gaps)
-            gap_fill["created"] = len(created)
-            if not created:
-                gap_fill["reason"] = "Nenhuma consulta complementar válida para as lacunas"
-                stage("gap_fill", "SKIPPED", gap_fill["reason"])
-            else:
-                completed_ok = False
-                try:
-                    gap_fill["collected"] = collect_web(
-                        db, project.id, cancel_check=check,
-                        progress_detail=detail_for("gap_fill"),
-                    )
-                    gap_validation = validate_news_stage(
-                        db, project, cancel_check=check,
-                        progress_detail=detail_for("gap_fill"),
-                    )
-                    gap_fill["validated"] = int(gap_validation.get("valid", 0))
-                    classify_with_llm(
-                        db, project, cancel_check=check,
-                        progress_detail=detail_for("gap_fill"),
-                    )
-                    completed_ok = True
-                    stage(
-                        "gap_fill", "DONE",
-                        f"{len(created)} consulta(s) complementar(es); "
-                        f"{gap_fill['collected']} URL(s) nova(s); "
-                        f"{gap_fill['validated']} validada(s)",
-                    )
-                except RuntimeError as exc:
-                    from app.orchestration.state import RunCancelled
+            detail = f"Lacunas em: {portals[:180]}"
+        stage("gap_fill", "RUNNING", detail)
 
-                    if isinstance(exc, RunCancelled):
-                        raise
-                    # Best-effort: falha na coleta complementar não derruba o run
-                    # e permite nova tentativa numa próxima execução.
-                    gap_fill["reason"] = f"Coleta complementar indisponível: {str(exc)[:150]}"
-                    stage("gap_fill", "DONE", gap_fill["reason"])
-                if completed_ok:
-                    plan_state = dict(project.execution_plan or {})
-                    plan_state["gap_fill"] = {"completed": True, "created": gap_fill["created"]}
-                    project.execution_plan = plan_state
-                    db.commit()
-                    gap_fill["status"] = "DONE"
+        created = plan_gap_fill_queries(db, project, gaps)
+        gap_fill["created"] = len(created)
+        if not created:
+            gap_fill["reason"] = (
+                "Corpus zero, mas nenhuma consulta de recuperação válida pôde ser criada"
+                if zero_corpus
+                else "Nenhuma consulta complementar válida para as lacunas"
+            )
+            # Não marcamos como concluído: o QA/histórico continuará vendo que
+            # não houve expansão efetiva e poderá bloquear a versão final.
+            stage("gap_fill", "DONE", gap_fill["reason"])
+        else:
+            completed_ok = False
+            try:
+                gap_fill["collected"] = collect_web(
+                    db, project.id, cancel_check=check,
+                    progress_detail=detail_for("gap_fill"),
+                )
+                gap_validation = validate_news_stage(
+                    db, project, cancel_check=check,
+                    progress_detail=detail_for("gap_fill"),
+                )
+                gap_fill["validated"] = int(gap_validation.get("valid", 0))
+                classify_with_llm(
+                    db, project, cancel_check=check,
+                    progress_detail=detail_for("gap_fill"),
+                )
+                completed_ok = True
+                stage(
+                    "gap_fill", "DONE",
+                    (
+                        f"Recuperação de corpus zero: {len(created)} consulta(s); "
+                        if zero_corpus
+                        else f"{len(created)} consulta(s) complementar(es); "
+                    )
+                    + f"{gap_fill['collected']} URL(s) nova(s); "
+                    + f"{gap_fill['validated']} validada(s)",
+                )
+            except RuntimeError as exc:
+                from app.orchestration.state import RunCancelled
+
+                if isinstance(exc, RunCancelled):
+                    raise
+                # Best-effort: falha externa não apaga a trilha de tentativa.
+                gap_fill["reason"] = f"Coleta complementar indisponível: {str(exc)[:150]}"
+                stage("gap_fill", "DONE", gap_fill["reason"])
+
+            plan_state = dict(project.execution_plan or {})
+            plan_state["gap_fill"] = {
+                "completed": completed_ok,
+                "created": gap_fill["created"],
+                "zero_corpus_recovery": zero_corpus,
+                "collected": gap_fill["collected"],
+                "validated": gap_fill["validated"],
+                "reason": gap_fill["reason"],
+            }
+            project.execution_plan = plan_state
+            db.commit()
+            if completed_ok:
+                gap_fill["status"] = "DONE"
 
     # 12. Report -------------------------------------------------------
     check()
