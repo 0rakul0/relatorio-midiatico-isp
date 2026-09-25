@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -319,6 +320,17 @@ def run_full_methodology(
                 "academic_research",
                 "SKIPPED",
                 f"Literatura cientifica indisponivel: {str(exc)[:180]}",
+            )
+        except SQLAlchemyError as exc:
+            # Literatura cientifica e contexto complementar. Uma falha de
+            # persistencia nesta camada nao deve invalidar todo o relatorio.
+            # O rollback limpa a Session apos IntegrityError/DBAPIError e as
+            # etapas seguintes podem continuar usando o mesmo projeto.
+            db.rollback()
+            stage(
+                "academic_research",
+                "SKIPPED",
+                f"Literatura cientifica nao persistida: {str(exc)[:180]}",
             )
         else:
             if not academic_research.get("searched") and not academic_research.get("papers"):
