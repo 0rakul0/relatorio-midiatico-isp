@@ -19,6 +19,7 @@ def run_actor_dataset(
     payload: dict,
     base_url: str = "https://api.apify.com/v2",
     timeout_seconds: int = 240,
+    max_items: int | None = None,
 ) -> list[dict]:
     actor = quote(str(actor_id or "").strip().replace("/", "~"), safe="~")
     if not actor:
@@ -30,6 +31,8 @@ def run_actor_dataset(
         f"{base_url.rstrip('/')}/actors/{actor}/run-sync-get-dataset-items"
         "?format=json&clean=true"
     )
+    if max_items is not None:
+        url += f"&maxItems={max(1, int(max_items))}"
     request = Request(
         url,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
