@@ -263,6 +263,7 @@ def build_pdf(data: dict) -> bytes:
     operations = data.get("operation_events", [])
     fact_evidence = data.get("fact_evidence", [])
     academic_papers = data.get("academic_papers", [])
+    social_repercussion = data.get("social_repercussion") or {}
     word_cloud = data.get("word_cloud") or {}
     by_origin = _split_by_origin(corpus)
     social_items = by_origin.get("redes_sociais", [])
@@ -492,6 +493,145 @@ def build_pdf(data: dict) -> bytes:
             small,
         )
     )
+
+    social_comments = int(social_repercussion.get("comments") or 0)
+    social_analyzed = int(social_repercussion.get("analyzed_comments") or 0)
+    if social_comments:
+        def social_label(value: object) -> str:
+            labels = {
+                "instagram": "Instagram",
+                "facebook": "Facebook",
+                "x": "X",
+                "POSITIVO": "Positivo",
+                "NEGATIVO": "Negativo",
+                "NEUTRO": "Neutro",
+                "AMBIGUO": "Ambíguo",
+                "MEDO": "Medo",
+                "INDIGNACAO": "Indignação",
+                "CONFIANCA": "Confiança",
+                "DESCONFIANCA": "Desconfiança",
+                "TRISTEZA": "Tristeza",
+                "IRONIA": "Ironia",
+                "ESPERANCA": "Esperança",
+                "OUTRA": "Outra",
+                "NAO_IDENTIFICAVEL": "Não identificável",
+                "APOIO": "Apoio",
+                "CRITICA": "Crítica",
+                "PREOCUPACAO": "Preocupação",
+                "DUVIDA": "Dúvida",
+                "RELATO_PESSOAL": "Relato pessoal",
+            }
+            raw = _text(value)
+            return labels.get(raw, raw.replace("_", " ").title())
+
+        story.append(Paragraph("Percepção observada nas redes sociais", heading))
+        if social_repercussion.get("summary"):
+            story.append(
+                Paragraph(
+                    escape(_text(social_repercussion.get("summary"))),
+                    body,
+                )
+            )
+
+        story.append(
+            _table(
+                [
+                    ["Posts sociais", "Comentários coletados", "Comentários analisados"],
+                    [
+                        social_repercussion.get("posts", 0),
+                        social_comments,
+                        social_analyzed,
+                    ],
+                ],
+                [5.5 * cm, 5.5 * cm, 5.6 * cm],
+                small,
+            )
+        )
+
+        platform_counts = social_repercussion.get("platform_counts") or {}
+        if platform_counts:
+            story.append(Paragraph("Distribuição por plataforma", heading))
+            story.append(
+                _table(
+                    [["Plataforma", "Comentários"]]
+                    + [
+                        [social_label(label), int(count or 0)]
+                        for label, count in sorted(
+                            platform_counts.items(),
+                            key=lambda item: int(item[1] or 0),
+                            reverse=True,
+                        )
+                    ],
+                    [8.3 * cm, 8.3 * cm],
+                    small,
+                )
+            )
+
+        def add_social_distribution(title: str, values: dict):
+            if not values or not social_analyzed:
+                return
+            rows = []
+            for label, count in sorted(
+                values.items(),
+                key=lambda item: int(item[1] or 0),
+                reverse=True,
+            ):
+                count_value = int(count or 0)
+                percent = (count_value * 100.0 / social_analyzed) if social_analyzed else 0
+                rows.append(
+                    [
+                        social_label(label),
+                        count_value,
+                        f"{percent:.1f}%".replace(".", ","),
+                    ]
+                )
+            story.append(Paragraph(title, heading))
+            story.append(
+                _table(
+                    [["Classificação", "Comentários", "Participação na amostra"]]
+                    + rows,
+                    [7.0 * cm, 4.0 * cm, 5.6 * cm],
+                    small,
+                )
+            )
+
+        add_social_distribution(
+            "Sentimento observado",
+            social_repercussion.get("sentiment_counts") or {},
+        )
+        add_social_distribution(
+            "Emoções observadas",
+            social_repercussion.get("emotion_counts") or {},
+        )
+        add_social_distribution(
+            "Posição em relação ao tema",
+            social_repercussion.get("position_counts") or {},
+        )
+
+        themes = list(social_repercussion.get("themes") or [])
+        if themes:
+            story.append(Paragraph("Temas recorrentes nos comentários", heading))
+            story.append(
+                _table(
+                    [["#", "Tema", "Ocorrências"]]
+                    + [
+                        [index + 1, item.get("theme") or "N/D", item.get("count") or 0]
+                        for index, item in enumerate(themes)
+                    ],
+                    [1.4 * cm, 12.6 * cm, 2.6 * cm],
+                    small,
+                )
+            )
+
+        methodology_note = social_repercussion.get("methodology_note")
+        if methodology_note:
+            story.append(
+                Paragraph(
+                    "<b>Nota metodológica:</b> "
+                    + escape(_text(methodology_note)),
+                    small,
+                )
+            )
 
     add_section("Abertura", report["opening"])
     add_section("I. Panorama da Repercussão", report["panorama"])
