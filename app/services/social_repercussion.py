@@ -138,9 +138,26 @@ def _first(payload: dict, keys: tuple[str, ...]) -> Any:
 
 
 def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        timestamp = float(value)
+        if timestamp > 10_000_000_000:
+            timestamp /= 1000.0
+        try:
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc).replace(tzinfo=None)
+        except (OverflowError, OSError, ValueError):
+            return None
+
     text = str(value or "").strip()
     if not text:
         return None
+    if text.isdigit():
+        timestamp = float(text)
+        if timestamp > 10_000_000_000:
+            timestamp /= 1000.0
+        try:
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc).replace(tzinfo=None)
+        except (OverflowError, OSError, ValueError):
+            return None
     candidates = [
         text.replace("Z", "+00:00"),
         text.replace(" ", "T").replace("Z", "+00:00"),
@@ -198,6 +215,7 @@ def _external_id(
         (
             "commentId",
             "comment_id",
+            "replyId",
             "id",
             "pk",
             "tweet_id",
@@ -228,6 +246,7 @@ def _normalize_comment(
         (
             "commentText",
             "comment_text",
+            "replyText",
             "text",
             "full_text",
             "content",
@@ -284,6 +303,8 @@ def _normalize_comment(
                 (
                     "likesCount",
                     "likeCount",
+                    "favouriteCount",
+                    "favoriteCount",
                     "likes",
                     "favorite_count",
                     "favoriteCount",
