@@ -33,6 +33,18 @@ _STOPWORDS = {
     "tem", "teve", "mais", "menos", "entre", "me", "diga", "mostre",
 }
 
+_CASUAL_GREETINGS = {
+    "oi", "ola", "opa", "e ai", "bom dia", "boa tarde", "boa noite",
+    "oi tudo bem", "ola tudo bem", "e ai tudo bem", "tudo bem",
+}
+_CASUAL_THANKS = {
+    "obrigado", "obrigada", "muito obrigado", "muito obrigada", "valeu",
+    "agradecido", "agradecida",
+}
+_CASUAL_FAREWELLS = {
+    "tchau", "ate mais", "ate logo", "falou",
+}
+
 
 def _topic_key(value: str | None) -> str:
     text = unicodedata.normalize("NFKD", value or "")
@@ -90,13 +102,76 @@ def _latest_user_question(messages: list[dict]) -> str:
     return ""
 
 
+def _casual_kind(question: str) -> str | None:
+    normalized = _topic_key(question)
+    if normalized in _CASUAL_GREETINGS:
+        return "GREETING"
+    if normalized in _CASUAL_THANKS:
+        return "THANKS"
+    if normalized in _CASUAL_FAREWELLS:
+        return "FAREWELL"
+    return None
+
+
+def _retrieval_question(messages: list[dict]) -> str:
+    """Usa contexto conversacional só quando a pergunta atual é curta demais."""
+    user_messages = [
+        str(message.get("content") or "").strip()
+        for message in (messages or [])
+        if str(message.get("role") or "").lower() == "user"
+        and str(message.get("content") or "").strip()
+    ]
+    if not user_messages:
+        return ""
+
+    latest = user_messages[-1]
+    if len(_tokens(latest)) >= 2:
+        return latest
+
+    for previous in reversed(user_messages[:-1]):
+        if _tokens(previous):
+            return f"{previous}\n{latest}"
+    return latest
+
+
+def _casual_answer(kind: str, project_payload: dict, corpus_size: int) -> str:
+    topic = str(project_payload.get("topic") or "acervo").strip()
+    scope = str(project_payload.get("scope") or "TOPIC").upper()
+    base_label = "todo o acervo" if scope == "ALL" else f'a base “{topic}”'
+
+    if kind == "THANKS":
+        return "Por nada! Se quiser, posso continuar consultando o acervo ou aprofundar alguma informação."
+    if kind == "FAREWELL":
+        return "Até mais! Quando quiser retomar, a base continuará disponível para consulta."
+
+    return (
+        f"Oi! Estou conectado a {base_label}, com {corpus_size} notícias validadas. "
+        "Você pode me perguntar sobre temas, períodos, operações, pessoas, veículos, "
+        "dados encontrados ou comparar informações do acervo."
+    )
+
+
+def _normalize_member_references(answer: str, by_index: dict[int, dict]) -> str:
+    """Converte referências técnicas como '(Index 0)' em referências públicas [F1]."""
+    text = str(answer or "")
+
+    def replace(match: re.Match) -> str:
+        index = int(match.group(1))
+        if index not in by_index:
+            return match.group(0)
+        return f"[F{index + 1}]"
+
+    return re.sub(r"[\(\[]?\s*Index\s+(\d+)\s*[\)\]]?", replace, text, flags=re.IGNORECASE)
+
+
 def _rank_items(items: list[MediaItem], question: str, limit: int) -> list[MediaItem]:
     """BM25-like leve, sem custo externo, para reduzir contexto enviado a LLM."""
     if not items:
         return []
     query_tokens = _tokens(question)
     if not query_tokens:
-        return sorted(items, key=_recent_key, reverse=True)[:limit]
+        # Pergunta sem termos recuperáveis não deve puxar notícias arbitrárias.
+        return []
 
     normalized_question = _topic_key(question)
     document_tokens: dict[int, set[str]] = {}
@@ -163,6 +238,7 @@ def _serialize_members(items: list[MediaItem]) -> list[dict]:
         members.append(
             {
                 "index": index,
+                "reference": f"F{index + 1}",
                 "id": item.id,
                 "title": item.title,
                 "domain": item.domain,
@@ -321,14 +397,29 @@ def _answer_from_items(
     project_payload: dict,
     project_id: int | None,
 ) -> dict:
+    question = _latest_user_question(messages)
+    casual_kind = _casual_kind(question)
+    if casual_kind:
+        return {
+            "answer": _casual_answer(casual_kind, project_payload, len(items)),
+            "sources": [],
+            "corpus_size": len(items),
+            "context_size": 0,
+            "project_count": project_payload.get("consolidated_runs") or project_payload.get("project_count") or 0,
+            "retrieval_strategy": "casual_no_retrieval",
+            "external_research_used": False,
+            "external_source_mode": None,
+            "tools_used": [],
+        }
+
     if not llm_is_configured():
         raise RuntimeError(
             "Nenhuma LLM configurada. Defina OPENAI_API_KEY ou configure o fallback local do Ollama."
         )
 
-    question = _latest_user_question(messages)
+    retrieval_question = _retrieval_question(messages)
     context_limit = get_settings().chat_context_items
-    selected = _rank_items(items, question, context_limit)
+    selected = _rank_items(items, retrieval_question, context_limit)
     members = _serialize_members(selected)
 
     external_rows: list[dict] = []
@@ -372,8 +463,9 @@ def _answer_from_items(
     payload = {
         "project": project_payload,
         "retrieval": {
-            "strategy": "lexical_ranked_then_agent_tools",
+            "strategy": "lexical_ranked_with_conversation_then_agent_tools",
             "question": question,
+            "retrieval_query": retrieval_question,
             "corpus_size": len(items),
             "context_size": len(members),
         },
@@ -393,6 +485,7 @@ def _answer_from_items(
 
     used = [int(value) for value in (result.get("used_member_indices") or []) if value is not None]
     by_index = {member["index"]: member for member in members}
+    answer = _normalize_member_references(result.get("answer") or "", by_index)
     sources: list[dict] = []
     for index in dict.fromkeys(used):
         member = by_index.get(index)
@@ -400,7 +493,8 @@ def _answer_from_items(
             continue
         sources.append(
             {
-                "title": member.get("title") or "Fonte",
+                "reference": member.get("reference") or f"F{index + 1}",
+                "title": member.get("title") or member.get("source_name") or member.get("domain") or member.get("url") or "Fonte do acervo",
                 "url": member.get("url"),
                 "domain": member.get("domain"),
                 "published_at": member.get("published_at"),
@@ -437,7 +531,8 @@ def _answer_from_items(
             or row.get("_provider")
         )
         captured_by_url[url] = {
-            "title": row.get("title") or "Fonte externa",
+            "reference": None,
+            "title": row.get("title") or row.get("source_name") or parsed.netloc or url or "Fonte externa",
             "url": url,
             "domain": parsed.netloc,
             "published_at": row.get("published_at"),
@@ -478,12 +573,12 @@ def _answer_from_items(
     )
 
     return {
-        "answer": result.get("answer") or "",
+        "answer": answer,
         "sources": sources,
         "corpus_size": len(items),
         "context_size": len(members),
         "project_count": project_payload.get("consolidated_runs") or project_payload.get("project_count") or 0,
-        "retrieval_strategy": "lexical_ranked_then_agent_tools",
+        "retrieval_strategy": "lexical_ranked_with_conversation_then_agent_tools",
         "external_research_used": bool(external_sources),
         "external_source_mode": external_source_mode if external_sources else None,
         "tools_used": tools_used,

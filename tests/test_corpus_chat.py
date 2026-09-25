@@ -143,15 +143,23 @@ def test_chat_with_corpus_returns_answer_and_mapped_sources(monkeypatch):
     fake_agent = SimpleNamespace(run=fake_run)
     monkeypatch.setattr("app.services.corpus_chat.get_report_agent", lambda: fake_agent)
 
-    result = chat_with_corpus(session, project, [{"role": "user", "content": "oi"}])
+    result = chat_with_corpus(
+        session,
+        project,
+        [{"role": "user", "content": "o que as fontes dizem sobre o tema?"}],
+    )
 
     assert result["answer"] == "resposta"
-    assert [s["url"] for s in result["sources"]] == [i0.url, i2.url]
-    assert result["sources"][0]["title"] == "fonte zero"
+    payload = captured["payload"]
+    assert [s["url"] for s in result["sources"]] == [
+        payload["corpus"][2]["url"],
+        payload["corpus"][0]["url"],
+    ]
+    assert result["sources"][0]["reference"] == "F3"
     assert result["corpus_size"] == 3
     assert captured["task"] == "chat"
-    assert captured["tools"] is None
-    payload = captured["payload"]
+    assert captured["tools"]
+
     assert payload["project"]["topic"] == "tema"
     assert len(payload["corpus"]) == 3
     assert payload["conversation"][0]["content"] == "oi"
@@ -170,7 +178,11 @@ def test_chat_with_corpus_ignores_unknown_indices(monkeypatch):
     monkeypatch.setattr("app.services.corpus_chat.llm_is_configured", lambda: True)
     monkeypatch.setattr("app.services.corpus_chat.get_report_agent", lambda: SimpleNamespace(run=fake_run))
 
-    result = chat_with_corpus(session, project, [{"role": "user", "content": "oi"}])
+    result = chat_with_corpus(
+        session,
+        project,
+        [{"role": "user", "content": "o que há sobre esta fonte?"}],
+    )
     assert result["sources"] == []
     assert result["corpus_size"] == 1
     session.close()
@@ -183,9 +195,81 @@ def test_chat_with_corpus_requires_llm_configuration(monkeypatch):
     monkeypatch.setattr("app.services.corpus_chat.llm_is_configured", lambda: False)
 
     with pytest.raises(RuntimeError) as excinfo:
-        chat_with_corpus(session, project, [{"role": "user", "content": "oi"}])
+        chat_with_corpus(
+            session,
+            project,
+            [{"role": "user", "content": "o que existe no acervo?"}],
+        )
     assert "OPENAI_API_KEY" in str(excinfo.value)
     session.close()
+
+
+def test_chat_greeting_does_not_retrieve_or_require_llm(monkeypatch):
+    session = _session()
+    project = _project(session, "tema")
+    _valid_item(session, project, "fonte")
+    session.commit()
+
+    monkeypatch.setattr("app.services.corpus_chat.llm_is_configured", lambda: False)
+
+    result = chat_with_corpus(session, project, [{"role": "user", "content": "oi"}])
+
+    assert result["answer"].startswith("Oi!")
+    assert result["context_size"] == 0
+    assert result["sources"] == []
+    assert result["retrieval_strategy"] == "casual_no_retrieval"
+    assert result["external_research_used"] is False
+    session.close()
+
+
+def test_chat_short_followup_reuses_previous_user_question(monkeypatch):
+    session = _session()
+    project = _project(session, "tema")
+    relevant = _valid_item(
+        session,
+        project,
+        "violencia digital contra mulheres",
+        days_ago=8,
+        content="A materia discute violencia digital, ameacas e perseguicao contra mulheres.",
+    )
+    _valid_item(
+        session,
+        project,
+        "seguranca publica geral",
+        days_ago=0,
+        content="Texto sobre outro assunto de seguranca.",
+    )
+    session.commit()
+
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        return {"answer": "continuação", "used_member_indices": [0]}
+
+    monkeypatch.setattr("app.services.corpus_chat.llm_is_configured", lambda: True)
+    monkeypatch.setattr(
+        "app.services.corpus_chat.get_report_agent",
+        lambda: SimpleNamespace(run=fake_run),
+    )
+
+    result = chat_with_corpus(
+        session,
+        project,
+        [
+            {"role": "user", "content": "o que apareceu sobre violencia digital contra mulheres?"},
+            {"role": "assistant", "content": "houve cobertura sobre o tema"},
+            {"role": "user", "content": "e em 2025?"},
+        ],
+    )
+
+    retrieval_query = captured["payload"]["retrieval"]["retrieval_query"]
+    assert "violencia digital" in retrieval_query
+    assert "2025" in retrieval_query
+    assert captured["payload"]["corpus"][0]["id"] == relevant.id
+    assert result["sources"][0]["reference"] == "F1"
+    session.close()
+
 
 def test_chat_retrieval_prefers_question_terms():
     session = _session()

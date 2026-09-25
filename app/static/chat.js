@@ -92,9 +92,76 @@ function renderWelcome() {
   );
 }
 
+function renderInlineMarkdown(value) {
+  return esc(value)
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[F(\d+)\]/g, '<span class="chat-inline-ref">[F$1]</span>');
+}
+
+function renderMarkdown(value) {
+  const normalized = String(value || '')
+    .replace(/\\([*_#\[\]])/g, '$1')
+    .replace(/\r\n/g, '\n');
+  const lines = normalized.split('\n');
+  const html = [];
+  let listType = null;
+
+  const closeList = () => {
+    if (listType) {
+      html.push(`</${listType}>`);
+      listType = null;
+    }
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      closeList();
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      closeList();
+      const level = Math.min(4, heading[1].length + 2);
+      html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      continue;
+    }
+
+    const unordered = line.match(/^[-*]\s+(.+)$/);
+    if (unordered) {
+      if (listType !== 'ul') {
+        closeList();
+        listType = 'ul';
+        html.push('<ul>');
+      }
+      html.push(`<li>${renderInlineMarkdown(unordered[1])}</li>`);
+      continue;
+    }
+
+    const ordered = line.match(/^\d+[.)]\s+(.+)$/);
+    if (ordered) {
+      if (listType !== 'ol') {
+        closeList();
+        listType = 'ol';
+        html.push('<ol>');
+      }
+      html.push(`<li>${renderInlineMarkdown(ordered[1])}</li>`);
+      continue;
+    }
+
+    closeList();
+    html.push(`<p>${renderInlineMarkdown(line)}</p>`);
+  }
+
+  closeList();
+  return html.join('');
+}
+
 function renderAnswer(state) {
-  const paragraphs = String(state.answer || '').split(/\n{2,}|\r\n{2,}/);
-  const body = paragraphs.map(p => `<p>${esc(p).replace(/\n/g, '<br>')}</p>`).join('');
+  const body = renderMarkdown(state.answer || '');
   let sources = '';
 
   const allSources = state.sources || [];
@@ -102,8 +169,13 @@ function renderAnswer(state) {
     const corpusSources = allSources.filter(s => (s.source_scope || 'CORPUS') !== 'EXTERNAL');
     const externalSources = allSources.filter(s => s.source_scope === 'EXTERNAL');
 
-    const renderSourceItems = rows => rows.map(s => {
-      const link = s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noreferrer">Abrir fonte</a>` : '';
+    const renderSourceItems = rows => rows.map((s, index) => {
+      const isExternal = s.source_scope === 'EXTERNAL';
+      const reference = String(s.reference || `${isExternal ? 'W' : 'F'}${index + 1}`);
+      const rawTitle = String(s.title || s.source_name || s.domain || s.url || 'Fonte do acervo').trim() || 'Fonte do acervo';
+      const title = s.url
+        ? `<a href="${esc(s.url)}" target="_blank" rel="noreferrer"><strong>${esc(rawTitle)}</strong></a>`
+        : `<strong>${esc(rawTitle)}</strong>`;
       const when = s.published_at ? ` · ${esc(s.published_at)}` : '';
       const via = s.search_source ? ` · via ${esc(s.search_source)}` : '';
       const tool = s.tool ? ` · ${esc({
@@ -111,7 +183,9 @@ function renderAnswer(state) {
         pesquisar_videos: 'busca de vídeos',
         pesquisar_artigos_arxiv: 'arXiv'
       }[s.tool] || s.tool)}` : '';
-      return `<li><strong>${esc(s.title)}</strong><br><span class="note">${esc(s.domain || s.source_name || '')}${when} · ${esc(originLabel(s.media_origin))}${via}${tool}${link ? ' · ' + link : ''}</span></li>`;
+      const origin = esc(originLabel(s.media_origin));
+      const source = esc(s.domain || s.source_name || (isExternal ? 'Fonte externa' : 'Acervo validado'));
+      return `<li class="chat-source-item"><span class="chat-source-ref">${esc(reference)}</span><div>${title}<br><span class="note">${source}${when}${origin ? ' · ' + origin : ''}${via}${tool}</span></div></li>`;
     }).join('');
 
     const groups = [];
@@ -125,7 +199,7 @@ function renderAnswer(state) {
       groups.push(`<div class="chat-source-group"><span class="chat-source-label">${esc(label)}</span><ul>${renderSourceItems(externalSources)}</ul></div>`);
     }
 
-    sources = `<details class="chat-sources"><summary>Fontes e evidências (${allSources.length})</summary>${groups.join('')}</details>`;
+    sources = `<details class="chat-sources" open><summary>Fontes e evidências (${allSources.length})</summary>${groups.join('')}</details>`;
   }
 
   const contextNote = state.corpus_size
