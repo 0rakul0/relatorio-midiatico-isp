@@ -68,6 +68,26 @@ body {
     padding: 7px 12px
 }
 
+.index-top {
+    gap: 20px;
+}
+
+.index-top .top-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+}
+
+.index-top .link-chat {
+    margin-left: 0;
+}
+
+.index-top #api-status {
+    flex: none;
+}
+
 .wrap {
     max-width: 1240px;
     margin: 30px auto;
@@ -735,6 +755,12 @@ td a {
 
     .top {
         align-items: flex-start
+    }
+
+    .index-top .top-actions {
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 8px;
     }
 
     .report-doc h1 {
