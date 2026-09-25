@@ -34,6 +34,20 @@ _STOPWORDS = {
 }
 
 
+# Vocabulário jornalístico para uma segunda tentativa quando a primeira rodada
+# termina com corpus midiático zero. É um fallback determinístico, conservador
+# e auditável; o agente pode propor outros ângulos antes dele.
+_ZERO_RECOVERY_EXPANSIONS: dict[str, list[str]] = {
+    "habitacional": ["imoveis", "construcao", "mercado imobiliario", "moradia"],
+    "habitacao": ["imoveis", "construcao", "mercado imobiliario", "moradia"],
+    "moradia": ["imoveis", "construcao", "mercado imobiliario", "habitacao"],
+    "imobiliario": ["imoveis", "construcao", "mercado imobiliario"],
+    "imobiliaria": ["imoveis", "construcao", "mercado imobiliario"],
+    "milicia": ["milicia", "milicianos"],
+    "miliciano": ["milicia", "milicianos"],
+}
+
+
 def _existing_queries(db: Session, project_id: int) -> set[str]:
     return set(
         db.scalars(
@@ -832,11 +846,17 @@ def detect_coverage_gaps(db: Session, project: Project) -> dict[str, Any]:
         for label, domain in PRIORITY_MEDIA_SOURCES
         if checks.get(label, "") in _GAP_FILLABLE_RESULTS
     ]
+    valid_items = int(data.get("valid_items") or 0)
+    zero_corpus = valid_items == 0
     return {
         "uncovered_portals": uncovered,
-        "valid_items": int(data.get("valid_items") or 0),
+        "valid_items": valid_items,
         "target_items": int(settings.target_media_items),
-        "needs_fill": bool(uncovered),
+        "zero_corpus": zero_corpus,
+        # Corpus zero sempre exige uma segunda estratégia aberta antes de
+        # aceitarmos "0 itens", mesmo quando portal_checks não trouxe lacunas
+        # individualizadas (por exemplo, provedor retornou zero globalmente).
+        "needs_fill": bool(uncovered) or zero_corpus,
     }
 
 
@@ -894,6 +914,91 @@ def _gap_fallback_angles(
     return output
 
 
+def _zero_corpus_fallback_angles(
+    project: Project,
+    executed: list[str],
+    cap: int,
+) -> list[tuple[str, str]]:
+    """Gera consultas mais amplas quando a primeira validação terminou em zero.
+
+    Prioriza a localidade canônica do perfil e troca linguagem acadêmica/formal
+    por termos comuns de manchetes. A consulta original continua preservada nas
+    SearchQuery anteriores, portanto a expansão não apaga a trilha de auditoria.
+    """
+    if cap <= 0:
+        return []
+
+    profile = project.topic_profile or {}
+    locations = [
+        " ".join(str(value).split()).strip()
+        for value in (profile.get("locations") or [])
+        if str(value).strip()
+    ]
+    location = locations[0] if locations else ""
+    topic_norm = normalized_text(project.topic or "")
+    topic_tokens = [
+        token for token in re.findall(r"[a-z0-9]+", topic_norm)
+        if token not in _STOPWORDS and len(token) > 2
+    ]
+
+    # Termos discriminantes que não são apenas a localidade.
+    location_tokens: set[str] = set()
+    for value in locations:
+        location_tokens.update(_query_tokens(value))
+    core_tokens = [
+        token for token in topic_tokens
+        if token not in location_tokens and token not in {"producao", "perfil", "tema"}
+    ]
+
+    expansions: list[str] = []
+    for token in topic_tokens:
+        expansions.extend(_ZERO_RECOVERY_EXPANSIONS.get(token, []))
+
+    # Evita consultas de uma palavra só. Mantém uma âncora territorial quando
+    # conhecida e, em seguida, combina até dois termos discriminantes.
+    anchor = f'"{location}"' if location else ""
+    base_core = [token for token in core_tokens if token not in {"habitacional", "habitacao", "moradia", "imobiliario", "imobiliaria"}]
+    if not base_core:
+        base_core = core_tokens[:2]
+
+    candidates: list[str] = []
+    for expansion in list(dict.fromkeys(expansions)):
+        parts = [anchor, *base_core[:1], expansion]
+        query = " ".join(part for part in parts if part).strip()
+        if query:
+            candidates.append(query)
+
+    # Último fallback: local + dois conceitos centrais. É mais amplo que a
+    # consulta original, mas ainda preserva contexto suficiente para validação.
+    broad_parts = [anchor, *base_core[:2]]
+    broad = " ".join(part for part in broad_parts if part).strip()
+    if broad:
+        candidates.append(broad)
+
+    selected = list(executed)
+    output: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = " ".join(normalized_text(candidate).split())
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        if not _media_query_is_acceptable(project, candidate):
+            continue
+        if _is_redundant(candidate, selected):
+            continue
+        output.append(
+            (
+                candidate,
+                "Recuperação obrigatória após corpus zero: linguagem jornalística/consulta mais ampla.",
+            )
+        )
+        selected.append(candidate)
+        if len(output) >= cap:
+            break
+    return output
+
+
 def plan_gap_fill_queries(
     db: Session,
     project: Project,
@@ -909,7 +1014,8 @@ def plan_gap_fill_queries(
     settings = get_settings()
     cap = max(0, int(settings.max_gap_fill_queries if max_queries is None else max_queries))
     uncovered = list(gaps.get("uncovered_portals") or [])
-    if cap <= 0 or not uncovered:
+    zero_corpus = bool(gaps.get("zero_corpus"))
+    if cap <= 0 or (not uncovered and not zero_corpus):
         return []
 
     executed = [
@@ -930,6 +1036,13 @@ def plan_gap_fill_queries(
                     "project_type": project.project_type,
                     "topic_profile": project.topic_profile,
                     "uncovered_portals": uncovered,
+                    "zero_corpus": zero_corpus,
+                    "zero_corpus_recovery": (
+                        "A primeira validação terminou com zero itens. Gere consultas realmente novas: "
+                        "corrija/varie grafias plausíveis de entidades, use vocabulário jornalístico e "
+                        "inclua ao menos uma consulta mais ampla, preservando local/objeto."
+                        if zero_corpus else None
+                    ),
                     "executed_queries": executed,
                     "max_queries": cap,
                 },
@@ -950,7 +1063,18 @@ def plan_gap_fill_queries(
             candidates.append((query, str(item.get("rationale") or "")))
             selected.append(query)
 
-    # Fallback determinístico: ângulos do perfil ainda não executados.
+    # Em corpus zero, a prioridade é sair da formulação que já falhou:
+    # grafias alternativas + vocabulário de manchetes + consulta mais ampla.
+    if zero_corpus and len(candidates) < cap:
+        for query, rationale in _zero_corpus_fallback_angles(
+            project, selected, cap - len(candidates)
+        ):
+            if query in existing:
+                continue
+            candidates.append((query, rationale))
+            selected.append(query)
+
+    # Fallback geral: ângulos do perfil ainda não executados.
     if len(candidates) < cap:
         for query, rationale in _gap_fallback_angles(project, selected, cap - len(candidates)):
             if query in existing:
@@ -965,9 +1089,13 @@ def plan_gap_fill_queries(
             project,
             existing,
             query=query,
-            kind="media_complementary",
+            kind="media_zero_recovery" if zero_corpus else "media_complementary",
             purpose="MEDIA_REPERCUSSION",
-            rationale=f"[cobertura complementar] {rationale}"[:1000],
+            rationale=(
+                f"[zero-corpus recovery] {rationale}"
+                if zero_corpus
+                else f"[cobertura complementar] {rationale}"
+            )[:1000],
             priority=3,
         )
         if row:
