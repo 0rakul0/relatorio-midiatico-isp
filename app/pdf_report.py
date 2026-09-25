@@ -456,7 +456,15 @@ def build_pdf(data: dict) -> bytes:
         )
         return True
 
-    story.append(Paragraph("PARTE 1 - PANORAMA DA REPERCUSSÃO", heading))
+    part_number = 0
+
+    def add_part(name: str) -> None:
+        """Numera apenas as partes realmente renderizadas no PDF."""
+        nonlocal part_number
+        part_number += 1
+        story.append(Paragraph(f"PARTE {part_number} - {name}", heading))
+
+    add_part("PANORAMA DA REPERCUSSÃO")
     cloud_words = list(word_cloud.get("words") or [])
     if cloud_words:
         cloud_visual = _pdf_word_cloud_flowable(
@@ -815,7 +823,7 @@ def build_pdf(data: dict) -> bytes:
         )
 
     if fact_layer_enabled and operations:
-        story.append(Paragraph("PARTE 2 - OPERAÇÕES POLICIAIS IDENTIFICADAS", heading))
+        add_part("OPERAÇÕES POLICIAIS IDENTIFICADAS")
         provisional_operations = any(
             operation.get("inventory_status") == "PROVISIONAL_MEDIA_MENTION"
             or operation.get("resolution_status") == "PROVISIONAL_MEDIA_MENTION"
@@ -876,7 +884,7 @@ def build_pdf(data: dict) -> bytes:
         )
     )
     if part3_has_content:
-        story.append(Paragraph("PARTE 3 - ANÁLISE DA COBERTURA", heading))
+        add_part("ANÁLISE DA COBERTURA")
         add_section("II. Enquadramento Dominante", report.get("dominant_framing"))
 
         if thematic_axes:
@@ -925,7 +933,7 @@ def build_pdf(data: dict) -> bytes:
             )
 
     if fact_layer_enabled and facts:
-        story.append(Paragraph("PARTE 4 - VERIFICAÇÃO FACTUAL", heading))
+        add_part("VERIFICAÇÃO FACTUAL")
         story.append(Paragraph("Camada de Fatos Verificados", heading))
         if _has_content(report.get("fact_layer_intro")):
             story.append(Paragraph(escape(_text(report.get("fact_layer_intro"))), body))
@@ -973,7 +981,7 @@ def build_pdf(data: dict) -> bytes:
         )
 
     if academic_papers:
-        story.append(Paragraph("PARTE 5 - CONTEXTUALIZAÇÃO CIENTÍFICA", heading))
+        add_part("CONTEXTUALIZAÇÃO CIENTÍFICA")
         story.append(Paragraph("Literatura científica relacionada", heading))
         story.append(
             Paragraph(
@@ -1018,7 +1026,7 @@ def build_pdf(data: dict) -> bytes:
     recommendations = list(report.get("recommendations") or [])
     press_kit = list(report.get("press_kit") or [])
     if _has_content(synthesis) or recommendations or press_kit:
-        story.append(Paragraph("PARTE 6 - SÍNTESE E ENCAMINHAMENTOS", heading))
+        add_part("SÍNTESE E ENCAMINHAMENTOS")
         add_section("VIII. Síntese", synthesis)
 
         if recommendations or press_kit:
