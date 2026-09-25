@@ -63,3 +63,17 @@ def test_explicit_simple_preset_wins_over_auto_planner():
     plan = sanitize_execution_plan(project, raw)
     assert plan["processes"]["fact_extraction"]["enabled"] is False
     assert plan["processes"]["nominal_followup"]["enabled"] is False
+
+
+def test_social_repercussion_override_can_enable_paid_stage():
+    project = _project(
+        execution_options={"enable_social_repercussion": True}
+    )
+    plan = sanitize_execution_plan(project, _raw_plan())
+    assert plan["processes"]["social_repercussion"]["enabled"] is True
+
+
+def test_explicit_profile_keeps_social_repercussion_off_by_default():
+    project = _project(execution_profile="MIDIATICO_SIMPLES")
+    plan = sanitize_execution_plan(project, _raw_plan())
+    assert plan["processes"]["social_repercussion"]["enabled"] is False
