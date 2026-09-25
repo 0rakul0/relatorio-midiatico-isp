@@ -563,6 +563,37 @@ def _persist_strategy_queries(
             created.append(row)
             media_added += 1
 
+    if flags.get("enable_social_repercussion"):
+        # DuckDuckGo continua como mecanismo de descoberta. Estas consultas
+        # localizam posts publicos que depois podem ter comentarios
+        # enriquecidos pelo Apify.
+        social_sources = [
+            ("instagram", "instagram.com"),
+            ("facebook", "facebook.com"),
+            ("x", "x.com"),
+        ]
+        social_base = str(strategy.get("primary_query") or project.topic).strip()
+        social_added = 0
+        for platform, domain in social_sources:
+            if social_added >= settings.max_social_discovery_queries:
+                break
+            row = _add_query(
+                db,
+                project,
+                existing,
+                query=f"site:{domain} {social_base}",
+                kind=f"social_{platform}",
+                purpose="MEDIA_REPERCUSSION",
+                rationale=(
+                    f"Descobrir posts publicos no {platform} para analise "
+                    "de repercussao social."
+                ),
+                priority=2,
+            )
+            if row:
+                created.append(row)
+                social_added += 1
+
     if flags["enable_fact_layer"]:
         # Para inventários anuais, a consulta única do planejador é
         # complementada por uma varredura mensal determinística. Isso aumenta
@@ -731,6 +762,13 @@ def plan_report_with_llm(db: Session, project: Project) -> list[SearchQuery]:
         "processes": {
             "web_collection": result["web_collection"],
             "youtube_collection": result["youtube_collection"],
+            "social_repercussion": (
+                result.get("social_repercussion")
+                or {
+                    "enabled": False,
+                    "reason": "Planejador nao solicitou coleta social.",
+                }
+            ),
             "academic_research": result["academic_research"],
             "media_validation": result["media_validation"],
             "fact_extraction": result["fact_extraction"],
