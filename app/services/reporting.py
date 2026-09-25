@@ -17,6 +17,7 @@ from app.services.execution_profile import execution_flags
 from app.services.project_profile import project_payload
 from app.services.metrics import corpus_for_project, metrics, split_corpus, split_corpus_by_origin
 from app.services.word_cloud import word_cloud_for_project
+from app.services.social_repercussion import social_repercussion_for_report
 from app.services.cache import hydrate_cached_report
 
 
@@ -81,6 +82,7 @@ def _writer_grounding(db: Session, project: Project) -> dict:
         if flags.get("enable_academic_research")
         else []
     )
+    social_repercussion = social_repercussion_for_report(db, project.id)
     return {
         "metrics": data,
         "corpus": corpus,
@@ -90,6 +92,7 @@ def _writer_grounding(db: Session, project: Project) -> dict:
         "operation_events": operation_events,
         "fact_evidence": fact_evidence,
         "academic_papers": academic_papers,
+        "social_repercussion": social_repercussion,
     }
 
 
@@ -102,6 +105,8 @@ def _writer_instructions(flags: dict) -> str:
         + "identificadores em snake_case, códigos de status em inglês ou valores como NOT_ATTEMPTED, UNAVAILABLE, DISABLED ou NOT_CONFIGURED. "
         + "Traduza estados operacionais para linguagem editorial. Quando houver vídeos validados no corpus, priorize a evidência do corpus "
         + "e informe a quantidade disponível; não trate um status operacional legado ou da execução corrente como ausência de conteúdo no YouTube. "
+        + "Quando houver social_perception, trate-a exclusivamente como percepção observada na amostra de comentários públicos. "
+        + "Nunca a descreva como opinião da população, pesquisa de opinião ou estimativa representativa do estado. "
     )
     if flags["enable_fact_layer"]:
         instructions += (
@@ -138,6 +143,7 @@ def _agent_payload(db: Session, project: Project, grounding: dict) -> dict:
         "fact_events": grounding["fact_events"],
         "operation_events": grounding["operation_events"],
         "academic_context": grounding["academic_papers"],
+        "social_perception": grounding["social_repercussion"],
         "validated_items": [
             {
                 "title": item.get("title"),
@@ -166,6 +172,7 @@ def _save_report(db: Session, project: Project, result: dict, grounding: dict) -
         "fact_events": grounding["fact_events"],
         "fact_evidence": grounding["fact_evidence"],
         "academic_papers": grounding["academic_papers"],
+        "social_repercussion": grounding["social_repercussion"],
         "word_cloud": word_cloud_for_project(db, project.id),
         "project": project_payload(project, for_report=True),
     }
