@@ -20,6 +20,7 @@ from app.services.news_validation import validate_news_stage
 from app.services.project_profile import discover_project_profile, project_payload, trusted_launch_date
 from app.services.reporting import draft_report_with_llm, refine_report_with_qa
 from app.services.search_planning import plan_report_with_llm
+from app.services.social_repercussion import collect_social_repercussion
 
 
 def run_full_methodology(
@@ -106,6 +107,7 @@ def run_full_methodology(
         label
         for key, label in (
             ("youtube_collection", "YouTube"),
+            ("social_repercussion", "percepcao nas redes sociais"),
             ("academic_research", "literatura cientifica"),
             ("fact_extraction", "camada factual"),
             ("nominal_followup", "busca nominal"),
@@ -135,6 +137,13 @@ def run_full_methodology(
     # This makes the execution tracker reflect the real methodology immediately.
     if not flags["enable_youtube"]:
         stage("youtube", "SKIPPED", (processes.get("youtube_collection") or {}).get("reason") or "Nao prevista no plano")
+    if not flags.get("enable_social_repercussion"):
+        stage(
+            "social_repercussion",
+            "SKIPPED",
+            (processes.get("social_repercussion") or {}).get("reason")
+            or "Nao prevista no plano",
+        )
     if not flags["enable_academic_research"]:
         stage("academic_research", "SKIPPED", (processes.get("academic_research") or {}).get("reason") or "Nao prevista no plano")
     if not flags["enable_fact_layer"]:
@@ -206,6 +215,70 @@ def run_full_methodology(
     else:
         stage("youtube", "DONE", f"{youtube_collected} video(s) consolidados")
     db.commit()
+
+    # 3b. Repercussao social: comentarios permanecem fora do corpus de noticias.
+    social_repercussion = {
+        "status": "SKIPPED",
+        "posts": 0,
+        "comments": 0,
+        "analyzed_comments": 0,
+        "methodology_note": (
+            "Comentarios em redes sociais descrevem apenas a amostra observada "
+            "e nao representam a populacao."
+        ),
+    }
+    check()
+    if not flags.get("enable_social_repercussion"):
+        stage(
+            "social_repercussion",
+            "SKIPPED",
+            (processes.get("social_repercussion") or {}).get("reason")
+            or "Nao prevista no plano",
+        )
+    else:
+        stage(
+            "social_repercussion",
+            "RUNNING",
+            "Coletando comentarios publicos dos posts sociais localizados pelo DuckDuckGo",
+        )
+        try:
+            social_repercussion = collect_social_repercussion(db, project)
+        except RuntimeError as exc:
+            from app.orchestration.state import RunCancelled
+
+            if isinstance(exc, RunCancelled):
+                raise
+            social_repercussion = {
+                "status": "UNAVAILABLE",
+                "reason": str(exc)[:500],
+                "posts": 0,
+                "comments": 0,
+                "analyzed_comments": 0,
+            }
+            stage(
+                "social_repercussion",
+                "SKIPPED",
+                f"Repercussao social indisponivel: {str(exc)[:180]}",
+            )
+        else:
+            social_status = str(social_repercussion.get("status") or "")
+            if social_status in {"DISABLED", "NOT_CONFIGURED", "NO_POSTS"}:
+                stage(
+                    "social_repercussion",
+                    "SKIPPED",
+                    str(
+                        social_repercussion.get("reason")
+                        or "Nenhum comentario social disponivel na amostra"
+                    )[:180],
+                )
+            else:
+                stage(
+                    "social_repercussion",
+                    "DONE",
+                    f"{social_repercussion.get('posts', 0)} post(s); "
+                    f"{social_repercussion.get('comments', 0)} comentario(s); "
+                    f"{social_repercussion.get('analyzed_comments', 0)} analisado(s)",
+                )
 
     # Literatura cientifica: contexto separado da metrica de repercussao.
     academic_research = {
@@ -496,6 +569,7 @@ def run_full_methodology(
         "fact_resolution_2": fact_resolution_2,
         "validation": validation,
         "academic_research": academic_research,
+        "social_repercussion": social_repercussion,
         "classification": classification,
         "gap_fill": gap_fill,
         "refinements": refinements,
