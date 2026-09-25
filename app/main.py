@@ -533,6 +533,7 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db), user: 
             "enable_fact_layer": payload.enable_fact_layer,
             "enable_nominal_followup": payload.enable_nominal_followup,
             "enable_academic_research": payload.enable_academic_research,
+            "enable_social_repercussion": payload.enable_social_repercussion,
         }.items()
         if value is not None
     }
