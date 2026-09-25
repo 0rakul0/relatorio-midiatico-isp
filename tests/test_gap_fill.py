@@ -7,6 +7,7 @@ from app.database import Base
 from app.models import MediaItem, Project, SearchQuery
 from app.services import search_planning
 from app.services.search_planning import detect_coverage_gaps, plan_gap_fill_queries
+from app.topic_profile import heuristic_topic_profile
 
 
 def _db():
@@ -56,7 +57,7 @@ def test_detect_lists_uncovered_portals_in_priority_order():
     session.close()
 
 
-def test_detect_no_gaps_when_nothing_actionable(monkeypatch):
+def test_detect_zero_corpus_requires_recovery_even_without_portal_checks(monkeypatch):
     import importlib
 
     metrics_module = importlib.import_module("app.services.metrics")
@@ -68,7 +69,8 @@ def test_detect_no_gaps_when_nothing_actionable(monkeypatch):
 
     gaps = detect_coverage_gaps(session, project)
 
-    assert gaps["needs_fill"] is False
+    assert gaps["needs_fill"] is True
+    assert gaps["zero_corpus"] is True
     assert gaps["uncovered_portals"] == []
     session.close()
 
@@ -87,6 +89,7 @@ class _FakeGapAgent:
 
 def test_plan_accepts_only_new_open_queries(monkeypatch):
     session, project = _db()
+    _valid_item(session, project, "g1.globo.com")
     session.add(
         SearchQuery(
             project_id=project.id,
@@ -128,6 +131,7 @@ def test_plan_accepts_only_new_open_queries(monkeypatch):
 
 def test_plan_fallback_mines_unused_profile_angles(monkeypatch):
     session, project = _db()
+    _valid_item(session, project, "g1.globo.com")
     project.topic_profile = {"subject_terms": ["deslizamentos", "abrigos emergenciais"]}
     session.add(
         SearchQuery(
@@ -150,4 +154,44 @@ def test_plan_fallback_mines_unused_profile_angles(monkeypatch):
     assert all("site:" not in query for query in queries)
     stored = session.scalars(select(SearchQuery.query)).all()
     assert len(stored) == 3  # 1 executada + 2 complementares
+    session.close()
+
+
+def test_zero_corpus_recovery_uses_canonical_location_and_journalistic_terms(monkeypatch):
+    session, project = _db()
+    topic = "produção habitacional milícia mazuema"
+    project.topic = topic
+    project.topic_profile = heuristic_topic_profile(topic)
+    session.add(
+        SearchQuery(
+            project_id=project.id,
+            query="produção habitacional milícia Muzema",
+            kind="media_primary",
+            purpose="MEDIA_REPERCUSSION",
+            rationale="primeira rodada",
+            priority=1,
+            execution_status="NO_RESULTS",
+        )
+    )
+    session.commit()
+
+    monkeypatch.setattr(search_planning, "llm_is_configured", lambda: False)
+    gaps = {
+        "uncovered_portals": [],
+        "valid_items": 0,
+        "target_items": 5,
+        "zero_corpus": True,
+        "needs_fill": True,
+    }
+    created = plan_gap_fill_queries(session, project, gaps, max_queries=3)
+
+    queries = [row.query for row in created]
+    assert queries
+    assert all(row.kind == "media_zero_recovery" for row in created)
+    assert any("Muzema" in query for query in queries)
+    assert any(
+        term in " ".join(queries).lower()
+        for term in ("imoveis", "construcao", "mercado imobiliario", "moradia")
+    )
+    assert all("[zero-corpus recovery]" in row.rationale for row in created)
     session.close()
