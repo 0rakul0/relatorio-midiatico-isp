@@ -195,3 +195,25 @@ def test_zero_corpus_recovery_uses_canonical_location_and_journalistic_terms(mon
     )
     assert all("[zero-corpus recovery]" in row.rationale for row in created)
     session.close()
+
+
+def test_llm_strategy_primary_also_uses_canonical_location():
+    session, project = _db()
+    topic = "produção habitacional milícia mazuema"
+    project.topic = topic
+    project.topic_profile = heuristic_topic_profile(topic)
+    session.commit()
+
+    strategy = search_planning._sanitize_strategy(
+        project,
+        {
+            "primary_query": "produção habitacional milícia mazuema",
+            "complementary_queries": [],
+            "rationale": "teste",
+        },
+        enable_fact_layer=False,
+    )
+
+    assert "Muzema" in strategy["primary_query"]
+    assert "mazuema" not in strategy["primary_query"].lower()
+    session.close()
