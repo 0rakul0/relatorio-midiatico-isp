@@ -7,7 +7,7 @@ from app.agent import get_report_agent
 from app.config import get_settings
 from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report, operation_events_for_report, operation_mentions_for_report
 from app.llm import llm_is_configured
-from app.models import GeneratedReport, OfficialFact, Project, ReportVersion
+from app.models import GeneratedReport, OfficialFact, Project, ReportVersion, SearchQuery
 from app.pdf_report import build_pdf
 from app.report_fingerprint import content_hash, request_fingerprint
 from app.report_qa import run_report_qa
@@ -83,6 +83,32 @@ def _writer_grounding(db: Session, project: Project) -> dict:
         else []
     )
     social_repercussion = social_repercussion_for_report(db, project.id)
+    recovery_rows = db.scalars(
+        select(SearchQuery)
+        .where(
+            SearchQuery.project_id == project.id,
+            SearchQuery.kind == "media_zero_recovery",
+        )
+        .order_by(SearchQuery.id.asc())
+    ).all()
+    search_recovery = {
+        "queries_created": len(recovery_rows),
+        "attempted": any(
+            row.executed_at is not None
+            or str(row.execution_status or "PENDING").upper() != "PENDING"
+            for row in recovery_rows
+        ),
+        "queries": [
+            {
+                "query": row.query,
+                "status": row.execution_status,
+                "results_returned": int(row.results_returned or 0),
+                "results_accepted": int(row.results_accepted or 0),
+                "executed_at": row.executed_at.isoformat() if row.executed_at else None,
+            }
+            for row in recovery_rows
+        ],
+    }
     return {
         "metrics": data,
         "corpus": corpus,
@@ -93,6 +119,7 @@ def _writer_grounding(db: Session, project: Project) -> dict:
         "fact_evidence": fact_evidence,
         "academic_papers": academic_papers,
         "social_repercussion": social_repercussion,
+        "search_recovery": search_recovery,
     }
 
 
@@ -107,6 +134,8 @@ def _writer_instructions(flags: dict) -> str:
         + "e informe a quantidade disponível; não trate um status operacional legado ou da execução corrente como ausência de conteúdo no YouTube. "
         + "Quando houver social_perception, trate-a exclusivamente como percepção observada na amostra de comentários públicos. "
         + "Nunca a descreva como opinião da população, pesquisa de opinião ou estimativa representativa do estado. "
+        + "Quando metrics.valid_items for zero e search_recovery.attempted=true, registre na nota metodológica que houve "
+        + "uma segunda rodada de busca com consultas ampliadas; nunca escreva que não houve chamadas adicionais. "
     )
     if flags["enable_fact_layer"]:
         instructions += (
@@ -144,6 +173,7 @@ def _agent_payload(db: Session, project: Project, grounding: dict) -> dict:
         "operation_events": grounding["operation_events"],
         "academic_context": grounding["academic_papers"],
         "social_perception": grounding["social_repercussion"],
+        "search_recovery": grounding["search_recovery"],
         "validated_items": [
             {
                 "title": item.get("title"),
@@ -173,6 +203,7 @@ def _save_report(db: Session, project: Project, result: dict, grounding: dict) -
         "fact_evidence": grounding["fact_evidence"],
         "academic_papers": grounding["academic_papers"],
         "social_repercussion": grounding["social_repercussion"],
+        "search_recovery": grounding["search_recovery"],
         "word_cloud": word_cloud_for_project(db, project.id),
         "project": project_payload(project, for_report=True),
     }
