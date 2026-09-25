@@ -92,8 +92,13 @@ function renderWelcome() {
   );
 }
 
+function normalizeMarkdownEscapes(value) {
+  return String(value || '')
+    .replace(/\\+([*_#\[\]`])/g, '$1');
+}
+
 function renderInlineMarkdown(value) {
-  return esc(value)
+  return esc(normalizeMarkdownEscapes(value))
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/__([^_]+)__/g, '<strong>$1</strong>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
@@ -101,8 +106,7 @@ function renderInlineMarkdown(value) {
 }
 
 function renderMarkdown(value) {
-  const normalized = String(value || '')
-    .replace(/\\([*_#\[\]])/g, '$1')
+  const normalized = normalizeMarkdownEscapes(value)
     .replace(/\r\n/g, '\n');
   const lines = normalized.split('\n');
   const html = [];
