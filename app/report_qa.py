@@ -126,7 +126,18 @@ def deterministic_report_qa(payload: dict) -> list[dict]:
         contextual_items = int(recovery.get("contextual_items") or 0)
         recovery_attempted = bool(recovery.get("attempted"))
         recovery_created = int(recovery.get("queries_created") or 0)
-        if contextual_items > 0 and not recovery_attempted:
+        if contextual_items > 0 and recovery_created > 0 and not recovery_attempted:
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "code": "ZERO_MEDIA_RECOVERY_NOT_EXECUTED",
+                    "message": (
+                        "Foram criadas consultas de recuperação para corpus zero, mas elas "
+                        "não foram executadas. O relatório não pode ser aprovado antes dessa tentativa."
+                    ),
+                }
+            )
+        elif contextual_items > 0 and not recovery_attempted:
             findings.append(
                 {
                     "severity": "CRITICAL",
@@ -137,17 +148,6 @@ def deterministic_report_qa(payload: dict) -> list[dict]:
                         "registro de uma segunda rodada de busca executada. Antes de aceitar "
                         "zero itens, execute expansão com grafias alternativas, vocabulário "
                         "jornalístico e ao menos uma consulta mais ampla."
-                    ),
-                }
-            )
-        elif contextual_items > 0 and recovery_created > 0 and not recovery_attempted:
-            findings.append(
-                {
-                    "severity": "CRITICAL",
-                    "code": "ZERO_MEDIA_RECOVERY_NOT_EXECUTED",
-                    "message": (
-                        "Foram criadas consultas de recuperação para corpus zero, mas elas "
-                        "não foram executadas. O relatório não pode ser aprovado antes dessa tentativa."
                     ),
                 }
             )
