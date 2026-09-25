@@ -1,4 +1,6 @@
 from datetime import date
+import threading
+import time
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -127,3 +129,99 @@ def test_topic_driven_project_does_not_apply_single_day_search_window():
 
     assert query_window(project, query) == (None, None)
     session.close()
+
+
+def test_bulk_web_search_parallelizes_only_provider_io(monkeypatch):
+    main_thread = threading.get_ident()
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+    sink_threads: list[int] = []
+
+    def fake_search(query, **_kwargs):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            time.sleep(0.06)
+            return "duckduckgo", [
+                {
+                    "title": query,
+                    "url": f"https://example.com/{query}",
+                    "provider": "duckduckgo",
+                }
+            ]
+        finally:
+            with lock:
+                active -= 1
+
+    def sink(rows, _provider, _query):
+        sink_threads.append(threading.get_ident())
+        return rows
+
+    monkeypatch.setattr(
+        tools_search,
+        "get_settings",
+        lambda: Settings(
+            search_parallel_enabled=True,
+            search_parallel_web_workers=3,
+        ),
+    )
+    monkeypatch.setattr(tools_search, "_search_web", fake_search)
+
+    tool = tools_search.make_bulk_web_search_tool(sink=sink)
+    result = tool.invoke({"queries": ["q1", "q2", "q3"]})
+
+    assert max_active >= 2
+    assert sink_threads == [main_thread, main_thread, main_thread]
+    assert [row["query"] for row in result["results"]] == ["q1", "q2", "q3"]
+    assert all(row["status"] == "OK" for row in result["results"])
+
+
+def test_bulk_video_search_parallelizes_provider_io(monkeypatch):
+    main_thread = threading.get_ident()
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+    sink_threads: list[int] = []
+
+    def fake_search(query, **_kwargs):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            time.sleep(0.06)
+            return "duckduckgo", [
+                {
+                    "title": query,
+                    "url": f"https://youtube.com/watch?v={query}",
+                    "provider": "duckduckgo_video",
+                }
+            ]
+        finally:
+            with lock:
+                active -= 1
+
+    def sink(rows, _provider, _query):
+        sink_threads.append(threading.get_ident())
+        return rows
+
+    monkeypatch.setattr(
+        tools_search,
+        "get_settings",
+        lambda: Settings(
+            search_parallel_enabled=True,
+            search_parallel_video_workers=3,
+        ),
+    )
+    monkeypatch.setattr(tools_search, "_search_videos", fake_search)
+
+    tool = tools_search.make_bulk_video_search_tool(sink=sink)
+    result = tool.invoke({"queries": ["v1", "v2", "v3"]})
+
+    assert max_active >= 2
+    assert sink_threads == [main_thread, main_thread, main_thread]
+    assert [row["query"] for row in result["results"]] == ["v1", "v2", "v3"]
+    assert all(row["status"] == "OK" for row in result["results"])
