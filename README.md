@@ -585,8 +585,8 @@ APIFY_API_TOKEN=
 APIFY_SOCIAL_ENABLED=true
 APIFY_INSTAGRAM_COMMENTS_ACTOR_ID=apify/instagram-comment-scraper
 APIFY_FACEBOOK_COMMENTS_ACTOR_ID=apify/facebook-comments-scraper
-# Configure apenas após escolher um Actor de replies do X:
-APIFY_X_COMMENTS_ACTOR_ID=
+# X usa Actor comunitário e pode ser substituído por outro:
+APIFY_X_COMMENTS_ACTOR_ID=scraper_one/x-post-replies-scraper
 
 ENABLE_CORPUS_REUSE=true
 CORPUS_EMBEDDING_MODEL=text-embedding-3-small
