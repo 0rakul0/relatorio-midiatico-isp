@@ -1,11 +1,11 @@
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models import Project
+from app.models import Project, SearchQuery
 from app.services import reporting  # noqa: F401  (garante pacote carregado)
 import app.report_qa as report_qa
 
@@ -72,4 +72,60 @@ def test_llm_qa_enabled_calls_agent(monkeypatch):
 
     assert calls, "agente deveria ser chamado"
     assert all(f["code"] != "LLM_QA_DISABLED" for f in result["findings"])
+    session.close()
+
+
+def test_zero_media_with_context_and_no_expansion_is_blocked(monkeypatch):
+    session, project = _session()
+    monkeypatch.setattr(
+        report_qa, "get_settings", lambda: SimpleNamespace(enable_llm_qa=False)
+    )
+    payload = _payload()
+    payload["academic_papers"] = [
+        {
+            "title": "Contexto acadêmico relacionado",
+            "url": "https://example.org/paper",
+        }
+    ]
+
+    result = report_qa.run_report_qa(session, project, payload)
+
+    codes = {finding["code"] for finding in result["findings"]}
+    assert "ZERO_MEDIA_WITHOUT_SEARCH_EXPANSION" in codes
+    assert result["approved"] is False
+    session.close()
+
+
+def test_zero_media_with_context_is_allowed_after_auditable_recovery(monkeypatch):
+    session, project = _session()
+    monkeypatch.setattr(
+        report_qa, "get_settings", lambda: SimpleNamespace(enable_llm_qa=False)
+    )
+    session.add(
+        SearchQuery(
+            project_id=project.id,
+            query='"Muzema" milicia imoveis',
+            kind="media_zero_recovery",
+            purpose="MEDIA_REPERCUSSION",
+            rationale="[zero-corpus recovery] tentativa ampliada",
+            priority=1,
+            executed_at=datetime.now(),
+            execution_status="NO_RESULTS",
+        )
+    )
+    session.commit()
+
+    payload = _payload()
+    payload["academic_papers"] = [
+        {
+            "title": "Contexto acadêmico relacionado",
+            "url": "https://example.org/paper",
+        }
+    ]
+
+    result = report_qa.run_report_qa(session, project, payload)
+
+    codes = {finding["code"] for finding in result["findings"]}
+    assert "ZERO_MEDIA_WITHOUT_SEARCH_EXPANSION" not in codes
+    assert result["approved"] is True
     session.close()
