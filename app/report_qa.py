@@ -7,7 +7,7 @@ from app.agent import get_report_agent
 from app.config import get_settings
 from app.llm import llm_is_configured
 from app.schemas import ReportQAResponse
-from app.models import GeneratedReport, Project, ReportVersion
+from app.models import AcademicPaper, GeneratedReport, OfficialFact, Project, ReportVersion, SearchQuery
 
 
 FORBIDDEN_ZERO_CORPUS_PHRASES = [
@@ -121,6 +121,36 @@ def deterministic_report_qa(payload: dict) -> list[dict]:
                         ),
                     }
                 )
+
+        recovery = payload.get("search_recovery") or {}
+        contextual_items = int(recovery.get("contextual_items") or 0)
+        recovery_attempted = bool(recovery.get("attempted"))
+        recovery_created = int(recovery.get("queries_created") or 0)
+        if contextual_items > 0 and not recovery_attempted:
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "code": "ZERO_MEDIA_WITHOUT_SEARCH_EXPANSION",
+                    "message": (
+                        "O corpus jornalístico terminou em zero apesar de haver "
+                        f"{contextual_items} evidência(s) contextual(is) no projeto, mas não há "
+                        "registro de uma segunda rodada de busca executada. Antes de aceitar "
+                        "zero itens, execute expansão com grafias alternativas, vocabulário "
+                        "jornalístico e ao menos uma consulta mais ampla."
+                    ),
+                }
+            )
+        elif contextual_items > 0 and recovery_created > 0 and not recovery_attempted:
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "code": "ZERO_MEDIA_RECOVERY_NOT_EXECUTED",
+                    "message": (
+                        "Foram criadas consultas de recuperação para corpus zero, mas elas "
+                        "não foram executadas. O relatório não pode ser aprovado antes dessa tentativa."
+                    ),
+                }
+            )
 
     if not facts:
         for phrase in FORBIDDEN_NO_FACT_PHRASES:
@@ -244,6 +274,8 @@ def _llm_qa(payload: dict) -> list[dict]:
         "project": payload.get("project"),
         "metrics": payload.get("metrics"),
         "fact_events": payload.get("fact_events"),
+        "search_recovery": payload.get("search_recovery"),
+        "academic_context_count": len(payload.get("academic_papers") or []),
         "report": payload.get("report"),
         "corpus": [
             {
@@ -292,9 +324,54 @@ def _dedupe_findings(findings: list[dict]) -> list[dict]:
 def run_report_qa(db: Session, project: Project, payload: dict) -> dict:
     from app.billing import plan_allows
 
-    findings = deterministic_report_qa(payload)
+    qa_payload = dict(payload)
+    recovery_rows = db.scalars(
+        select(SearchQuery)
+        .where(
+            SearchQuery.project_id == project.id,
+            SearchQuery.kind == "media_zero_recovery",
+        )
+        .order_by(SearchQuery.id.asc())
+    ).all()
+    recovery_attempted = any(
+        row.executed_at is not None
+        or str(row.execution_status or "PENDING").upper() != "PENDING"
+        for row in recovery_rows
+    )
+
+    academic_count = len(payload.get("academic_papers") or [])
+    if academic_count == 0:
+        academic_count = len(
+            db.scalars(
+                select(AcademicPaper.id).where(AcademicPaper.project_id == project.id)
+            ).all()
+        )
+    official_count = len(
+        db.scalars(
+            select(OfficialFact.id).where(OfficialFact.project_id == project.id)
+        ).all()
+    )
+    fact_context_count = len(payload.get("fact_events") or [])
+    qa_payload["search_recovery"] = {
+        "queries_created": len(recovery_rows),
+        "attempted": recovery_attempted,
+        "statuses": [
+            {
+                "query": row.query,
+                "status": row.execution_status,
+                "executed_at": row.executed_at.isoformat() if row.executed_at else None,
+            }
+            for row in recovery_rows
+        ],
+        "academic_items": academic_count,
+        "official_facts": official_count,
+        "fact_events": fact_context_count,
+        "contextual_items": academic_count + official_count + fact_context_count,
+    }
+
+    findings = deterministic_report_qa(qa_payload)
     if get_settings().enable_llm_qa and plan_allows(db, project, "llm_qa"):
-        findings.extend(_llm_qa(payload))
+        findings.extend(_llm_qa(qa_payload))
     else:
         findings.append(
             {
