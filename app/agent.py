@@ -128,6 +128,10 @@ Nao execute ferramentas nesta tarefa.
 Para cada processo, retorne enabled=true/false e uma razao auditavel:
 - web_collection: base obrigatoria do relatorio midiatico;
 - youtube_collection: use quando video puder agregar cobertura relevante;
+- social_repercussion: habilite quando comentarios publicos em Instagram,
+  Facebook ou X puderem acrescentar uma camada de recepcao/percepcao ao tema.
+  Essa etapa tem custo externo, deve ser seletiva e NUNCA representa pesquisa
+  amostral da populacao;
 - academic_research: habilite quando literatura cientifica puder contextualizar,
   explicar ou qualificar tecnicamente o tema; essa etapa nao conta como repercussao;
 - media_validation: obrigatoria para transformar hits brutos em corpus valido;
@@ -171,6 +175,24 @@ A estrategia de busca deve ser compacta:
 Os presets/overrides explicitos do usuario serao aplicados pelo codigo depois da
 sua resposta. Sua decisao deve refletir a metodologia mais enxuta que ainda
 responda corretamente a pauta.
+""",
+
+    "social_comment_analysis": """
+Voce esta executando a tarefa ANALISE DE COMENTARIOS DE REDES SOCIAIS.
+
+Classifique SOMENTE os comentarios fornecidos, um por indice. Nao pesquise fora.
+Nao tente identificar ou completar informacoes pessoais do autor.
+
+Para cada comentario:
+- sentiment: POSITIVO, NEGATIVO, NEUTRO ou AMBIGUO;
+- emotion: MEDO, INDIGNACAO, CONFIANCA, DESCONFIANCA, TRISTEZA, IRONIA,
+  ESPERANCA, OUTRA ou NAO_IDENTIFICAVEL;
+- position: APOIO, CRITICA, PREOCUPACAO, DUVIDA, RELATO_PESSOAL, OUTRA ou
+  NAO_IDENTIFICAVEL;
+- themes: zero a quatro temas curtos explicitamente sustentados pelo texto.
+
+A classificacao descreve somente a amostra de comentarios fornecida.
+Comentarios em redes sociais nao representam a opiniao da populacao.
 """,
 
     "article_hydrator": """
