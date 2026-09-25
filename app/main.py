@@ -502,6 +502,11 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db), user: 
         collection_window_source = "TOPIC"
         has_custom_window = True
     else:
+        # Compatibilidade com o schema legado: collection_start/end ainda são
+        # NOT NULL no banco, então guardamos hoje apenas como placeholder técnico.
+        # has_custom_date_window=False é a fonte de verdade: query_window()
+        # devolve (None, None), portanto nenhuma busca recebe filtro de um dia.
+        # project_payload() também oculta esse placeholder do relatório final.
         collection_start = collection_end = today
         collection_window_source = "TOPIC_DRIVEN"
         has_custom_window = False
@@ -539,6 +544,9 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db), user: 
     }
     execution_options["collection_window_source"] = collection_window_source
     execution_options["event_window_source"] = event_window_source
+    execution_options["temporal_mode"] = (
+        "EXPLICIT_WINDOW" if has_custom_window else "TOPIC_DRIVEN"
+    )
     # O campo launch_date do banco continua preenchido por compatibilidade com
     # instalações antigas, mas só deve ser exibido como dado editorial quando
     # o usuário o informou ou quando o agente documentalista o confirmou.
