@@ -109,3 +109,25 @@ def test_platform_detection_only_accepts_post_urls():
     assert social._platform_for_url(
         "https://www.facebook.com/perfil/"
     ) is None
+
+
+def test_x_reply_shape_is_normalized():
+    row = {
+        "replyId": "1906884256397189461",
+        "replyText": "A seguranca precisa melhorar.",
+        "postUrl": "https://x.com/exemplo/status/1906833084554650018",
+        "timestamp": 1743471609000,
+        "favouriteCount": 7,
+        "replyCount": 2,
+        "author": {"screenName": "nao-persistir"},
+    }
+
+    normalized = social._normalize_comment("x", row)
+
+    assert normalized is not None
+    assert normalized["external_id"] == "1906884256397189461"
+    assert normalized["text"] == "A seguranca precisa melhorar."
+    assert normalized["like_count"] == 7
+    assert normalized["reply_count"] == 2
+    assert normalized["published_at"] is not None
+    assert "author" not in normalized
