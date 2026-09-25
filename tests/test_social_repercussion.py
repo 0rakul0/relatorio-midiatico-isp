@@ -63,17 +63,20 @@ def test_social_collection_persists_comments_without_author_identity(monkeypatch
     )
     monkeypatch.setattr(
         social,
-        "run_actor_dataset",
-        lambda **_kwargs: [
-            {
-                "id": "c1",
-                "text": "Tenho medo de sair a noite.",
-                "postUrl": "https://www.instagram.com/p/ABC123/",
-                "timestamp": "2026-08-10T20:00:00Z",
-                "likesCount": 4,
-                "ownerUsername": "nao-deve-ser-persistido",
-            }
-        ],
+        "collect_public_comments",
+        lambda **_kwargs: (
+            "apify/instagram-comment-scraper",
+            [
+                {
+                    "id": "c1",
+                    "text": "Tenho medo de sair a noite.",
+                    "postUrl": "https://www.instagram.com/p/ABC123/",
+                    "timestamp": "2026-08-10T20:00:00Z",
+                    "likesCount": 4,
+                    "ownerUsername": "nao-deve-ser-persistido",
+                }
+            ],
+        ),
     )
     monkeypatch.setattr(social, "llm_is_configured", lambda: False)
 
