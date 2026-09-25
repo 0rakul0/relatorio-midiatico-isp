@@ -84,5 +84,28 @@ def test_pdf_omits_empty_parts_and_empty_annex_categories():
     assert "Anexo B - YouTube" not in text
     assert "Portais de Notícias" not in text
 
-    assert "PARTE 6 - SÍNTESE E ENCAMINHAMENTOS" in text
+    assert "PARTE 2 - SÍNTESE E ENCAMINHAMENTOS" in text
     assert "Anexo A - Nota Metodológica" in text
+
+
+def test_pdf_renumbers_parts_after_omitting_empty_sections():
+    payload = _base_payload()
+    payload["report"]["dominant_framing"] = "Enquadramento de teste."
+    payload["academic_papers"] = [
+        {
+            "title": "Artigo de teste",
+            "authors": ["Autor Teste"],
+            "published_at": "2026-01-01",
+            "relation_to_topic": "Contexto científico de teste.",
+            "url": "https://example.org/paper",
+        }
+    ]
+
+    text = _pdf_text(payload)
+
+    assert "PARTE 1 - PANORAMA DA REPERCUSSÃO" in text
+    assert "PARTE 2 - ANÁLISE DA COBERTURA" in text
+    assert "PARTE 3 - CONTEXTUALIZAÇÃO CIENTÍFICA" in text
+    assert "PARTE 4 - SÍNTESE E ENCAMINHAMENTOS" in text
+    assert "OPERAÇÕES POLICIAIS IDENTIFICADAS" not in text
+    assert "VERIFICAÇÃO FACTUAL" not in text
