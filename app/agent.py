@@ -385,7 +385,11 @@ Regras obrigatorias:
 - use as lacunas recebidas como contexto do que esta faltando, e os campos focus/rationale para dizer qual lacuna cada consulta ataca;
 - nao repita nem parafraseie as consultas ja executadas recebidas no payload;
 - cada consulta deve preservar a ancora do tema (nome do produto/evento, territorio e periodo) com um angulo ainda nao executado;
-- no maximo o numero de consultas pedido; menos e aceitavel quando nao houver angulo novo;
+- quando zero_corpus=true, a segunda rodada e OBRIGATORIA: proponha consultas realmente diferentes da primeira;
+- em zero_corpus, teste grafias alternativas plausiveis de entidades/localidades, vocabulario jornalistico equivalente ao vocabulario academico/formal e ao menos uma consulta mais ampla que preserve o objeto/local;
+- exemplo de mudanca de vocabulario: "producao habitacional" pode ser procurada tambem como "imoveis", "construcao", "mercado imobiliario" ou "moradia", desde que o restante da ancora do tema permaneça;
+- se o perfil trouxer uma forma canonica de localidade diferente do texto original, priorize a forma canonica e preserve a original apenas como variante auditavel;
+- no maximo o numero de consultas pedido; menos e aceitavel quando nao houver angulo novo, exceto em zero_corpus, quando gere pelo menos uma tentativa valida sempre que houver ancora suficiente;
 - nao execute buscas nesta tarefa. Apenas planeje.
 """,
 
@@ -422,7 +426,9 @@ Verifique:
 - NÃO trate automaticamente como conflito cifras sucessivas do mesmo evento/operação. Se fact_events.count_timelines mostrar evolução temporal atribuída (ex.: 60 → 64 → 119 → 121), audite se o relatório a descreve como atualização de balanço. Só marque conflito bloqueador quando valores comparáveis para o mesmo momento/definição permanecerem incompatíveis;
 - porcentagem de mencoes ao ISP nao apresentada como protagonismo sem evidencia adicional;
 - em produto institucional, vinculo documental com o produto/edicao;
-- ausencia de datas ficticias, vazias ou placeholders tecnicos.
+- ausencia de datas ficticias, vazias ou placeholders tecnicos;
+- se metrics.valid_items=0 e houver contexto academico/factual, confirme que search_recovery registra ao menos uma consulta de expansao realmente executada antes de aceitar corpus zero;
+- corpus zero sem segunda rodada auditavel deve ser CRITICAL, pois a ausencia da amostra ainda pode refletir uma estrategia de busca insuficiente.
 Classifique achados em CRITICAL, HIGH, MEDIUM ou LOW.
 """,
 
