@@ -106,28 +106,52 @@ def research_academic_literature(
     if cancel_check:
         cancel_check()
 
+    # Carrega uma unica vez os registros ja persistidos e mantem o mesmo
+    # mapa atualizado com objetos novos ainda pendentes na Session. Isto e
+    # essencial porque SessionLocal usa autoflush=False: um SELECT executado
+    # depois de db.add() nao enxerga automaticamente o INSERT pendente.
+    rows_by_key = {
+        (row.provider, row.external_id): row
+        for row in db.scalars(
+            select(AcademicPaper).where(AcademicPaper.project_id == project.id)
+        ).all()
+    }
+
     persisted = 0
     selected = 0
+    duplicates_skipped = 0
+    seen_selected: set[tuple[str, str]] = set()
+
     for paper in result.get("papers") or []:
-        key = (str(paper.get("provider") or ""), str(paper.get("external_id") or ""))
+        key = (
+            str(paper.get("provider") or "").strip(),
+            str(paper.get("external_id") or "").strip(),
+        )
+        if not key[0] or not key[1]:
+            continue
+        if key in seen_selected:
+            duplicates_skipped += 1
+            continue
+        seen_selected.add(key)
+
         raw = captured.get(key)
         if raw is None:
             # Guardrail: nunca persiste artigo que a LLM citou mas a tool nao retornou.
             continue
 
         selected += 1
-        existing = db.scalar(
-            select(AcademicPaper).where(
-                AcademicPaper.project_id == project.id,
-                AcademicPaper.provider == key[0],
-                AcademicPaper.external_id == key[1],
+        row = rows_by_key.get(key)
+        is_new = row is None
+        if is_new:
+            row = AcademicPaper(
+                project_id=project.id,
+                provider=key[0],
+                external_id=key[1],
             )
-        )
-        row = existing or AcademicPaper(
-            project_id=project.id,
-            provider=key[0],
-            external_id=key[1],
-        )
+            db.add(row)
+            # Registra imediatamente no mapa para que outra ocorrencia do
+            # mesmo artigo nesta transacao reutilize o mesmo objeto.
+            rows_by_key[key] = row
         row.arxiv_id = raw.get("arxiv_id")
         row.doi = raw.get("doi")
         # A fonte original vem exclusivamente da tool; a LLM so fornece a
@@ -154,8 +178,6 @@ def research_academic_literature(
         row.is_preprint = bool(raw.get("is_preprint", True))
         row.relevance_score = float(paper.get("relevance_score") or 0.0)
         row.relation_to_topic = str(paper.get("relation_to_topic") or "")[:4000] or None
-        if existing is None:
-            db.add(row)
         persisted += 1
 
     db.commit()
@@ -168,5 +190,6 @@ def research_academic_literature(
         "candidates_returned": len(captured),
         "selected": selected,
         "persisted": persisted,
+        "duplicates_skipped": duplicates_skipped,
         "papers": papers,
     }
