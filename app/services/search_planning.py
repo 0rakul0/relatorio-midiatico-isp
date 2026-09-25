@@ -1012,9 +1012,15 @@ def plan_gap_fill_queries(
     restrição a links. As lacunas entram como contexto do que falta cobrir.
     """
     settings = get_settings()
-    cap = max(0, int(settings.max_gap_fill_queries if max_queries is None else max_queries))
+    configured_cap = max(
+        0, int(settings.max_gap_fill_queries if max_queries is None else max_queries)
+    )
     uncovered = list(gaps.get("uncovered_portals") or [])
     zero_corpus = bool(gaps.get("zero_corpus"))
+    # Uma primeira rodada com zero itens sempre ganha ao menos uma tentativa
+    # de recuperação. max_gap_fill_queries continua valendo normalmente fora
+    # dessa situação.
+    cap = max(1, configured_cap) if zero_corpus else configured_cap
     if cap <= 0 or (not uncovered and not zero_corpus):
         return []
 
