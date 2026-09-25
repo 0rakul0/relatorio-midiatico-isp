@@ -199,6 +199,24 @@ class Settings(BaseSettings):
     chat_context_items: int = Field(default=18, ge=5, le=60)
     chat_item_max_chars: int = Field(default=2400, ge=500, le=10000)
 
+    # Repercussao social via Apify. DuckDuckGo continua responsavel por
+    # descobrir URLs publicas; Apify enriquece somente posts sociais com
+    # comentarios publicamente visiveis.
+    apify_api_token: str | None = None
+    apify_social_enabled: bool = True
+    apify_api_base_url: str = "https://api.apify.com/v2"
+    apify_instagram_comments_actor_id: str | None = "apify/instagram-comment-scraper"
+    apify_facebook_comments_actor_id: str | None = "apify/facebook-comments-scraper"
+    # Para X usamos Actor configurado explicitamente no .env. Nao existe um
+    # equivalente oficial da Apify com contrato tao estavel quanto IG/FB.
+    apify_x_comments_actor_id: str | None = None
+    apify_social_max_posts_per_platform: int = Field(default=8, ge=1, le=50)
+    apify_social_comments_per_post: int = Field(default=50, ge=1, le=1000)
+    apify_social_timeout_seconds: int = Field(default=240, ge=30, le=295)
+    social_analysis_max_comments: int = Field(default=120, ge=10, le=1000)
+    social_analysis_batch_size: int = Field(default=30, ge=5, le=60)
+    max_social_discovery_queries: int = Field(default=3, ge=0, le=6)
+
     # Reparacao leve de metadados antigos no startup. Corrige origem
     # (portal/rede social/YouTube) e datas completas explicitas em URL/titulo.
     corpus_metadata_repair_on_startup: bool = True

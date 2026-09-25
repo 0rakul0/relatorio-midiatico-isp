@@ -31,6 +31,7 @@ class ProjectCreate(BaseModel):
     enable_fact_layer: bool | None = None
     enable_nominal_followup: bool | None = None
     enable_academic_research: bool | None = None
+    enable_social_repercussion: bool | None = None
 
 
 class OfficialFactCreate(BaseModel):
@@ -132,6 +133,26 @@ class AgentBulkSearchResponse(StrictLLMOutput):
 class CollectorExecutionResponse(StrictLLMOutput):
     status: Literal["COMPLETED", "PARTIAL", "UNAVAILABLE"]
     detail: str
+
+
+class SocialCommentAssessment(StrictLLMOutput):
+    index: int = Field(ge=0)
+    sentiment: Literal["POSITIVO", "NEGATIVO", "NEUTRO", "AMBIGUO"]
+    emotion: Literal[
+        "MEDO", "INDIGNACAO", "CONFIANCA", "DESCONFIANCA", "TRISTEZA",
+        "IRONIA", "ESPERANCA", "OUTRA", "NAO_IDENTIFICAVEL",
+    ]
+    position: Literal[
+        "APOIO", "CRITICA", "PREOCUPACAO", "DUVIDA", "RELATO_PESSOAL",
+        "OUTRA", "NAO_IDENTIFICAVEL",
+    ]
+    themes: list[str] = Field(default_factory=list, max_length=4)
+
+
+class SocialCommentBatchResponse(StrictLLMOutput):
+    assessments: list[SocialCommentAssessment] = Field(
+        default_factory=list, max_length=60
+    )
 
 
 class AgentAcademicSearchArgs(BaseModel):
@@ -299,6 +320,7 @@ class ReportPlanResponse(StrictLLMOutput):
 
     web_collection: ProcessDecision
     youtube_collection: ProcessDecision
+    social_repercussion: ProcessDecision
     academic_research: ProcessDecision
     media_validation: ProcessDecision
     fact_extraction: ProcessDecision
