@@ -315,6 +315,7 @@ function render(result){
   const risks=(d.risk_assessment||[]).map(x=>[x.dimension,x.assessment,x.evidence]);
   const kit=(d.press_kit||[]).map(x=>[x.product,x.purpose]);
   const rawCorpus=result.corpus||[];
+  const socialPerception=result.social_repercussion||{};
   const wordCloud=result.word_cloud||{};
   const academicPapers=result.academic_papers||[];
   const academicSection=academicPapers.length?`<h2>Literatura científica relacionada</h2>
@@ -361,6 +362,49 @@ function render(result){
     ? ` ${collapsedDuplicates} entrada(s) repetida(s) foram consolidadas para evitar dupla contagem.`
     : '';
   const relatedSummary=`<p class="related-intro">${displayCorpusCount} item(ns) único(s) validado(s) como materialmente relacionados ao tema: ${socialItems.length} em mídias sociais, ${youtubeItems.length} no YouTube e ${portalItems.length} em portais de notícias.${duplicateNote} O detalhamento item a item está nos anexos.</p><p class="note">Origem: <span class="origin-badge new">Nova coleta</span> = coletado desta vez; <span class="origin-badge reused">Corpus reutilizado</span> = reaproveitado de coleta anterior.</p>`;
+
+  const socialLabel=value=>({
+    instagram:'Instagram',facebook:'Facebook',x:'X',
+    POSITIVO:'Positivo',NEGATIVO:'Negativo',NEUTRO:'Neutro',AMBIGUO:'Ambíguo',
+    MEDO:'Medo',INDIGNACAO:'Indignação',CONFIANCA:'Confiança',
+    DESCONFIANCA:'Desconfiança',TRISTEZA:'Tristeza',IRONIA:'Ironia',
+    ESPERANCA:'Esperança',OUTRA:'Outra',NAO_IDENTIFICAVEL:'Não identificável',
+    APOIO:'Apoio',CRITICA:'Crítica',PREOCUPACAO:'Preocupação',DUVIDA:'Dúvida',
+    RELATO_PESSOAL:'Relato pessoal'
+  })[String(value||'')]||String(value||'').replaceAll('_',' ').toLowerCase();
+
+  const socialRows=(values,total)=>Object.entries(values||{})
+    .sort((a,b)=>Number(b[1]||0)-Number(a[1]||0))
+    .map(([label,count])=>[
+      socialLabel(label),
+      String(Number(count||0)),
+      total?((Number(count||0)*100/total).toFixed(1).replace('.',',')+'%'):'—'
+    ]);
+
+  const socialComments=Number(socialPerception.comments||0);
+  const socialAnalyzed=Number(socialPerception.analyzed_comments||0);
+  const platformRows=Object.entries(socialPerception.platform_counts||{})
+    .sort((a,b)=>Number(b[1]||0)-Number(a[1]||0))
+    .map(([platform,count])=>[socialLabel(platform),String(Number(count||0))]);
+  const themeRows=(socialPerception.themes||[]).map((item,i)=>[
+    String(i+1),item.theme||'N/D',String(Number(item.count||0))
+  ]);
+  const socialSection=socialComments? `
+    <h2>Percepção observada nas redes sociais</h2>
+    <p class="related-intro">${esc(socialPerception.summary||'Comentários públicos coletados e analisados como camada complementar.')}</p>
+    <div class="table-wrap"><table><tbody>
+      <tr><th>Posts sociais</th><td>${esc(socialPerception.posts||0)}</td>
+          <th>Comentários coletados</th><td>${esc(socialComments)}</td>
+          <th>Comentários analisados</th><td>${esc(socialAnalyzed)}</td></tr>
+    </tbody></table></div>
+    ${platformRows.length?'<h3>Distribuição por plataforma</h3>'+table(['Plataforma','Comentários'],platformRows):''}
+    ${socialAnalyzed&&Object.keys(socialPerception.sentiment_counts||{}).length?'<h3>Sentimento observado</h3>'+table(['Classificação','Comentários','Participação na amostra'],socialRows(socialPerception.sentiment_counts,socialAnalyzed)):''}
+    ${socialAnalyzed&&Object.keys(socialPerception.emotion_counts||{}).length?'<h3>Emoções observadas</h3>'+table(['Classificação','Comentários','Participação na amostra'],socialRows(socialPerception.emotion_counts,socialAnalyzed)):''}
+    ${socialAnalyzed&&Object.keys(socialPerception.position_counts||{}).length?'<h3>Posição em relação ao tema</h3>'+table(['Classificação','Comentários','Participação na amostra'],socialRows(socialPerception.position_counts,socialAnalyzed)):''}
+    ${themeRows.length?'<h3>Temas recorrentes nos comentários</h3>'+table(['#','Tema','Ocorrências'],themeRows):''}
+    <p class="note"><strong>Nota metodológica:</strong> ${esc(socialPerception.methodology_note||'Esta camada descreve somente a amostra de comentários públicos coletada e não representa a população.')}</p>
+  `: '';
+
   const linkCell=u=>u?raw(`<a href="${esc(u)}" target="_blank" rel="noreferrer">Abrir</a>`):'N/D';
   const coveredPortals=(m.portal_checks||[]).filter(x=>x.result==='com cobertura auditável');
   const portalSection=coveredPortals.length?`<h2>Checagem de portais prioritários</h2>${table(['Portal','Resultado','Evidência'],coveredPortals.map(x=>[x.portal,x.result,x.evidence]))}`:'';
@@ -401,6 +445,7 @@ function render(result){
     ${academicSection}
     <h2>Itens relacionados encontrados</h2>
     ${relatedSummary}
+    ${socialSection}
     ${operationSection}
     ${factSection}
     <h2>Abertura</h2><p>${esc(d.opening)}</p>
@@ -504,7 +549,7 @@ const STAGE_GROUPS = [
   {
     number: 3,
     label: 'Coleta',
-    keys: ['collection', 'youtube'],
+    keys: ['collection', 'youtube', 'social_repercussion'],
     vertical: true
   },
   { number: 4, label: 'Literatura científica', keys: ['academic_research'] },
