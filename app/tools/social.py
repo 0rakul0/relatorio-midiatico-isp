@@ -26,11 +26,16 @@ def _actor_for_platform(platform: str) -> str | None:
 
 def _actor_input(platform: str, urls: list[str], limit: int) -> dict:
     if platform == "instagram":
-        return {"directUrls": urls, "resultsLimit": limit}
+        return {
+            "directUrls": urls,
+            "resultsLimit": limit,
+            "includeNestedComments": False,
+        }
     if platform == "facebook":
         return {
             "startUrls": [{"url": url} for url in urls],
             "resultsLimit": limit,
+            "includeNestedComments": False,
         }
     if platform == "x":
         return {
@@ -74,6 +79,7 @@ def collect_public_comments(
             payload=_actor_input(platform, urls, limit),
             base_url=settings.apify_api_base_url,
             timeout_seconds=settings.apify_social_timeout_seconds,
+            max_items=len(urls) * limit,
         )
     except ApifyUnavailable as exc:
         raise SocialCollectionUnavailable(str(exc)) from exc
