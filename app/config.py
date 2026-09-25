@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     # Optional agent-tool rounds. Collector normally uses one bulk call per medium.
     max_agent_tool_rounds: int = Field(default=3, ge=1, le=10)
 
+    # As consultas externas são I/O-bound e podem ser executadas em paralelo.
+    # A persistência/auditoria continua sequencial na thread principal para não
+    # compartilhar a mesma Session do SQLAlchemy entre threads.
+    search_parallel_enabled: bool = True
+    search_parallel_web_workers: int = Field(default=4, ge=1, le=12)
+    search_parallel_video_workers: int = Field(default=3, ge=1, le=12)
+
     # Provider result ceiling. Keep this >= max_results_per_query, otherwise the
     # provider layer would silently cap the collection below the requested value.
     agent_search_max_results: int = Field(default=8, ge=1, le=10)
