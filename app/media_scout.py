@@ -123,12 +123,15 @@ class MediaScout:
         return self._dedupe([self._with_event_context(value) for value in variants])
 
     def _general_fallback_queries(self) -> list[str]:
-        values = [self.topic]
-        values.extend(
+        # O perfil pode trazer uma variante territorial canonica primeiro
+        # (ex.: "Mazuema" -> "Muzema"). Ela deve ser a consulta principal;
+        # o texto bruto do usuario permanece como fallback auditavel.
+        values = [
             str(value).strip()
             for value in (self.profile.get("search_synonyms") or [])
             if str(value).strip()
-        )
+        ]
+        values.append(self.topic)
         return self._dedupe(values)
 
     def fallback_search_strategy(self, max_complementary: int = 2) -> dict[str, Any]:
