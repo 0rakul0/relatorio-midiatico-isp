@@ -22,7 +22,7 @@ from app.models import (
     SocialPost,
 )
 from app.schemas import SocialCommentBatchResponse
-from app.tools.providers.apify_social import ApifyUnavailable, run_actor_dataset
+from app.tools.social import SocialCollectionUnavailable, collect_public_comments
 
 
 METHODOLOGY_NOTE = (
@@ -118,33 +118,6 @@ def _candidate_urls(
         for platform, rows in found.items()
         if rows
     }
-
-
-def _actor_for(platform: str) -> str | None:
-    settings = get_settings()
-    return {
-        "instagram": settings.apify_instagram_comments_actor_id,
-        "facebook": settings.apify_facebook_comments_actor_id,
-        "x": settings.apify_x_comments_actor_id,
-    }.get(platform)
-
-
-def _actor_input(platform: str, urls: list[str], limit: int) -> dict:
-    if platform == "instagram":
-        return {"directUrls": urls, "resultsLimit": limit}
-    if platform == "facebook":
-        return {
-            "startUrls": [{"url": url} for url in urls],
-            "resultsLimit": limit,
-        }
-    if platform == "x":
-        return {
-            "urls": urls,
-            "category": "replies",
-            "resultsPerCategory": limit,
-            "scrapeAll": True,
-        }
-    raise ValueError(f"Plataforma social desconhecida: {platform}")
 
 
 def _nested(payload: dict, *keys: str) -> Any:
@@ -635,16 +608,26 @@ def collect_social_repercussion(db: Session, project: Project) -> dict:
     actor_runs = 0
 
     for platform, rows in candidates.items():
-        actor_id = _actor_for(platform)
-        if not actor_id:
+        urls = [row[0] for row in rows]
+
+        try:
+            actor_id, dataset = collect_public_comments(
+                platform=platform,
+                urls=urls,
+                comments_per_post=int(settings.apify_social_comments_per_post),
+            )
+            actor_runs += 1
+        except SocialCollectionUnavailable as exc:
             platform_result[platform] = {
-                "status": "NOT_CONFIGURED",
+                "status": "NOT_CONFIGURED"
+                if "configurado" in str(exc).lower()
+                else "ERROR",
                 "posts": len(rows),
                 "comments": 0,
+                "error": str(exc)[:800],
             }
             continue
 
-        urls = [row[0] for row in rows]
         post_by_url: dict[str, SocialPost] = {}
         for url, media_item_id, title in rows:
             post = _ensure_post(
@@ -658,28 +641,6 @@ def collect_social_repercussion(db: Session, project: Project) -> dict:
             )
             post_by_url[_url_key(url)] = post
         db.flush()
-
-        try:
-            dataset = run_actor_dataset(
-                actor_id=actor_id,
-                token=settings.apify_api_token,
-                payload=_actor_input(
-                    platform,
-                    urls,
-                    int(settings.apify_social_comments_per_post),
-                ),
-                base_url=settings.apify_api_base_url,
-                timeout_seconds=settings.apify_social_timeout_seconds,
-            )
-            actor_runs += 1
-        except ApifyUnavailable as exc:
-            platform_result[platform] = {
-                "status": "ERROR",
-                "posts": len(rows),
-                "comments": 0,
-                "error": str(exc)[:800],
-            }
-            continue
 
         accepted = 0
         sole_post = next(iter(post_by_url.values())) if len(post_by_url) == 1 else None
