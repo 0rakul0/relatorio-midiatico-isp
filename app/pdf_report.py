@@ -57,6 +57,23 @@ def _pdf_link(url: object, label: str = "Abrir") -> dict[str, str]:
 
 
 
+def _has_content(value: object) -> bool:
+    """Retorna True somente quando há conteúdo editorial realmente renderizável."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, dict):
+        return any(_has_content(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_content(item) for item in value)
+    return True
+
+
 def _pdf_word_cloud_flowable(word_cloud: dict, width: float):
     """Desenha no PDF a mesma linguagem visual da nuvem exibida na web."""
     import math
@@ -425,7 +442,10 @@ def build_pdf(data: dict) -> bytes:
     )
     story += [meta_table, Spacer(1, 10)]
 
-    def add_section(name: str, content: str):
+    def add_section(name: str, content: object) -> bool:
+        """Adiciona título + corpo somente quando o corpo tem conteúdo real."""
+        if not _has_content(content):
+            return False
         story.append(
             KeepTogether(
                 [
@@ -434,6 +454,7 @@ def build_pdf(data: dict) -> bytes:
                 ]
             )
         )
+        return True
 
     story.append(Paragraph("PARTE 1 - PANORAMA DA REPERCUSSÃO", heading))
     cloud_words = list(word_cloud.get("words") or [])
@@ -793,8 +814,8 @@ def build_pdf(data: dict) -> bytes:
             )
         )
 
-    story.append(Paragraph("PARTE 2 - OPERAÇÕES POLICIAIS IDENTIFICADAS", heading))
     if fact_layer_enabled and operations:
+        story.append(Paragraph("PARTE 2 - OPERAÇÕES POLICIAIS IDENTIFICADAS", heading))
         provisional_operations = any(
             operation.get("inventory_status") == "PROVISIONAL_MEDIA_MENTION"
             or operation.get("resolution_status") == "PROVISIONAL_MEDIA_MENTION"
@@ -843,76 +864,116 @@ def build_pdf(data: dict) -> bytes:
             small,
         ))
 
-    story.append(Paragraph("PARTE 3 - ANÁLISE DA COBERTURA", heading))
-    add_section("II. Enquadramento Dominante", report["dominant_framing"])
-    story.append(Paragraph("III. Um Estudo, Muitas Pautas", heading))
-    story.append(
-        _table(
-            [["Eixo temático", "Dado-âncora", "Cobertura"]]
-            + [[x["axis"], x["anchor_data"], x["coverage"]] for x in report["thematic_axes"]],
-            [4.1 * cm, 5.7 * cm, 6.8 * cm],
-            small,
+    thematic_axes = list(report.get("thematic_axes") or [])
+    risk_assessment = list(report.get("risk_assessment") or [])
+    part3_has_content = any(
+        (
+            _has_content(report.get("dominant_framing")),
+            bool(thematic_axes),
+            _has_content(report.get("highest_yield")),
+            _has_content(report.get("institutional_narrative")),
+            bool(risk_assessment),
         )
     )
-    add_section("IV. Recorte de Maior Rendimento Jornalístico", report["highest_yield"])
-    add_section("V. Camada Institucional e Disputa de Narrativa", report["institutional_narrative"])
+    if part3_has_content:
+        story.append(Paragraph("PARTE 3 - ANÁLISE DA COBERTURA", heading))
+        add_section("II. Enquadramento Dominante", report.get("dominant_framing"))
 
-    story.append(Paragraph("VI. Avaliação: Alcance, Profundidade e Riscos", heading))
-    story.append(
-        _table(
-            [["Dimensão", "Avaliação", "Evidência"]]
-            + [[x["dimension"], x["assessment"], x["evidence"]] for x in report["risk_assessment"]],
-            [3.6 * cm, 4.7 * cm, 8.3 * cm],
-            small,
+        if thematic_axes:
+            story.append(Paragraph("III. Um Estudo, Muitas Pautas", heading))
+            story.append(
+                _table(
+                    [["Eixo temático", "Dado-âncora", "Cobertura"]]
+                    + [
+                        [
+                            x.get("axis") or "N/D",
+                            x.get("anchor_data") or "N/D",
+                            x.get("coverage") or "N/D",
+                        ]
+                        for x in thematic_axes
+                    ],
+                    [4.1 * cm, 5.7 * cm, 6.8 * cm],
+                    small,
+                )
+            )
+
+        add_section(
+            "IV. Recorte de Maior Rendimento Jornalístico",
+            report.get("highest_yield"),
         )
-    )
+        add_section(
+            "V. Camada Institucional e Disputa de Narrativa",
+            report.get("institutional_narrative"),
+        )
 
-    story.append(Paragraph("PARTE 4 - VERIFICAÇÃO FACTUAL", heading))
-    if fact_layer_enabled:
+        if risk_assessment:
+            story.append(Paragraph("VI. Avaliação: Alcance, Profundidade e Riscos", heading))
+            story.append(
+                _table(
+                    [["Dimensão", "Avaliação", "Evidência"]]
+                    + [
+                        [
+                            x.get("dimension") or "N/D",
+                            x.get("assessment") or "N/D",
+                            x.get("evidence") or "N/D",
+                        ]
+                        for x in risk_assessment
+                    ],
+                    [3.6 * cm, 4.7 * cm, 8.3 * cm],
+                    small,
+                )
+            )
+
+    if fact_layer_enabled and facts:
+        story.append(Paragraph("PARTE 4 - VERIFICAÇÃO FACTUAL", heading))
         story.append(Paragraph("Camada de Fatos Verificados", heading))
-        story.append(Paragraph(escape(_text(report.get("fact_layer_intro", ""))), body))
-        if facts:
-            rows = [["Pessoa", "Vínculo", "Data", "Fato / causa", "Local do fato", "Local da morte", "Situação"]]
-            for event in facts:
-                link = " / ".join(
-                    value for value in [event.get("institution"), event.get("rank_or_role"), event.get("unit")] if value
-                )
-                location = ", ".join(
-                    value
-                    for value in [event.get("address"), event.get("neighborhood"), event.get("city"), event.get("state")]
-                    if value
-                )
-                death_location = ", ".join(
-                    value
-                    for value in [
-                        event.get("death_place_name"), event.get("death_address"),
-                        event.get("death_neighborhood"), event.get("death_city"), event.get("death_state")
-                    ]
-                    if value
-                )
-                cause = event.get("cause") or event.get("circumstance") or "Não localizado"
-                status = _status_label(event.get("resolution_status"))
-                if event.get("conflict_fields"):
-                    status += " - " + ", ".join(event["conflict_fields"])
-                status += f"; {_scope_label(event.get('primary_scope'))}"
-                rows.append(
-                    [
-                        event.get("subject_name") or "Não localizado",
-                        link or "Não localizado",
-                        event.get("death_date") or event.get("event_date") or "Não localizada",
-                        cause,
-                        location or "Não localizado",
-                        death_location or "Não localizado",
-                        status,
-                    ]
-                )
-            story.append(_table(rows, [2.3 * cm, 2.5 * cm, 1.6 * cm, 2.8 * cm, 2.7 * cm, 2.7 * cm, 2.0 * cm], small))
-        else:
-            story.append(Paragraph("Nenhum fato individual foi suficientemente estruturado na amostra factual.", small))
+        if _has_content(report.get("fact_layer_intro")):
+            story.append(Paragraph(escape(_text(report.get("fact_layer_intro"))), body))
 
+        rows = [["Pessoa", "Vínculo", "Data", "Fato / causa", "Local do fato", "Local da morte", "Situação"]]
+        for event in facts:
+            link = " / ".join(
+                value for value in [event.get("institution"), event.get("rank_or_role"), event.get("unit")] if value
+            )
+            location = ", ".join(
+                value
+                for value in [event.get("address"), event.get("neighborhood"), event.get("city"), event.get("state")]
+                if value
+            )
+            death_location = ", ".join(
+                value
+                for value in [
+                    event.get("death_place_name"), event.get("death_address"),
+                    event.get("death_neighborhood"), event.get("death_city"), event.get("death_state")
+                ]
+                if value
+            )
+            cause = event.get("cause") or event.get("circumstance") or "Não localizado"
+            status = _status_label(event.get("resolution_status"))
+            if event.get("conflict_fields"):
+                status += " - " + ", ".join(event["conflict_fields"])
+            status += f"; {_scope_label(event.get('primary_scope'))}"
+            rows.append(
+                [
+                    event.get("subject_name") or "Não localizado",
+                    link or "Não localizado",
+                    event.get("death_date") or event.get("event_date") or "Não localizada",
+                    cause,
+                    location or "Não localizado",
+                    death_location or "Não localizado",
+                    status,
+                ]
+            )
+        story.append(
+            _table(
+                rows,
+                [2.3 * cm, 2.5 * cm, 1.6 * cm, 2.8 * cm, 2.7 * cm, 2.7 * cm, 2.0 * cm],
+                small,
+            )
+        )
 
-    story.append(Paragraph("PARTE 5 - CONTEXTUALIZAÇÃO CIENTÍFICA", heading))
     if academic_papers:
+        story.append(Paragraph("PARTE 5 - CONTEXTUALIZAÇÃO CIENTÍFICA", heading))
         story.append(Paragraph("Literatura científica relacionada", heading))
         story.append(
             Paragraph(
@@ -953,50 +1014,31 @@ def build_pdf(data: dict) -> bytes:
         )
 
 
-    story.append(Paragraph("PARTE 6 - SÍNTESE E ENCAMINHAMENTOS", heading))
-    add_section("VIII. Síntese", report["synthesis"])
+    synthesis = report.get("synthesis")
+    recommendations = list(report.get("recommendations") or [])
+    press_kit = list(report.get("press_kit") or [])
+    if _has_content(synthesis) or recommendations or press_kit:
+        story.append(Paragraph("PARTE 6 - SÍNTESE E ENCAMINHAMENTOS", heading))
+        add_section("VIII. Síntese", synthesis)
 
-    story.append(Paragraph("VII. Recomendações e Kit de Imprensa", heading))
-    story.extend([Paragraph("• " + escape(_text(item)), body) for item in report["recommendations"]])
-    story.append(
-        _table(
-            [["Produto", "Finalidade"]] + [[x["product"], x["purpose"]] for x in report["press_kit"]],
-            [6.5 * cm, 10.1 * cm],
-            small,
-        )
-    )
-    story.append(Paragraph("ANEXOS AUDITÁVEIS", heading))
-    add_section("Anexo A - Nota Metodológica", report["methodological_note"])
-
-    if fact_layer_enabled:
-        story.append(Paragraph("Anexo B - Evidências Factuais", heading))
-        story.append(
-            Paragraph(
-                "Cada linha preserva o campo, valor, fonte, evidência textual e link usados na camada factual.",
-                small,
-            )
-        )
-        if fact_evidence:
-            story.append(
-                _table(
-                    [["Pessoa", "Campo", "Valor", "Fonte", "Evidência", "Link"]]
-                    + [
-                        [
-                            item.get("subject_name") or "N/D",
-                            item.get("field") or "N/D",
-                            item.get("value") or "N/D",
-                            item.get("source") or item.get("source_type") or "N/D",
-                            item.get("evidence") or "N/D",
-                            _pdf_link(item.get("url")),
-                        ]
-                        for item in fact_evidence
-                    ],
-                    [2.2 * cm, 1.8 * cm, 2.4 * cm, 2.4 * cm, 6.0 * cm, 1.8 * cm],
-                    small,
+        if recommendations or press_kit:
+            story.append(Paragraph("VII. Recomendações e Kit de Imprensa", heading))
+            if recommendations:
+                story.extend(
+                    [Paragraph("• " + escape(_text(item)), body) for item in recommendations if _has_content(item)]
                 )
-            )
-        else:
-            story.append(Paragraph("Nenhuma evidência factual estruturada nesta versão.", small))
+            if press_kit:
+                story.append(
+                    _table(
+                        [["Produto", "Finalidade"]]
+                        + [
+                            [x.get("product") or "N/D", x.get("purpose") or "N/D"]
+                            for x in press_kit
+                        ],
+                        [6.5 * cm, 10.1 * cm],
+                        small,
+                    )
+                )
 
     def corpus_table(rows):
         if not rows:
@@ -1025,17 +1067,67 @@ def build_pdf(data: dict) -> bytes:
             nowrap_columns={0, 1},
         )
 
-    # Anexos do corpus auditável, sempre nesta ordem: mídias sociais,
-    # YouTube e, por último, portais de notícias e demais sites.
-    annex_sections = [
+    # Anexos vazios não entram no PDF. A numeração é atribuída apenas às
+    # seções efetivamente renderizadas, evitando títulos sem conteúdo e letras
+    # puladas quando uma categoria não possui itens.
+    annex_sections: list[tuple[str, object, str]] = []
+    methodological_note = report.get("methodological_note")
+    if _has_content(methodological_note):
+        annex_sections.append(("Nota Metodológica", methodological_note, "methodology"))
+    if fact_layer_enabled and fact_evidence:
+        annex_sections.append(("Evidências Factuais", fact_evidence, "facts"))
+    for annex_name, rows in (
         ("Mídias Sociais", social_items),
         ("YouTube", youtube_items),
         ("Portais de Notícias", portal_items),
-    ]
-    annex_base = 2 if fact_layer_enabled else 1  # Anexo A = nota metodológica
-    for offset, (annex_name, rows) in enumerate(annex_sections):
-        letter = chr(ord("A") + annex_base + offset)
+    ):
+        if rows:
+            annex_sections.append((annex_name, rows, "corpus"))
+
+    if annex_sections:
+        story.append(Paragraph("ANEXOS AUDITÁVEIS", heading))
+
+    for offset, (annex_name, content, annex_type) in enumerate(annex_sections):
+        letter = chr(ord("A") + offset)
         story.append(Paragraph(f"Anexo {letter} - {annex_name}", heading))
+
+        if annex_type == "methodology":
+            story.append(
+                Paragraph(
+                    escape(_text(content)).replace("\n", "<br/>"),
+                    body,
+                )
+            )
+            continue
+
+        if annex_type == "facts":
+            story.append(
+                Paragraph(
+                    "Cada linha preserva o campo, valor, fonte, evidência textual e link usados na camada factual.",
+                    small,
+                )
+            )
+            story.append(
+                _table(
+                    [["Pessoa", "Campo", "Valor", "Fonte", "Evidência", "Link"]]
+                    + [
+                        [
+                            item.get("subject_name") or "N/D",
+                            item.get("field") or "N/D",
+                            item.get("value") or "N/D",
+                            item.get("source") or item.get("source_type") or "N/D",
+                            item.get("evidence") or "N/D",
+                            _pdf_link(item.get("url")),
+                        ]
+                        for item in content
+                    ],
+                    [2.2 * cm, 1.8 * cm, 2.4 * cm, 2.4 * cm, 6.0 * cm, 1.8 * cm],
+                    small,
+                )
+            )
+            continue
+
+        rows = list(content)
         collapsed = sum(int(item.get("duplicate_count") or 0) for item in rows)
         note = "Itens validados na janela de repercussão."
         if collapsed:
