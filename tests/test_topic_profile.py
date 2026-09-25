@@ -28,3 +28,13 @@ def test_generic_product_term_alone_stays_institutional_product():
     profile = heuristic_topic_profile("Dossiê Mulher 2026")
     assert profile["project_type"] == "INSTITUTIONAL_PRODUCT"
     assert profile["product_anchor"] == "Dossiê Mulher"
+
+
+def test_known_location_typo_is_canonicalized_without_losing_original_variant():
+    topic = "produção habitacional milícia mazuema"
+    profile = heuristic_topic_profile(topic)
+
+    assert profile["project_type"] == "GENERAL_TOPIC"
+    assert profile["locations"][0] == "Muzema"
+    assert profile["search_synonyms"][0] == "produção habitacional milícia Muzema"
+    assert topic in profile["search_synonyms"]
