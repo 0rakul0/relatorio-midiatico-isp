@@ -45,6 +45,16 @@ GENERIC_PRODUCT_TERMS = {
 }
 
 
+# Aliases geograficos conhecidos que precisam ser normalizados antes da busca.
+# A lista e propositalmente conservadora: so entram variantes inequívocas. A LLM
+# continua responsavel por reconhecer outros locais, mas estes aliases garantem
+# um fallback deterministico quando a grafia do usuario estiver incorreta.
+KNOWN_LOCATION_ALIASES = {
+    "mazuema": "Muzema",
+    "muzema": "Muzema",
+}
+
+
 def normalized_text(text: str) -> str:
     return "".join(
         char
@@ -139,6 +149,57 @@ def requested_topic_window(topic: str) -> tuple[date, date] | None:
 
 def _clean_phrase(value: str | None) -> str:
     return " ".join((value or "").split()).strip()
+
+
+def canonicalize_known_locations(text: str) -> str:
+    """Corrige apenas aliases geograficos conhecidos, preservando o restante."""
+
+    value = _clean_phrase(text)
+    if not value:
+        return ""
+
+    corrected = value
+    for alias, canonical in KNOWN_LOCATION_ALIASES.items():
+        corrected = re.sub(
+            rf"\b{re.escape(alias)}\b",
+            canonical,
+            corrected,
+            flags=re.IGNORECASE,
+        )
+    return corrected
+
+
+def location_topic_variants(topic: str) -> tuple[list[str], list[str]]:
+    """Retorna locais reconhecidos e variantes ancoradas do tema para busca.
+
+    A variante canonica vem primeiro. A grafia original e mantida como consulta
+    complementar quando realmente difere, permitindo auditoria sem deixar um
+    erro ortografico dominar a busca principal.
+    """
+
+    original = _clean_phrase(topic)
+    if not original:
+        return [], []
+
+    normalized = normalized_text(original)
+    locations: list[str] = []
+
+    for alias, canonical in KNOWN_LOCATION_ALIASES.items():
+        if re.search(rf"\b{re.escape(alias)}\b", normalized):
+            locations.append(canonical)
+
+    if "rio de janeiro" in normalized or re.search(r"\brj\b", normalized):
+        locations.extend(["Rio de Janeiro", "RJ", "estado do Rio de Janeiro"])
+
+    canonical_topic = canonicalize_known_locations(original)
+    variants = [canonical_topic]
+    if normalized_text(canonical_topic) != normalized_text(original):
+        variants.append(original)
+
+    return (
+        list(dict.fromkeys(location for location in locations if location)),
+        list(dict.fromkeys(variant for variant in variants if variant)),
+    )
 
 
 def product_anchor_from_name(product_name: str | None) -> str | None:
@@ -273,9 +334,7 @@ def heuristic_topic_profile(topic: str) -> dict:
             "death_place_name", "death_address", "death_neighborhood", "death_city", "death_state",
         ]
 
-    locations = []
-    if "rio de janeiro" in text or re.search(r"\brj\b", text):
-        locations = ["Rio de Janeiro", "RJ", "estado do Rio de Janeiro"]
+    locations, topic_search_variants = location_topic_variants(topic)
 
     if project_type == "INSTITUTIONAL_PRODUCT":
         # Compatibilidade com codigo antigo: em produto institucional,
@@ -285,8 +344,14 @@ def heuristic_topic_profile(topic: str) -> dict:
         # Para evento conhecido, sinônimos de busca continuam semanticamente
         # presos à categoria factual; atores/ações isolados não viram consultas.
         search_synonyms = list(event_search_variants)
-    elif not search_synonyms:
-        search_synonyms = sorted(normalized_terms(topic))
+    elif project_type == "EVENT_TOPIC":
+        # Evento sem familia deterministica conhecida: preserve a consulta inteira
+        # e suas correcoes geograficas, nunca transforme o tema em tokens soltos.
+        search_synonyms = list(topic_search_variants)
+    else:
+        # Tema geral deve permanecer ancorado. Consultas de uma palavra isolada
+        # (ex.: "habitacional", "milicia") produzem muito ruido.
+        search_synonyms = list(topic_search_variants)
 
     return {
         "project_type": project_type,
@@ -326,7 +391,13 @@ def build_topic_profile(topic: str) -> dict:
 
     # Evita que um perfil LLM pobre elimine pistas uteis do fallback.
     for key in ("actors", "actions", "locations", "organizations", "requested_fact_fields"):
-        result[key] = list(dict.fromkeys([*(result.get(key) or []), *(fallback.get(key) or [])]))
+        if key == "locations":
+            # O fallback deterministico vem primeiro para que uma grafia
+            # canonica conhecida seja a ancora territorial preferencial.
+            values = [*(fallback.get(key) or []), *(result.get(key) or [])]
+        else:
+            values = [*(result.get(key) or []), *(fallback.get(key) or [])]
+        result[key] = list(dict.fromkeys(values))
 
     if result.get("project_type") == "GENERAL_TOPIC" and fallback["project_type"] == "EVENT_TOPIC":
         result["project_type"] = "EVENT_TOPIC"
@@ -409,9 +480,12 @@ def build_topic_profile(topic: str) -> dict:
             result["event_anchor"] = None
             result["event_search_variants"] = []
             result["fact_discovery_variants"] = []
+            # Em tema geral, priorize variantes ancoradas e corrigidas do
+            # fallback. Sugestoes da LLM entram depois e nunca substituem a
+            # consulta canonica conhecida.
             result["search_synonyms"] = list(dict.fromkeys([
-                *(result.get("search_synonyms") or []),
                 *(fallback.get("search_synonyms") or []),
+                *(result.get("search_synonyms") or []),
             ]))[:30]
 
     return result
