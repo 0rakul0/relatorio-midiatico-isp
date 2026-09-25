@@ -87,7 +87,7 @@ Essa relação é persistida para permitir inspeção posterior.
 
 ### 3.1 Visão geral
 
-A aplicação é implementada em Python 3.12, FastAPI, SQLAlchemy e Pydantic. PostgreSQL é o banco principal, com suporte a SQLite para desenvolvimento. O DuckDuckGo é utilizado como mecanismo externo de busca Web/vídeos e o arXiv pode ser consultado para literatura científica. As tarefas semânticas são executadas por um `ReportAgent`, utilizando um modelo compatível com a API da OpenAI e suporte a fallback local compatível com esse protocolo.
+A aplicação é implementada em Python 3.12, FastAPI, SQLAlchemy e Pydantic. PostgreSQL é o banco principal, com suporte a SQLite para desenvolvimento. O DuckDuckGo é utilizado como mecanismo externo principal de descoberta Web/vídeos e o arXiv pode ser consultado para literatura científica. Quando o planejador considerar pertinente, URLs públicas de Instagram, Facebook e X descobertas pelo DuckDuckGo podem alimentar uma camada complementar de **repercussão social**: o Apify coleta comentários públicos desses posts e o sistema produz agregados de sentimento, emoção, posição e temas recorrentes. Comentários não viram `MediaItem` e a identidade do comentarista não é persistida. As tarefas semânticas são executadas por um `ReportAgent`, utilizando um modelo compatível com a API da OpenAI e suporte a fallback local compatível com esse protocolo.
 
 O pipeline operacional pode ser representado por:
 
@@ -97,6 +97,8 @@ flowchart LR
     B --> C[Memória histórica]
     C --> D[Planejamento de consultas]
     D --> E[Coleta Web / vídeo]
+    E --> S[Apify social opcional]
+    S --> T[Comentários públicos agregados]
     E --> F[SearchHit bruto]
     F --> G[Hidratação do artigo]
     G --> H[Validação semântica]
@@ -422,6 +424,9 @@ Os principais resultados funcionais são:
 - preservação dos resultados brutos e das tentativas de pesquisa;
 - distinção entre pesquisa factual e pesquisa de repercussão;
 - suporte a portais de notícias, redes sociais e YouTube;
+- camada opcional de percepção observada em comentários públicos de Instagram, Facebook e X;
+- persistência separada de posts/comentários, sem misturar comentários ao corpus jornalístico;
+- agregação de sentimento, emoções, posição e temas recorrentes com ressalva explícita de não representatividade populacional;
 - tratamento independente das janelas factual e midiática;
 - recuperação do corpo integral de artigos antes da decisão semântica;
 - deduplicação por URL e conteúdo;
@@ -574,6 +579,15 @@ OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-5-mini
 
 DUCKDUCKGO_REGION=br-pt
+
+# Opcional: repercussão social
+APIFY_API_TOKEN=
+APIFY_SOCIAL_ENABLED=true
+APIFY_INSTAGRAM_COMMENTS_ACTOR_ID=apify/instagram-comment-scraper
+APIFY_FACEBOOK_COMMENTS_ACTOR_ID=apify/facebook-comments-scraper
+# Configure apenas após escolher um Actor de replies do X:
+APIFY_X_COMMENTS_ACTOR_ID=
+
 ENABLE_CORPUS_REUSE=true
 CORPUS_EMBEDDING_MODEL=text-embedding-3-small
 RERANKER_AUTO_TRAIN=true
@@ -633,12 +647,14 @@ app/
 │   ├── validation.py
 │   ├── classification.py
 │   ├── reporting.py
+│   ├── social_repercussion.py
 │   └── collection/
 │
 └── tools/
     ├── search.py
     ├── hydration.py
     ├── academic.py
+    ├── social.py
     └── providers/
 ```
 
