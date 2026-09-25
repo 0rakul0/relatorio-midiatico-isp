@@ -12,6 +12,7 @@ EXECUTION_PROFILE_DEFAULTS = {
     "MIDIATICO_SIMPLES": {
         "enable_web_collection": True,
         "enable_youtube": True,
+        "enable_social_repercussion": False,
         "enable_academic_research": True,
         "enable_media_validation": True,
         "enable_fact_layer": False,
@@ -25,6 +26,7 @@ EXECUTION_PROFILE_DEFAULTS = {
     "MIDIATICO_COM_FATOS": {
         "enable_web_collection": True,
         "enable_youtube": True,
+        "enable_social_repercussion": False,
         "enable_academic_research": True,
         "enable_media_validation": True,
         "enable_fact_layer": True,
@@ -38,6 +40,7 @@ EXECUTION_PROFILE_DEFAULTS = {
     "COMPLETO_NOMINAL": {
         "enable_web_collection": True,
         "enable_youtube": True,
+        "enable_social_repercussion": False,
         "enable_academic_research": True,
         "enable_media_validation": True,
         "enable_fact_layer": True,
@@ -53,6 +56,7 @@ EXECUTION_PROFILE_DEFAULTS = {
 _PROCESS_TO_FLAG = {
     "web_collection": "enable_web_collection",
     "youtube_collection": "enable_youtube",
+    "social_repercussion": "enable_social_repercussion",
     "academic_research": "enable_academic_research",
     "media_validation": "enable_media_validation",
     "fact_extraction": "enable_fact_layer",
@@ -96,6 +100,10 @@ def heuristic_execution_plan(project: Project) -> dict[str, Any]:
         "processes": {
             "web_collection": _decision(True, "A coleta web e a base do relatorio midiatico."),
             "youtube_collection": _decision(True, "Videos podem ampliar a cobertura observada."),
+            "social_repercussion": _decision(
+                False,
+                "Sem decisao do planejador, a coleta paga de comentarios sociais permanece desativada.",
+            ),
             "academic_research": _decision(True, "Literatura cientifica pode acrescentar contexto tecnico sem integrar a metrica de repercussao."),
             "media_validation": _decision(True, "Todo corpus coletado precisa ser validado antes da analise."),
             "fact_extraction": _decision(fact_layer, "Camada factual ativada para pauta de eventos." if fact_layer else "A pauta nao exige fatos individuais estruturados."),
@@ -169,6 +177,7 @@ def sanitize_execution_plan(project: Project, raw: dict[str, Any] | None) -> dic
         "enable_fact_layer": "fact_extraction",
         "enable_nominal_followup": "nominal_followup",
         "enable_academic_research": "academic_research",
+        "enable_social_repercussion": "social_repercussion",
     }
     for option_name, process_name in override_map.items():
         value = overrides.get(option_name)
