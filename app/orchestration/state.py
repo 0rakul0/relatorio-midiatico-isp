@@ -25,6 +25,7 @@ RUN_STAGES = [
     ("search_plan", "Planejamento do relatório"),
     ("collection", "Coleta em sites"),
     ("youtube", "Coleta no YouTube"),
+    ("social_repercussion", "Percepção nas redes sociais"),
     ("academic_research", "Literatura científica"),
     ("validation", "Validação das notícias"),
     ("facts_pass_1", "Extração factual"),
