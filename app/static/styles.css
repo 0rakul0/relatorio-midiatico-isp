@@ -1345,6 +1345,71 @@ td a {
     white-space: nowrap;
 }
 
+.chat-inline-ref-link {
+    position: relative;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.chat-inline-ref-link:hover,
+.chat-inline-ref-link:focus-visible {
+    background: #c9e6f6;
+    color: #0f4765;
+    text-decoration: none;
+}
+
+.chat-ref-tooltip {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 8px);
+    z-index: 40;
+    display: none;
+    width: max-content;
+    max-width: min(420px, 72vw);
+    padding: 9px 11px;
+    border: 1px solid #b8c7d2;
+    border-radius: 8px;
+    background: #fff;
+    color: var(--ink);
+    box-shadow: 0 8px 24px rgba(35, 52, 64, .18);
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.35;
+    white-space: normal;
+    transform: translateX(-50%);
+    pointer-events: none;
+}
+
+.chat-ref-tooltip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    border: 6px solid transparent;
+    border-top-color: #fff;
+    transform: translateX(-50%);
+}
+
+.chat-ref-tooltip strong,
+.chat-ref-tooltip span {
+    display: block;
+}
+
+.chat-ref-tooltip strong {
+    margin-bottom: 4px;
+    font-size: 12px;
+}
+
+.chat-ref-tooltip span {
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+
+.chat-inline-ref-link:hover .chat-ref-tooltip,
+.chat-inline-ref-link:focus-visible .chat-ref-tooltip {
+    display: block;
+}
+
 .chat-sources {
     margin-top: 8px;
     font-size: 13px;

@@ -97,15 +97,49 @@ function normalizeMarkdownEscapes(value) {
     .replace(/\\+([*_#\[\]`])/g, '$1');
 }
 
-function renderInlineMarkdown(value) {
+function buildSourceReferenceMap(sources) {
+  const map = {};
+  for (const source of (sources || [])) {
+    const reference = String(source?.reference || '').trim().toUpperCase();
+    if (!reference) continue;
+    map[reference] = source;
+  }
+  return map;
+}
+
+function renderInlineMarkdown(value, sourceMap = {}) {
   return esc(normalizeMarkdownEscapes(value))
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/__([^_]+)__/g, '<strong>$1</strong>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\[F(\d+)\]/g, '<span class="chat-inline-ref">[F$1]</span>');
+    .replace(/\[F(\d+)\]/g, (_, number) => {
+      const reference = `F${number}`;
+      const source = sourceMap[reference];
+      if (!source?.url) {
+        return `<span class="chat-inline-ref">[${reference}]</span>`;
+      }
+
+      const title = String(
+        source.title || source.source_name || source.domain || 'Abrir fonte'
+      ).trim() || 'Abrir fonte';
+      const url = String(source.url || '').trim();
+
+      return `
+        <a class="chat-inline-ref chat-inline-ref-link"
+           href="${esc(url)}"
+           target="_blank"
+           rel="noreferrer"
+           aria-label="${esc(`Abrir ${reference}: ${title}`)}">
+          [${reference}]
+          <span class="chat-ref-tooltip" role="tooltip">
+            <strong>${esc(title)}</strong>
+            <span>${esc(url)}</span>
+          </span>
+        </a>`;
+    });
 }
 
-function renderMarkdown(value) {
+function renderMarkdown(value, sourceMap = {}) {
   const normalized = normalizeMarkdownEscapes(value)
     .replace(/\r\n/g, '\n');
   const lines = normalized.split('\n');
@@ -130,7 +164,7 @@ function renderMarkdown(value) {
     if (heading) {
       closeList();
       const level = Math.min(4, heading[1].length + 2);
-      html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      html.push(`<h${level}>${renderInlineMarkdown(heading[2], sourceMap)}</h${level}>`);
       continue;
     }
 
@@ -141,7 +175,7 @@ function renderMarkdown(value) {
         listType = 'ul';
         html.push('<ul>');
       }
-      html.push(`<li>${renderInlineMarkdown(unordered[1])}</li>`);
+      html.push(`<li>${renderInlineMarkdown(unordered[1], sourceMap)}</li>`);
       continue;
     }
 
@@ -152,12 +186,12 @@ function renderMarkdown(value) {
         listType = 'ol';
         html.push('<ol>');
       }
-      html.push(`<li>${renderInlineMarkdown(ordered[1])}</li>`);
+      html.push(`<li>${renderInlineMarkdown(ordered[1], sourceMap)}</li>`);
       continue;
     }
 
     closeList();
-    html.push(`<p>${renderInlineMarkdown(line)}</p>`);
+    html.push(`<p>${renderInlineMarkdown(line, sourceMap)}</p>`);
   }
 
   closeList();
@@ -165,10 +199,10 @@ function renderMarkdown(value) {
 }
 
 function renderAnswer(state) {
-  const body = renderMarkdown(state.answer || '');
-  let sources = '';
-
   const allSources = state.sources || [];
+  const sourceMap = buildSourceReferenceMap(allSources);
+  const body = renderMarkdown(state.answer || '', sourceMap);
+  let sources = '';
   if (allSources.length) {
     const corpusSources = allSources.filter(s => (s.source_scope || 'CORPUS') !== 'EXTERNAL');
     const externalSources = allSources.filter(s => s.source_scope === 'EXTERNAL');
