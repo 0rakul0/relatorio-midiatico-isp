@@ -11,6 +11,7 @@ providers or LangChain tool.invoke() directly.
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -87,6 +88,7 @@ def _search_web(
     purpose: str = "MEDIA_REPERCUSSION",
     observer: SearchObserver | None = None,
     tool_name: str = "pesquisar_internet",
+    raise_unavailable: bool = False,
 ) -> tuple[str, list[dict[str, Any]]]:
     settings = get_settings()
     limit = min(
@@ -150,6 +152,8 @@ def _search_web(
                     tool_name=tool_name,
                     error=str(exc),
                 )
+            if raise_unavailable:
+                raise
             return "duckduckgo", []
 
     return "none", []
@@ -164,6 +168,7 @@ def _search_videos(
     window_end: str | None = None,
     observer: SearchObserver | None = None,
     tool_name: str = "pesquisar_videos",
+    raise_unavailable: bool = False,
 ) -> tuple[str, list[dict[str, Any]]]:
     settings = get_settings()
     limit = min(
@@ -216,6 +221,8 @@ def _search_videos(
                     tool_name=tool_name,
                     error=str(exc),
                 )
+            if raise_unavailable:
+                raise
             return "duckduckgo", []
 
     return "none", []
@@ -424,78 +431,130 @@ def make_bulk_web_search_tool(
     """
 
     def executar_buscas_web(queries: list[str]) -> dict[str, Any]:
-        results: list[dict[str, Any]] = []
-        for query in list(queries):
+        """Busca em paralelo; persiste e audita sequencialmente na thread principal."""
+        settings = get_settings()
+        requested = list(queries)
+        result_by_index: dict[int, dict[str, Any]] = {}
+        active: list[dict[str, Any]] = []
+
+        for index, query in enumerate(requested):
             skip, skip_reason = _skip_options(context, query)
             if skip:
                 if observer is not None:
-                    observer.query_started(
-                        query=query,
-                        tool_name="executar_buscas_web",
-                    )
-                    observer.query_finished(
-                        query=query,
-                        tool_name="executar_buscas_web",
-                    )
-                results.append(
-                    {
-                        "query": query,
-                        "provider": "none",
-                        "status": "SKIPPED",
-                        "error": skip_reason,
-                        "returned": 0,
-                        "accepted": 0,
-                        "hits": [],
-                    }
-                )
+                    observer.query_started(query=query, tool_name="executar_buscas_web")
+                    observer.query_finished(query=query, tool_name="executar_buscas_web")
+                result_by_index[index] = {
+                    "query": query,
+                    "provider": "none",
+                    "status": "SKIPPED",
+                    "error": skip_reason,
+                    "returned": 0,
+                    "accepted": 0,
+                    "hits": [],
+                }
                 continue
 
-            limit, window_start, window_end, purpose = _query_options(
-                context,
-                query,
-                5,
-            )
-
-            def run(
-                chain: tuple[str, ...],
-                query: str = query,
-                limit: int = limit,
-                window_start: str | None = window_start,
-                window_end: str | None = window_end,
-                purpose: str = purpose,
-            ) -> tuple[str, list[dict[str, Any]]]:
-                return _search_web(
-                    query,
-                    max_results=limit,
-                    providers=chain,
-                    window_start=window_start,
-                    window_end=window_end,
-                    purpose=purpose,
-                    observer=observer,
-                    tool_name="executar_buscas_web",
-                )
-
-            stats: dict[str, int] = {}
-            provider, rows = _execute_with_sink(
-                query=query,
-                providers=providers,
-                run=run,
-                sink=sink,
-                observer=observer,
-                tool_name="executar_buscas_web",
-                stats=stats,
-            )
-            results.append(
+            limit, window_start, window_end, purpose = _query_options(context, query, 5)
+            active.append(
                 {
+                    "index": index,
                     "query": query,
-                    "provider": provider,
-                    "status": "OK" if rows else "NO_RESULTS",
-                    "returned": int(stats.get("returned", 0)),
-                    "accepted": int(stats.get("accepted", 0)),
-                    "hits": [],
+                    "limit": limit,
+                    "window_start": window_start,
+                    "window_end": window_end,
+                    "purpose": purpose,
                 }
             )
 
+        if active:
+            workers = (
+                min(len(active), max(1, int(settings.search_parallel_web_workers)))
+                if settings.search_parallel_enabled
+                else 1
+            )
+            futures: dict[int, Future] = {}
+
+            with ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="media-web",
+            ) as executor:
+                for item in active:
+                    query = str(item["query"])
+                    if observer is not None:
+                        # A Session SQLAlchemy do observer continua exclusivamente
+                        # na thread principal. As workers fazem somente I/O externo.
+                        observer.query_started(query=query, tool_name="executar_buscas_web")
+                        if "duckduckgo" in providers:
+                            observer.provider_attempted(
+                                query=query,
+                                provider="duckduckgo",
+                                tool_name="executar_buscas_web",
+                            )
+
+                    futures[int(item["index"])] = executor.submit(
+                        _search_web,
+                        query,
+                        max_results=int(item["limit"]),
+                        providers=providers,
+                        window_start=item["window_start"],
+                        window_end=item["window_end"],
+                        purpose=str(item["purpose"]),
+                        observer=None,
+                        tool_name="executar_buscas_web",
+                        raise_unavailable=True,
+                    )
+
+                # Mantém a persistência/auditoria na ordem do plano, mesmo que
+                # as respostas HTTP terminem em ordem diferente.
+                for item in active:
+                    index = int(item["index"])
+                    query = str(item["query"])
+                    try:
+                        provider, raw_rows = futures[index].result()
+                        accepted_rows = sink(raw_rows, provider, query) if sink else raw_rows
+                        if observer is not None:
+                            observer.provider_result(
+                                query=query,
+                                provider=provider,
+                                tool_name="executar_buscas_web",
+                                returned=len(raw_rows),
+                                accepted=len(accepted_rows),
+                            )
+                            observer.query_finished(
+                                query=query,
+                                tool_name="executar_buscas_web",
+                            )
+                        result_by_index[index] = {
+                            "query": query,
+                            "provider": provider,
+                            "status": "OK" if accepted_rows else "NO_RESULTS",
+                            "returned": len(raw_rows),
+                            "accepted": len(accepted_rows),
+                            "hits": [],
+                        }
+                    except Exception as exc:
+                        if observer is not None:
+                            observer.provider_error(
+                                query=query,
+                                provider="duckduckgo",
+                                tool_name="executar_buscas_web",
+                                error=str(exc),
+                            )
+                            observer.query_finished(
+                                query=query,
+                                tool_name="executar_buscas_web",
+                            )
+                        result_by_index[index] = {
+                            "query": query,
+                            "provider": "duckduckgo",
+                            "status": "ERROR",
+                            "error": str(exc),
+                            "returned": 0,
+                            "accepted": 0,
+                            "hits": [],
+                        }
+
+        results = [result_by_index[index] for index in range(len(requested))]
         return AgentBulkSearchResponse.model_validate(
             {"results": results}
         ).model_dump(mode="json")
@@ -521,52 +580,108 @@ def make_bulk_video_search_tool(
     observer: SearchObserver | None = None,
 ) -> StructuredTool:
     def executar_buscas_videos(queries: list[str]) -> dict[str, Any]:
-        results: list[dict[str, Any]] = []
-        for query in list(queries):
-            limit, window_start, window_end, _purpose = _query_options(
-                context,
-                query,
-                5,
-            )
+        """Busca vídeos em paralelo; sink/observer permanecem sequenciais."""
+        settings = get_settings()
+        requested = list(queries)
+        result_by_index: dict[int, dict[str, Any]] = {}
+        active: list[dict[str, Any]] = []
 
-            def run(
-                chain: tuple[str, ...],
-                query: str = query,
-                limit: int = limit,
-                window_start: str | None = window_start,
-                window_end: str | None = window_end,
-            ) -> tuple[str, list[dict[str, Any]]]:
-                return _search_videos(
-                    query,
-                    max_results=limit,
-                    providers=chain,
-                    window_start=window_start,
-                    window_end=window_end,
-                    observer=observer,
-                    tool_name="executar_buscas_videos",
-                )
-
-            stats: dict[str, int] = {}
-            provider, rows = _execute_with_sink(
-                query=query,
-                providers=providers,
-                run=run,
-                sink=sink,
-                observer=observer,
-                tool_name="executar_buscas_videos",
-                stats=stats,
-            )
-            results.append(
+        for index, query in enumerate(requested):
+            limit, window_start, window_end, _purpose = _query_options(context, query, 5)
+            active.append(
                 {
+                    "index": index,
                     "query": query,
-                    "provider": provider,
-                    "status": "OK" if rows else "NO_RESULTS",
-                    "returned": int(stats.get("returned", 0)),
-                    "accepted": int(stats.get("accepted", 0)),
-                    "hits": [],
+                    "limit": limit,
+                    "window_start": window_start,
+                    "window_end": window_end,
                 }
             )
 
+        if active:
+            workers = (
+                min(len(active), max(1, int(settings.search_parallel_video_workers)))
+                if settings.search_parallel_enabled
+                else 1
+            )
+            futures: dict[int, Future] = {}
+
+            with ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="media-video",
+            ) as executor:
+                for item in active:
+                    query = str(item["query"])
+                    if observer is not None:
+                        observer.query_started(query=query, tool_name="executar_buscas_videos")
+                        if "duckduckgo" in providers:
+                            observer.provider_attempted(
+                                query=query,
+                                provider="duckduckgo",
+                                tool_name="executar_buscas_videos",
+                            )
+
+                    futures[int(item["index"])] = executor.submit(
+                        _search_videos,
+                        query,
+                        max_results=int(item["limit"]),
+                        providers=providers,
+                        window_start=item["window_start"],
+                        window_end=item["window_end"],
+                        observer=None,
+                        tool_name="executar_buscas_videos",
+                        raise_unavailable=True,
+                    )
+
+                for item in active:
+                    index = int(item["index"])
+                    query = str(item["query"])
+                    try:
+                        provider, raw_rows = futures[index].result()
+                        accepted_rows = sink(raw_rows, provider, query) if sink else raw_rows
+                        if observer is not None:
+                            observer.provider_result(
+                                query=query,
+                                provider=provider,
+                                tool_name="executar_buscas_videos",
+                                returned=len(raw_rows),
+                                accepted=len(accepted_rows),
+                            )
+                            observer.query_finished(
+                                query=query,
+                                tool_name="executar_buscas_videos",
+                            )
+                        result_by_index[index] = {
+                            "query": query,
+                            "provider": provider,
+                            "status": "OK" if accepted_rows else "NO_RESULTS",
+                            "returned": len(raw_rows),
+                            "accepted": len(accepted_rows),
+                            "hits": [],
+                        }
+                    except Exception as exc:
+                        if observer is not None:
+                            observer.provider_error(
+                                query=query,
+                                provider="duckduckgo",
+                                tool_name="executar_buscas_videos",
+                                error=str(exc),
+                            )
+                            observer.query_finished(
+                                query=query,
+                                tool_name="executar_buscas_videos",
+                            )
+                        result_by_index[index] = {
+                            "query": query,
+                            "provider": "duckduckgo",
+                            "status": "ERROR",
+                            "error": str(exc),
+                            "returned": 0,
+                            "accepted": 0,
+                            "hits": [],
+                        }
+
+        results = [result_by_index[index] for index in range(len(requested))]
         return AgentBulkSearchResponse.model_validate(
             {"results": results}
         ).model_dump(mode="json")
