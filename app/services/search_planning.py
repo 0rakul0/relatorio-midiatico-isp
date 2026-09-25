@@ -17,7 +17,7 @@ from app.source_registry import (
     OFFICIAL_SECURITY_SOURCES,
     PRIORITY_MEDIA_SOURCES,
 )
-from app.topic_profile import build_topic_profile, normalized_text
+from app.topic_profile import build_topic_profile, canonicalize_known_locations, normalized_text
 from app.services.collection.guards import query_preserves_project_anchor
 from app.services.execution_profile import (
     execution_flags,
@@ -179,6 +179,11 @@ def _sanitize_strategy(
     raw = raw or {}
 
     primary = " ".join(str(raw.get("primary_query") or "").split()).strip()
+    if primary:
+        # Normaliza aliases geográficos conhecidos também quando a estratégia
+        # veio da LLM. Assim, a grafia digitada pelo usuário não vira a âncora
+        # propagada para todos os portais prioritários.
+        primary = canonicalize_known_locations(primary)
     if not primary or not _media_query_is_acceptable(project, primary):
         primary = str(fallback["primary_query"])
 
@@ -186,6 +191,8 @@ def _sanitize_strategy(
     complementary: list[str] = []
     for candidate in raw.get("complementary_queries") or []:
         candidate = " ".join(str(candidate or "").split()).strip()
+        if candidate:
+            candidate = canonicalize_known_locations(candidate)
         if not candidate:
             continue
         if not _media_query_is_acceptable(project, candidate):
