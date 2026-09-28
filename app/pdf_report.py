@@ -267,7 +267,7 @@ def build_pdf(data: dict) -> bytes:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import cm
-    from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.platypus import Flowable, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     report = data["report"]
     project = data["project"]
@@ -349,6 +349,63 @@ def build_pdf(data: dict) -> bytes:
         textColor=colors.HexColor("#66788a"),
         spaceBefore=2,
     )
+
+    class LeftAccentParagraph(Flowable):
+        """Parágrafo quebrável com barra vertical azul à esquerda."""
+
+        def __init__(
+            self,
+            text: str,
+            paragraph_style,
+            *,
+            bar_color: str = "#0879bd",
+            bar_width: float = 2.2,
+            gap: float = 9.0,
+        ):
+            super().__init__()
+            self.text = text
+            self.paragraph_style = paragraph_style
+            self.bar_color = bar_color
+            self.bar_width = bar_width
+            self.gap = gap
+            self.paragraph = Paragraph(text, paragraph_style)
+            self._content_width = 0.0
+
+        def wrap(self, avail_width, avail_height):
+            self._content_width = max(1.0, avail_width - self.bar_width - self.gap)
+            _, height = self.paragraph.wrap(self._content_width, avail_height)
+            self.width = avail_width
+            self.height = height
+            return avail_width, height
+
+        def split(self, avail_width, avail_height):
+            content_width = max(1.0, avail_width - self.bar_width - self.gap)
+            parts = self.paragraph.split(content_width, avail_height)
+            if len(parts) <= 1:
+                return []
+
+            flowables = []
+            for part in parts:
+                block = LeftAccentParagraph(
+                    "",
+                    self.paragraph_style,
+                    bar_color=self.bar_color,
+                    bar_width=self.bar_width,
+                    gap=self.gap,
+                )
+                block.paragraph = part
+                flowables.append(block)
+            return flowables
+
+        def draw(self):
+            canvas = self.canv
+            canvas.saveState()
+            canvas.setStrokeColor(colors.HexColor(self.bar_color))
+            canvas.setLineWidth(self.bar_width)
+            x = self.bar_width / 2.0
+            canvas.line(x, 0, x, self.height)
+            canvas.restoreState()
+            self.paragraph.drawOn(canvas, self.bar_width + self.gap, 0)
 
     buffer = BytesIO()
 
@@ -509,7 +566,15 @@ def build_pdf(data: dict) -> bytes:
         )
 
 
-    add_section("Resumo Executivo", report["executive_summary"])
+    executive_summary = report.get("executive_summary")
+    if _has_content(executive_summary):
+        story.append(Paragraph("Resumo Executivo", heading))
+        story.append(
+            LeftAccentParagraph(
+                escape(_text(executive_summary)).replace("\n", "<br/>"),
+                body,
+            )
+        )
 
     story.append(Paragraph("Itens relacionados encontrados", heading))
     duplicate_total = sum(int(item.get("duplicate_count") or 0) for item in corpus)
