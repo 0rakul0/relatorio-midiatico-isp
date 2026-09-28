@@ -3,7 +3,7 @@
 ## Um pipeline auditável com modelos de linguagem, recuperação semântica e memória de corpus para análise de cobertura jornalística
 
 > **Status:** protótipo de pesquisa / MVP operacional  
-> **Versão do software:** 0.4.0  
+> **Versão do software:** 0.5.0  
 > **Domínio de aplicação:** monitoramento e análise de repercussão midiática em segurança pública  
 > **Instituição de referência:** Instituto de Segurança Pública do Estado do Rio de Janeiro (ISP-RJ)
 
@@ -18,6 +18,32 @@ Este trabalho apresenta o **Relatório de Repercussão Midiática — ISP**, um 
 Uma segunda contribuição é a construção incremental de uma memória de corpus. Documentos coletados são normalizados, deduplicados e armazenados globalmente, podendo ser recuperados em pesquisas posteriores por similaridade temática, lexical e semântica. As decisões de validação geram exemplos supervisionados que alimentam um reranker local, mantendo a decisão final sob a camada auditável de validação. Dessa forma, pesquisas anteriores tornam-se conhecimento reutilizável sem assumir que a relevância de uma matéria para um novo tema seja idêntica à decisão tomada no projeto original.
 
 **Palavras-chave:** repercussão midiática; recuperação de informação; modelos de linguagem; RAG; monitoramento de mídia; proveniência; auditoria; segurança pública; recuperação semântica.
+
+---
+
+## Funcionalidades atuais
+
+O MVP operacional reúne, em uma única trilha auditável, descoberta, validação, análise e apresentação da repercussão:
+
+- planejamento compacto de consultas, com normalização de entidades, variantes de grafia e expansão controlada de termos;
+- separação entre janela factual e janela de repercussão, sem impor restrição temporal artificial quando o tema não informa período;
+- busca temporal distribuída quando a natureza da pauta exige cobertura por períodos, inclusive consultas mensais para inventários anuais;
+- coleta paralela de frentes independentes para reduzir o tempo total de execução;
+- fallback de busca quando uma consulta retorna zero resultados, com novas tentativas por grafias alternativas, sinônimos jornalísticos e formulações mais amplas;
+- persistência dos resultados brutos, inclusive itens posteriormente rejeitados, preservando a trilha de auditoria;
+- hidratação, validação semântica, deduplicação e reutilização do corpus histórico;
+- camada factual opcional para pessoas, eventos, locais, circunstâncias e operações policiais;
+- inventário de operações com mês, data, nome da operação, local, forças envolvidas, quantidade de matérias e links oficiais/midiáticos; quando a camada factual ainda não individualiza os eventos, pode ser produzido inventário provisório auditável a partir das menções validadas;
+- detecção de lacunas e busca complementar antes da redação;
+- QA capaz de sinalizar ou bloquear relatórios com lacunas críticas, como ausência de corpus jornalístico suficiente para sustentar a análise;
+- refinamento posterior do relatório preservando corpus, evidências e rastreabilidade;
+- acompanhamento visual da execução por etapa, com estados não iniciado, em execução e concluído, além de interrupção da execução;
+- chat sobre a base histórica de notícias e projetos;
+- exportação Web/PDF com seções vazias omitidas, anexos auditáveis, tabelas pagináveis no PDF, repetição de cabeçalhos, controle de títulos órfãos e texto editorial justificado;
+- nuvem de palavras do corpus jornalístico posicionada antes do Resumo Executivo;
+- Resumo Executivo destacado visualmente por barra lateral azul no PDF, em consonância com a apresentação Web.
+
+Esses recursos devem ser entendidos como capacidades do protótipo. A cobertura observada continua condicionada aos índices dos mecanismos de busca, à disponibilidade das páginas e à qualidade dos metadados recuperados.
 
 ---
 
@@ -108,7 +134,8 @@ flowchart LR
     K --> L[Busca complementar]
     L --> M[Redação]
     M --> N[QA]
-    N --> O[Relatório / PDF]
+    N --> O[Relatório Web / PDF]
+    O --> R[Refinamento auditável]
     H --> P[Exemplos supervisionados]
     P --> Q[Reranker local]
     Q --> C
@@ -437,7 +464,14 @@ Os principais resultados funcionais são:
 - detecção de lacunas de cobertura;
 - registro de chamadas e custos de LLM;
 - geração versionada de relatório;
-- QA antes da exportação final.
+- QA antes da exportação final;
+- fallback de coleta para consultas sem resultados e expansão controlada de entidades;
+- execução paralela de frentes independentes de coleta;
+- inventário estruturado de operações policiais quando aplicável;
+- refinamento de relatórios com preservação da base auditável;
+- acompanhamento visual do pipeline e interrupção da execução;
+- chat sobre projetos e corpus históricos;
+- PDF editorial com omissão de seções vazias, controle de paginação, cabeçalhos repetidos em tabelas, nuvem de palavras e destaque do Resumo Executivo.
 
 ### 4.2 Reutilização do conhecimento
 
@@ -681,7 +715,7 @@ Enquanto não houver publicação acadêmica associada ao projeto, o software po
 ```text
 Relatório de Repercussão Midiática — ISP.
 Sistema auditável para coleta, validação e análise de repercussão midiática.
-Versão 0.4.0. 2026.
+Versão 0.5.0. 2026.
 ```
 
 ---
