@@ -74,6 +74,13 @@ def _has_content(value: object) -> bool:
     return True
 
 
+def _has_meaningful_fields(item: object, fields: tuple[str, ...]) -> bool:
+    """True quando ao menos um campo editorial relevante possui conteúdo real."""
+    if not isinstance(item, dict):
+        return False
+    return any(_has_content(item.get(field)) for field in fields)
+
+
 def _pdf_word_cloud_flowable(word_cloud: dict, width: float):
     """Desenha no PDF a mesma linguagem visual da nuvem exibida na web."""
     import math
@@ -276,10 +283,37 @@ def build_pdf(data: dict) -> bytes:
         data.get("corpus", []),
         data.get("corpus_by_origin") or {},
     )
-    facts = data.get("fact_events", [])
-    operations = data.get("operation_events", [])
+    facts = [
+        item for item in (data.get("fact_events", []) or [])
+        if _has_meaningful_fields(
+            item,
+            (
+                "subject_name", "institution", "rank_or_role", "unit",
+                "event_date", "death_date", "cause", "circumstance",
+                "address", "neighborhood", "city", "state",
+                "death_place_name", "death_address", "death_neighborhood",
+                "death_city", "death_state",
+            ),
+        )
+    ]
+    operations = [
+        item for item in (data.get("operation_events", []) or [])
+        if _has_meaningful_fields(
+            item,
+            (
+                "operation_name", "event_date", "neighborhoods", "city", "state",
+                "forces", "official_urls", "media_urls", "repercussion_count",
+            ),
+        )
+    ]
     fact_evidence = data.get("fact_evidence", [])
-    academic_papers = data.get("academic_papers", [])
+    academic_papers = [
+        item for item in (data.get("academic_papers", []) or [])
+        if _has_meaningful_fields(
+            item,
+            ("title", "title_original", "authors", "published_at", "relation_to_topic", "url"),
+        )
+    ]
     social_repercussion = data.get("social_repercussion") or {}
     word_cloud = data.get("word_cloud") or {}
     by_origin = _split_by_origin(corpus)
@@ -527,14 +561,22 @@ def build_pdf(data: dict) -> bytes:
         story.append(Paragraph(f"PARTE {part_number} - {name}", heading))
 
     cloud_words = list(word_cloud.get("words") or [])
+    cross_validation_preview = metrics.get("youtube_cross_validation") or {}
+    cross_validation_has_content = any(
+        int(cross_validation_preview.get(key, 0) or 0) > 0
+        for key in ("confirmed", "partial", "insufficient", "conflicts")
+    ) or int(metrics.get("youtube_conflicts_excluded", 0) or 0) > 0
     panorama_has_content = any(
         (
             bool(cloud_words),
             _has_content(report.get("executive_summary")),
+            _has_content(report.get("opening")),
+            _has_content(report.get("panorama")),
             bool(corpus),
             bool(metrics.get("top_youtube_channels") or []),
             bool(metrics.get("top_reach_contents") or []),
-            bool(metrics.get("youtube_cross_validation") or {}),
+            cross_validation_has_content,
+            int(social_repercussion.get("comments") or 0) > 0,
         )
     )
     if panorama_has_content:
@@ -587,22 +629,23 @@ def build_pdf(data: dict) -> bytes:
                 )
             )
 
-        story.append(Paragraph("Itens relacionados encontrados", heading))
-        duplicate_total = sum(int(item.get("duplicate_count") or 0) for item in corpus)
-        duplicate_note = (
-            f" {duplicate_total} entrada(s) repetida(s) foram consolidadas para evitar dupla contagem."
-            if duplicate_total
-            else ""
-        )
-        story.append(
-            Paragraph(
-                f"{len(corpus)} item(ns) único(s) validado(s) como materialmente relacionados ao tema: "
-                f"{len(social_items)} em mídias sociais, {len(youtube_items)} no YouTube e "
-                f"{len(portal_items)} em portais de notícias."
-                f"{duplicate_note} O detalhamento item a item está nos anexos.",
-                small,
+        if corpus:
+            story.append(Paragraph("Itens relacionados encontrados", heading))
+            duplicate_total = sum(int(item.get("duplicate_count") or 0) for item in corpus)
+            duplicate_note = (
+                f" {duplicate_total} entrada(s) repetida(s) foram consolidadas para evitar dupla contagem."
+                if duplicate_total
+                else ""
             )
-        )
+            story.append(
+                Paragraph(
+                    f"{len(corpus)} item(ns) único(s) validado(s) como materialmente relacionados ao tema: "
+                    f"{len(social_items)} em mídias sociais, {len(youtube_items)} no YouTube e "
+                    f"{len(portal_items)} em portais de notícias."
+                    f"{duplicate_note} O detalhamento item a item está nos anexos.",
+                    small,
+                )
+            )
 
         social_comments = int(social_repercussion.get("comments") or 0)
         social_analyzed = int(social_repercussion.get("analyzed_comments") or 0)
@@ -953,8 +996,14 @@ def build_pdf(data: dict) -> bytes:
             small,
         ))
 
-    thematic_axes = list(report.get("thematic_axes") or [])
-    risk_assessment = list(report.get("risk_assessment") or [])
+    thematic_axes = [
+        item for item in (report.get("thematic_axes") or [])
+        if _has_meaningful_fields(item, ("axis", "anchor_data", "coverage"))
+    ]
+    risk_assessment = [
+        item for item in (report.get("risk_assessment") or [])
+        if _has_meaningful_fields(item, ("dimension", "assessment", "evidence"))
+    ]
     part3_has_content = any(
         (
             _has_content(report.get("dominant_framing")),
@@ -1104,8 +1153,11 @@ def build_pdf(data: dict) -> bytes:
 
 
     synthesis = report.get("synthesis")
-    recommendations = list(report.get("recommendations") or [])
-    press_kit = list(report.get("press_kit") or [])
+    recommendations = [item for item in (report.get("recommendations") or []) if _has_content(item)]
+    press_kit = [
+        item for item in (report.get("press_kit") or [])
+        if _has_meaningful_fields(item, ("product", "purpose"))
+    ]
     if _has_content(synthesis) or recommendations or press_kit:
         add_part("SÍNTESE E ENCAMINHAMENTOS")
         add_section("Síntese", synthesis)
