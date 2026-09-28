@@ -521,376 +521,387 @@ def build_pdf(data: dict) -> bytes:
     part_number = 0
 
     def add_part(name: str) -> None:
-        """Numera apenas as partes realmente renderizadas no PDF."""
+        """Numera somente partes que efetivamente serão renderizadas."""
         nonlocal part_number
         part_number += 1
         story.append(Paragraph(f"PARTE {part_number} - {name}", heading))
 
-    add_part("PANORAMA DA REPERCUSSÃO")
     cloud_words = list(word_cloud.get("words") or [])
-    if cloud_words:
-        cloud_visual = _pdf_word_cloud_flowable(
-            word_cloud,
-            document.width,
-        )
-        merged_variants = int(word_cloud.get("merged_variants") or 0)
-        cloud_note = (
-            f"{word_cloud.get('documents', 0)} notícia(s) validada(s) de portais; "
-            "stopwords e nomes de sites removidos"
-        )
-        if merged_variants:
-            cloud_note += (
-                f"; {merged_variants} variante(s) linguística(s) consolidada(s)"
-            )
-        cloud_note += "."
-
-        story.append(
-            KeepTogether(
-                [
-                    cloud_visual,
-                    Spacer(1, 4),
-                    Paragraph(cloud_note, cloud_note_style),
-                ]
-            )
-        )
-    else:
-        story.append(
-            KeepTogether(
-                [
-                    Paragraph(
-                        "Nenhuma palavra relevante disponível no corpus jornalístico validado.",
-                        small,
-                    ),
-                ]
-            )
-        )
-
-
-    executive_summary = report.get("executive_summary")
-    if _has_content(executive_summary):
-        story.append(Paragraph("Resumo Executivo", heading))
-        story.append(
-            LeftAccentParagraph(
-                escape(_text(executive_summary)).replace("\n", "<br/>"),
-                body,
-            )
-        )
-
-    story.append(Paragraph("Itens relacionados encontrados", heading))
-    duplicate_total = sum(int(item.get("duplicate_count") or 0) for item in corpus)
-    duplicate_note = (
-        f" {duplicate_total} entrada(s) repetida(s) foram consolidadas para evitar dupla contagem."
-        if duplicate_total
-        else ""
-    )
-    story.append(
-        Paragraph(
-            f"{len(corpus)} item(ns) único(s) validado(s) como materialmente relacionados ao tema: "
-            f"{len(social_items)} em mídias sociais, {len(youtube_items)} no YouTube e "
-            f"{len(portal_items)} em portais de notícias."
-            f"{duplicate_note} O detalhamento item a item está nos anexos.",
-            small,
+    panorama_has_content = any(
+        (
+            bool(cloud_words),
+            _has_content(report.get("executive_summary")),
+            bool(corpus),
+            bool(metrics.get("top_youtube_channels") or []),
+            bool(metrics.get("top_reach_contents") or []),
+            bool(metrics.get("youtube_cross_validation") or {}),
         )
     )
+    if panorama_has_content:
+        add_part("PANORAMA DA REPERCUSSÃO")
+        if cloud_words:
+            cloud_visual = _pdf_word_cloud_flowable(
+                word_cloud,
+                document.width,
+            )
+            merged_variants = int(word_cloud.get("merged_variants") or 0)
+            cloud_note = (
+                f"{word_cloud.get('documents', 0)} notícia(s) validada(s) de portais; "
+                "stopwords e nomes de sites removidos"
+            )
+            if merged_variants:
+                cloud_note += (
+                    f"; {merged_variants} variante(s) linguística(s) consolidada(s)"
+                )
+            cloud_note += "."
 
-    social_comments = int(social_repercussion.get("comments") or 0)
-    social_analyzed = int(social_repercussion.get("analyzed_comments") or 0)
-    if social_comments:
-        def social_label(value: object) -> str:
-            labels = {
-                "instagram": "Instagram",
-                "facebook": "Facebook",
-                "x": "X",
-                "POSITIVO": "Positivo",
-                "NEGATIVO": "Negativo",
-                "NEUTRO": "Neutro",
-                "AMBIGUO": "Ambíguo",
-                "MEDO": "Medo",
-                "INDIGNACAO": "Indignação",
-                "CONFIANCA": "Confiança",
-                "DESCONFIANCA": "Desconfiança",
-                "TRISTEZA": "Tristeza",
-                "IRONIA": "Ironia",
-                "ESPERANCA": "Esperança",
-                "OUTRA": "Outra",
-                "NAO_IDENTIFICAVEL": "Não identificável",
-                "APOIO": "Apoio",
-                "CRITICA": "Crítica",
-                "PREOCUPACAO": "Preocupação",
-                "DUVIDA": "Dúvida",
-                "RELATO_PESSOAL": "Relato pessoal",
-            }
-            raw = _text(value)
-            return labels.get(raw, raw.replace("_", " ").title())
-
-        story.append(Paragraph("Percepção observada nas redes sociais", heading))
-        if social_repercussion.get("summary"):
             story.append(
-                Paragraph(
-                    escape(_text(social_repercussion.get("summary"))),
+                KeepTogether(
+                    [
+                        cloud_visual,
+                        Spacer(1, 4),
+                        Paragraph(cloud_note, cloud_note_style),
+                    ]
+                )
+            )
+        else:
+            story.append(
+                KeepTogether(
+                    [
+                        Paragraph(
+                            "Nenhuma palavra relevante disponível no corpus jornalístico validado.",
+                            small,
+                        ),
+                    ]
+                )
+            )
+
+
+        executive_summary = report.get("executive_summary")
+        if _has_content(executive_summary):
+            story.append(Paragraph("Resumo Executivo", heading))
+            story.append(
+                LeftAccentParagraph(
+                    escape(_text(executive_summary)).replace("\n", "<br/>"),
                     body,
                 )
             )
 
+        story.append(Paragraph("Itens relacionados encontrados", heading))
+        duplicate_total = sum(int(item.get("duplicate_count") or 0) for item in corpus)
+        duplicate_note = (
+            f" {duplicate_total} entrada(s) repetida(s) foram consolidadas para evitar dupla contagem."
+            if duplicate_total
+            else ""
+        )
         story.append(
-            _table(
-                [
-                    ["Posts sociais", "Comentários coletados", "Comentários analisados"],
-                    [
-                        social_repercussion.get("posts", 0),
-                        social_comments,
-                        social_analyzed,
-                    ],
-                ],
-                [5.5 * cm, 5.5 * cm, 5.6 * cm],
+            Paragraph(
+                f"{len(corpus)} item(ns) único(s) validado(s) como materialmente relacionados ao tema: "
+                f"{len(social_items)} em mídias sociais, {len(youtube_items)} no YouTube e "
+                f"{len(portal_items)} em portais de notícias."
+                f"{duplicate_note} O detalhamento item a item está nos anexos.",
                 small,
             )
         )
 
-        platform_counts = social_repercussion.get("platform_counts") or {}
-        if platform_counts:
-            story.append(Paragraph("Distribuição por plataforma", heading))
+        social_comments = int(social_repercussion.get("comments") or 0)
+        social_analyzed = int(social_repercussion.get("analyzed_comments") or 0)
+        if social_comments:
+            def social_label(value: object) -> str:
+                labels = {
+                    "instagram": "Instagram",
+                    "facebook": "Facebook",
+                    "x": "X",
+                    "POSITIVO": "Positivo",
+                    "NEGATIVO": "Negativo",
+                    "NEUTRO": "Neutro",
+                    "AMBIGUO": "Ambíguo",
+                    "MEDO": "Medo",
+                    "INDIGNACAO": "Indignação",
+                    "CONFIANCA": "Confiança",
+                    "DESCONFIANCA": "Desconfiança",
+                    "TRISTEZA": "Tristeza",
+                    "IRONIA": "Ironia",
+                    "ESPERANCA": "Esperança",
+                    "OUTRA": "Outra",
+                    "NAO_IDENTIFICAVEL": "Não identificável",
+                    "APOIO": "Apoio",
+                    "CRITICA": "Crítica",
+                    "PREOCUPACAO": "Preocupação",
+                    "DUVIDA": "Dúvida",
+                    "RELATO_PESSOAL": "Relato pessoal",
+                }
+                raw = _text(value)
+                return labels.get(raw, raw.replace("_", " ").title())
+
+            story.append(Paragraph("Percepção observada nas redes sociais", heading))
+            if social_repercussion.get("summary"):
+                story.append(
+                    Paragraph(
+                        escape(_text(social_repercussion.get("summary"))),
+                        body,
+                    )
+                )
+
             story.append(
                 _table(
-                    [["Plataforma", "Comentários"]]
-                    + [
-                        [social_label(label), int(count or 0)]
-                        for label, count in sorted(
-                            platform_counts.items(),
-                            key=lambda item: int(item[1] or 0),
-                            reverse=True,
-                        )
+                    [
+                        ["Posts sociais", "Comentários coletados", "Comentários analisados"],
+                        [
+                            social_repercussion.get("posts", 0),
+                            social_comments,
+                            social_analyzed,
+                        ],
                     ],
-                    [8.3 * cm, 8.3 * cm],
+                    [5.5 * cm, 5.5 * cm, 5.6 * cm],
                     small,
                 )
             )
 
-        def add_social_distribution(title: str, values: dict):
-            if not values or not social_analyzed:
-                return
-            rows = []
-            for label, count in sorted(
-                values.items(),
-                key=lambda item: int(item[1] or 0),
-                reverse=True,
-            ):
-                count_value = int(count or 0)
-                percent = (count_value * 100.0 / social_analyzed) if social_analyzed else 0
-                rows.append(
+            platform_counts = social_repercussion.get("platform_counts") or {}
+            if platform_counts:
+                story.append(Paragraph("Distribuição por plataforma", heading))
+                story.append(
+                    _table(
+                        [["Plataforma", "Comentários"]]
+                        + [
+                            [social_label(label), int(count or 0)]
+                            for label, count in sorted(
+                                platform_counts.items(),
+                                key=lambda item: int(item[1] or 0),
+                                reverse=True,
+                            )
+                        ],
+                        [8.3 * cm, 8.3 * cm],
+                        small,
+                    )
+                )
+
+            def add_social_distribution(title: str, values: dict):
+                if not values or not social_analyzed:
+                    return
+                rows = []
+                for label, count in sorted(
+                    values.items(),
+                    key=lambda item: int(item[1] or 0),
+                    reverse=True,
+                ):
+                    count_value = int(count or 0)
+                    percent = (count_value * 100.0 / social_analyzed) if social_analyzed else 0
+                    rows.append(
+                        [
+                            social_label(label),
+                            count_value,
+                            f"{percent:.1f}%".replace(".", ","),
+                        ]
+                    )
+                story.append(Paragraph(title, heading))
+                story.append(
+                    _table(
+                        [["Classificação", "Comentários", "Participação na amostra"]]
+                        + rows,
+                        [7.0 * cm, 4.0 * cm, 5.6 * cm],
+                        small,
+                    )
+                )
+
+            add_social_distribution(
+                "Sentimento observado",
+                social_repercussion.get("sentiment_counts") or {},
+            )
+            add_social_distribution(
+                "Emoções observadas",
+                social_repercussion.get("emotion_counts") or {},
+            )
+            add_social_distribution(
+                "Posição em relação ao tema",
+                social_repercussion.get("position_counts") or {},
+            )
+
+            themes = list(social_repercussion.get("themes") or [])
+            if themes:
+                story.append(Paragraph("Temas recorrentes nos comentários", heading))
+                story.append(
+                    _table(
+                        [["#", "Tema", "Ocorrências"]]
+                        + [
+                            [index + 1, item.get("theme") or "N/D", item.get("count") or 0]
+                            for index, item in enumerate(themes)
+                        ],
+                        [1.4 * cm, 12.6 * cm, 2.6 * cm],
+                        small,
+                    )
+                )
+
+            methodology_note = social_repercussion.get("methodology_note")
+            if methodology_note:
+                story.append(
+                    Paragraph(
+                        "<b>Nota metodológica:</b> "
+                        + escape(_text(methodology_note)),
+                        small,
+                    )
+                )
+
+        add_section("Abertura", report["opening"])
+        add_section("I. Panorama da Repercussão", report["panorama"])
+
+
+
+        thematic_fronts = len(report.get("thematic_axes", []))
+        metric_content = [
+            Paragraph(
+                "REPERCUSSÃO POR NÚMEROS",
+                ParagraphStyle("MetricHeading", parent=heading, fontSize=11, leading=14, textColor=colors.black, spaceBefore=8),
+            )
+        ]
+        number_lines = [
+            f"<b>{metrics.get('valid_items', 0)} itens distintos verificados</b> na amostra auditável;",
+            f"<b>{metrics.get('unique_vehicles', 0)} veículos distintos</b> com cobertura auditável;",
+            f"<b>{thematic_fronts} frentes temáticas</b> sintetizadas no relatório;",
+            f"<b>{metrics.get('discarded_items', 0)} itens descartados</b> por insuficiência de relação documental;",
+            f"<b>{metrics.get('collection_days', 0)} dia(s)</b> na janela de observação;",
+            f"<b>{metrics.get('isp_mentioned_items', 0)} itens ({metrics.get('isp_mention_percent', 0)}%)</b> mencionam a instituição na amostra.",
+        ]
+        metric_content.extend([Paragraph("• " + line, body) for line in number_lines])
+        scout = metrics.get("media_scout", {})
+        if scout:
+            platforms = " · ".join(
+                f"{item.get('platform')}: {item.get('status')}"
+                for item in scout.get("platforms", [])
+            )
+            metric_content.append(
+                Paragraph(
+                    f"<b>{escape(_text(scout.get('name', 'Agente de monitoramento de veículos')))}</b> - "
+                    f"{scout.get('web_tasks', 0)} consultas em sites e {scout.get('youtube_tasks', 0)} no YouTube planejadas. "
+                    f"{escape(_text(platforms))}",
+                    small,
+                )
+            )
+        youtube_note = metrics.get("youtube_collection_note")
+        if youtube_note:
+            metric_content.append(Paragraph(f"<b>Nota sobre YouTube:</b> {escape(_text(youtube_note))}", small))
+        story.append(KeepTogether(metric_content))
+
+        portal_checks = [
+            item for item in metrics.get("portal_checks", [])
+            if item.get("result") == "com cobertura auditável"
+        ]
+        if portal_checks:
+            story.append(Paragraph("CHECAGEM DE PORTAIS PRIORITÁRIOS", heading))
+            story.append(
+                _table(
+                    [["Portal", "Resultado", "Evidência"]]
+                    + [[item["portal"], item["result"], item["evidence"]] for item in portal_checks],
+                    [2.6 * cm, 4.2 * cm, 9.8 * cm],
+                    small,
+                    header_color=colors.HexColor("#f0f0f0"),
+                    header_text=colors.black,
+                )
+            )
+
+        priority_channels = [
+            item for item in metrics.get("youtube_priority_channel_checks", [])
+            if item.get("result") == "com cobertura auditável"
+        ]
+        if priority_channels:
+            story.append(
+                KeepTogether(
                     [
-                        social_label(label),
-                        count_value,
-                        f"{percent:.1f}%".replace(".", ","),
+                        Paragraph("CHECAGEM DE CANAIS PRIORITÁRIOS NO YOUTUBE", heading),
+                        _table(
+                            [["Canal", "Resultado", "Vídeos", "Visualizações", "Link"]]
+                            + [
+                                [
+                                    item.get("channel", "N/D"),
+                                    item.get("result", "N/D"),
+                                    item.get("videos", 0),
+                                    _view_count_label(item.get("views")),
+                                    _pdf_link(item.get("lead_url")),
+                                ]
+                                for item in priority_channels
+                            ],
+                            [4.2 * cm, 5.0 * cm, 1.8 * cm, 2.6 * cm, 3.0 * cm],
+                            small,
+                            header_color=colors.HexColor("#f0f0f0"),
+                            header_text=colors.black,
+                        ),
                     ]
                 )
-            story.append(Paragraph(title, heading))
-            story.append(
-                _table(
-                    [["Classificação", "Comentários", "Participação na amostra"]]
-                    + rows,
-                    [7.0 * cm, 4.0 * cm, 5.6 * cm],
-                    small,
-                )
             )
 
-        add_social_distribution(
-            "Sentimento observado",
-            social_repercussion.get("sentiment_counts") or {},
-        )
-        add_social_distribution(
-            "Emoções observadas",
-            social_repercussion.get("emotion_counts") or {},
-        )
-        add_social_distribution(
-            "Posição em relação ao tema",
-            social_repercussion.get("position_counts") or {},
-        )
-
-        themes = list(social_repercussion.get("themes") or [])
-        if themes:
-            story.append(Paragraph("Temas recorrentes nos comentários", heading))
-            story.append(
-                _table(
-                    [["#", "Tema", "Ocorrências"]]
-                    + [
-                        [index + 1, item.get("theme") or "N/D", item.get("count") or 0]
-                        for index, item in enumerate(themes)
-                    ],
-                    [1.4 * cm, 12.6 * cm, 2.6 * cm],
-                    small,
-                )
-            )
-
-        methodology_note = social_repercussion.get("methodology_note")
-        if methodology_note:
+        cross_validation = metrics.get("youtube_cross_validation", {})
+        compared = sum(int(cross_validation.get(key, 0) or 0) for key in ("confirmed", "partial", "insufficient", "conflicts"))
+        if compared or metrics.get("youtube_conflicts_excluded", 0):
+            story.append(Paragraph("VALIDAÇÃO CRUZADA DE VÍDEOS", heading))
             story.append(
                 Paragraph(
-                    "<b>Nota metodológica:</b> "
-                    + escape(_text(methodology_note)),
+                    "<b>{confirmed}</b> confirmado(s), <b>{partial}</b> parcialmente confirmado(s), "
+                    "<b>{insufficient}</b> com evidência insuficiente e <b>{conflicts}</b> conflito(s). "
+                    "Itens com conflito material foram excluídos das tabelas de cobertura e ranking.".format(
+                        confirmed=cross_validation.get("confirmed", 0),
+                        partial=cross_validation.get("partial", 0),
+                        insufficient=cross_validation.get("insufficient", 0),
+                        conflicts=cross_validation.get("conflicts", 0),
+                    ),
                     small,
                 )
             )
 
-    add_section("Abertura", report["opening"])
-    add_section("I. Panorama da Repercussão", report["panorama"])
-
-
-
-    thematic_fronts = len(report.get("thematic_axes", []))
-    metric_content = [
-        Paragraph(
-            "REPERCUSSÃO POR NÚMEROS",
-            ParagraphStyle("MetricHeading", parent=heading, fontSize=11, leading=14, textColor=colors.black, spaceBefore=8),
-        )
-    ]
-    number_lines = [
-        f"<b>{metrics.get('valid_items', 0)} itens distintos verificados</b> na amostra auditável;",
-        f"<b>{metrics.get('unique_vehicles', 0)} veículos distintos</b> com cobertura auditável;",
-        f"<b>{thematic_fronts} frentes temáticas</b> sintetizadas no relatório;",
-        f"<b>{metrics.get('discarded_items', 0)} itens descartados</b> por insuficiência de relação documental;",
-        f"<b>{metrics.get('collection_days', 0)} dia(s)</b> na janela de observação;",
-        f"<b>{metrics.get('isp_mentioned_items', 0)} itens ({metrics.get('isp_mention_percent', 0)}%)</b> mencionam a instituição na amostra.",
-    ]
-    metric_content.extend([Paragraph("• " + line, body) for line in number_lines])
-    scout = metrics.get("media_scout", {})
-    if scout:
-        platforms = " · ".join(
-            f"{item.get('platform')}: {item.get('status')}"
-            for item in scout.get("platforms", [])
-        )
-        metric_content.append(
-            Paragraph(
-                f"<b>{escape(_text(scout.get('name', 'Agente de monitoramento de veículos')))}</b> - "
-                f"{scout.get('web_tasks', 0)} consultas em sites e {scout.get('youtube_tasks', 0)} no YouTube planejadas. "
-                f"{escape(_text(platforms))}",
-                small,
-            )
-        )
-    youtube_note = metrics.get("youtube_collection_note")
-    if youtube_note:
-        metric_content.append(Paragraph(f"<b>Nota sobre YouTube:</b> {escape(_text(youtube_note))}", small))
-    story.append(KeepTogether(metric_content))
-
-    portal_checks = [
-        item for item in metrics.get("portal_checks", [])
-        if item.get("result") == "com cobertura auditável"
-    ]
-    if portal_checks:
-        story.append(Paragraph("CHECAGEM DE PORTAIS PRIORITÁRIOS", heading))
-        story.append(
-            _table(
-                [["Portal", "Resultado", "Evidência"]]
-                + [[item["portal"], item["result"], item["evidence"]] for item in portal_checks],
-                [2.6 * cm, 4.2 * cm, 9.8 * cm],
-                small,
-                header_color=colors.HexColor("#f0f0f0"),
-                header_text=colors.black,
-            )
-        )
-
-    priority_channels = [
-        item for item in metrics.get("youtube_priority_channel_checks", [])
-        if item.get("result") == "com cobertura auditável"
-    ]
-    if priority_channels:
-        story.append(
-            KeepTogether(
-                [
-                    Paragraph("CHECAGEM DE CANAIS PRIORITÁRIOS NO YOUTUBE", heading),
-                    _table(
-                        [["Canal", "Resultado", "Vídeos", "Visualizações", "Link"]]
-                        + [
-                            [
-                                item.get("channel", "N/D"),
-                                item.get("result", "N/D"),
-                                item.get("videos", 0),
-                                _view_count_label(item.get("views")),
-                                _pdf_link(item.get("lead_url")),
-                            ]
-                            for item in priority_channels
-                        ],
-                        [4.2 * cm, 5.0 * cm, 1.8 * cm, 2.6 * cm, 3.0 * cm],
-                        small,
-                        header_color=colors.HexColor("#f0f0f0"),
-                        header_text=colors.black,
-                    ),
-                ]
-            )
-        )
-
-    cross_validation = metrics.get("youtube_cross_validation", {})
-    compared = sum(int(cross_validation.get(key, 0) or 0) for key in ("confirmed", "partial", "insufficient", "conflicts"))
-    if compared or metrics.get("youtube_conflicts_excluded", 0):
-        story.append(Paragraph("VALIDAÇÃO CRUZADA DE VÍDEOS", heading))
-        story.append(
-            Paragraph(
-                "<b>{confirmed}</b> confirmado(s), <b>{partial}</b> parcialmente confirmado(s), "
-                "<b>{insufficient}</b> com evidência insuficiente e <b>{conflicts}</b> conflito(s). "
-                "Itens com conflito material foram excluídos das tabelas de cobertura e ranking.".format(
-                    confirmed=cross_validation.get("confirmed", 0),
-                    partial=cross_validation.get("partial", 0),
-                    insufficient=cross_validation.get("insufficient", 0),
-                    conflicts=cross_validation.get("conflicts", 0),
-                ),
-                small,
-            )
-        )
-
-    top_channels = metrics.get("top_youtube_channels", [])
-    if top_channels:
-        story.append(
-            KeepTogether(
-                [
-                    Paragraph("CANAIS NO YOUTUBE", heading),
-                    _table(
-                        [["#", "Canal", "Vídeos validados", "Visualizações", "Link"]]
-                        + [
-                            [
-                                index + 1,
-                                item.get("channel", "N/D"),
-                                item.get("videos", 0),
-                                _view_count_label(item.get("views")),
-                                _pdf_link(item.get("lead_url")),
-                            ]
-                            for index, item in enumerate(top_channels)
-                        ],
-                        [0.9 * cm, 5.9 * cm, 2.8 * cm, 3.0 * cm, 4.0 * cm],
-                        small,
-                        nowrap_columns={0},
-                    ),
-                ]
-            )
-        )
-
-    top_reach_contents = metrics.get("top_reach_contents", [])
-    if top_reach_contents:
-        story.append(Paragraph("CONTEÚDOS POR ALCANCE DISPONÍVEL", heading))
-        story.append(
-            Paragraph(
-                escape(_text(metrics.get("top_reach_methodology", ""))),
-                small,
-            )
-        )
-        story.append(
-            _table(
-                [["#", "Plataforma", "Fonte", "Título", "Alcance", "Link"]]
-                + [
+        top_channels = metrics.get("top_youtube_channels", [])
+        if top_channels:
+            story.append(
+                KeepTogether(
                     [
-                        index + 1,
-                        item.get("platform", "N/D"),
-                        item.get("source", "N/D"),
-                        item.get("title", "N/D"),
-                        _view_count_label(item.get("reach")),
-                        _pdf_link(item.get("url")),
+                        Paragraph("CANAIS NO YOUTUBE", heading),
+                        _table(
+                            [["#", "Canal", "Vídeos validados", "Visualizações", "Link"]]
+                            + [
+                                [
+                                    index + 1,
+                                    item.get("channel", "N/D"),
+                                    item.get("videos", 0),
+                                    _view_count_label(item.get("views")),
+                                    _pdf_link(item.get("lead_url")),
+                                ]
+                                for index, item in enumerate(top_channels)
+                            ],
+                            [0.9 * cm, 5.9 * cm, 2.8 * cm, 3.0 * cm, 4.0 * cm],
+                            small,
+                            nowrap_columns={0},
+                        ),
                     ]
-                    for index, item in enumerate(top_reach_contents)
-                ],
-                [0.9 * cm, 1.6 * cm, 2.8 * cm, 6.1 * cm, 2.0 * cm, 3.2 * cm],
-                small,
-                nowrap_columns={0},
+                )
             )
-        )
+
+        top_reach_contents = metrics.get("top_reach_contents", [])
+        if top_reach_contents:
+            story.append(Paragraph("CONTEÚDOS POR ALCANCE DISPONÍVEL", heading))
+            story.append(
+                Paragraph(
+                    escape(_text(metrics.get("top_reach_methodology", ""))),
+                    small,
+                )
+            )
+            story.append(
+                _table(
+                    [["#", "Plataforma", "Fonte", "Título", "Alcance", "Link"]]
+                    + [
+                        [
+                            index + 1,
+                            item.get("platform", "N/D"),
+                            item.get("source", "N/D"),
+                            item.get("title", "N/D"),
+                            _view_count_label(item.get("reach")),
+                            _pdf_link(item.get("url")),
+                        ]
+                        for index, item in enumerate(top_reach_contents)
+                    ],
+                    [0.9 * cm, 1.6 * cm, 2.8 * cm, 6.1 * cm, 2.0 * cm, 3.2 * cm],
+                    small,
+                    nowrap_columns={0},
+                )
+            )
 
     if fact_layer_enabled and operations:
         add_part("OPERAÇÕES POLICIAIS IDENTIFICADAS")
@@ -955,10 +966,10 @@ def build_pdf(data: dict) -> bytes:
     )
     if part3_has_content:
         add_part("ANÁLISE DA COBERTURA")
-        add_section("II. Enquadramento Dominante", report.get("dominant_framing"))
+        add_section("Enquadramento Dominante", report.get("dominant_framing"))
 
         if thematic_axes:
-            story.append(Paragraph("III. Um Estudo, Muitas Pautas", heading))
+            story.append(Paragraph("Um Estudo, Muitas Pautas", heading))
             story.append(
                 _table(
                     [["Eixo temático", "Dado-âncora", "Cobertura"]]
@@ -976,16 +987,16 @@ def build_pdf(data: dict) -> bytes:
             )
 
         add_section(
-            "IV. Recorte de Maior Rendimento Jornalístico",
+            "Recorte de Maior Rendimento Jornalístico",
             report.get("highest_yield"),
         )
         add_section(
-            "V. Camada Institucional e Disputa de Narrativa",
+            "Camada Institucional e Disputa de Narrativa",
             report.get("institutional_narrative"),
         )
 
         if risk_assessment:
-            story.append(Paragraph("VI. Avaliação: Alcance, Profundidade e Riscos", heading))
+            story.append(Paragraph("Avaliação: Alcance, Profundidade e Riscos", heading))
             story.append(
                 _table(
                     [["Dimensão", "Avaliação", "Evidência"]]
@@ -1097,10 +1108,10 @@ def build_pdf(data: dict) -> bytes:
     press_kit = list(report.get("press_kit") or [])
     if _has_content(synthesis) or recommendations or press_kit:
         add_part("SÍNTESE E ENCAMINHAMENTOS")
-        add_section("VIII. Síntese", synthesis)
+        add_section("Síntese", synthesis)
 
         if recommendations or press_kit:
-            story.append(Paragraph("VII. Recomendações e Kit de Imprensa", heading))
+            story.append(Paragraph("Recomendações e Kit de Imprensa", heading))
             if recommendations:
                 story.extend(
                     [Paragraph("• " + escape(_text(item)), body) for item in recommendations if _has_content(item)]
