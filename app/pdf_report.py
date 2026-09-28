@@ -320,6 +320,10 @@ def build_pdf(data: dict) -> bytes:
         textColor=colors.HexColor("#102b46"),
         spaceBefore=15,
         spaceAfter=7,
+        # Evita título órfão no rodapé. O título acompanha o próximo
+        # flowable, mas o conteúdo seguinte continua livre para quebrar
+        # naturalmente entre páginas quando for longo.
+        keepWithNext=True,
     )
     body = ParagraphStyle(
         "Body",
@@ -443,15 +447,16 @@ def build_pdf(data: dict) -> bytes:
     story += [meta_table, Spacer(1, 10)]
 
     def add_section(name: str, content: object) -> bool:
-        """Adiciona título + corpo somente quando o corpo tem conteúdo real."""
+        """Adiciona seção sem deixar o título órfão e sem prender textos longos."""
         if not _has_content(content):
             return False
+        # O heading usa keepWithNext=True, então o título acompanha o início
+        # do corpo. O parágrafo fica livre para continuar na página seguinte.
+        story.append(Paragraph(name, heading))
         story.append(
-            KeepTogether(
-                [
-                    Paragraph(name, heading),
-                    Paragraph(escape(_text(content)).replace("\n", "<br/>"), body),
-                ]
+            Paragraph(
+                escape(_text(content)).replace("\n", "<br/>"),
+                body,
             )
         )
         return True
@@ -1231,7 +1236,14 @@ def _table(
         ]
         for row_index, row in enumerate(rows)
     ]
-    table = Table(formatted, colWidths=widths, repeatRows=1)
+    table = Table(
+        formatted,
+        colWidths=widths,
+        repeatRows=1,
+        # Tabelas extensas continuam por linha na página seguinte,
+        # repetindo o cabeçalho sem tentar manter o bloco inteiro junto.
+        splitByRow=1,
+    )
     table.setStyle(
         TableStyle(
             [
