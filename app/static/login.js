@@ -28,8 +28,8 @@ async function doSignup() {
   } catch (e) { $('#login-msg').textContent = `Erro: ${e.message}`; }
 }
 
-// Já logado? Vai direto.
-if (authState()) window.location.href = '/';
+// Em modo local, cria a sessão de desenvolvimento e pula esta tela.
+bootstrapAuth().then(session => { if (session) window.location.href = '/'; });
 $('#login-go').onclick = doLogin;
 $('#login-signup').onclick = doSignup;
 $('#login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });

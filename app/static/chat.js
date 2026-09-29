@@ -558,8 +558,9 @@ async function loadProjects() {
   renderTopicList('');
 }
 
-if (!guardAuth()) {
-  // guardAuth redireciona.
+bootstrapAuth().then(session => {
+if (!session || !guardAuth()) {
+  return;
 } else {
   const s = authState();
   document.getElementById('chat-auth').textContent = `${s.email || ''} · `;
@@ -594,3 +595,4 @@ if (!guardAuth()) {
 
   loadProjects().catch(err => appendBubble('assistant', `<p>${esc(err.message)}</p>`));
 }
+}).catch(() => { window.location.href = '/login'; });

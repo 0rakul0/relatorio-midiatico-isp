@@ -60,6 +60,15 @@ from app.topic_profile import requested_topic_window
 logger = logging.getLogger("app.main")
 
 
+BRAZILIAN_STATES = frozenset({
+    "Acre", "Alagoas", "Amapá", "Amazonas", "Bahia", "Ceará", "Distrito Federal",
+    "Espírito Santo", "Goiás", "Maranhão", "Mato Grosso", "Mato Grosso do Sul",
+    "Minas Gerais", "Pará", "Paraíba", "Paraná", "Pernambuco", "Piauí",
+    "Rio de Janeiro", "Rio Grande do Norte", "Rio Grande do Sul", "Rondônia",
+    "Roraima", "Santa Catarina", "São Paulo", "Sergipe", "Tocantins",
+})
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_schema()
@@ -329,7 +338,11 @@ def login_page():
 def auth_config():
     # Chave publishable é pública por desenho (vai para o browser).
     settings = get_settings()
-    return {"supabase_url": settings.supabase_url, "supabase_key": settings.supabase_key}
+    return {
+        "supabase_url": settings.supabase_url,
+        "supabase_key": settings.supabase_key,
+        "local_auth_bypass": settings.local_auth_bypass,
+    }
 
 
 @app.get("/chat", include_in_schema=False)
@@ -475,8 +488,24 @@ def chat_ask(
 
 @app.post("/projects", status_code=201)
 def create_project(payload: ProjectCreate, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
+    raw_scopes = payload.geographic_scopes or ([payload.geographic_scope] if payload.geographic_scope else [])
+    geographic_scopes = list(dict.fromkeys(
+        " ".join(str(scope or "").split()) for scope in raw_scopes
+        if " ".join(str(scope or "").split())
+    ))
+    invalid_scopes = [scope for scope in geographic_scopes if scope not in BRAZILIAN_STATES]
+    if invalid_scopes:
+        raise HTTPException(422, "Estado inválido para o recorte geográfico")
+    geographic_suffix = (
+        "" if not geographic_scopes
+        else f" no estado de {geographic_scopes[0]}" if len(geographic_scopes) == 1
+        else f" nos estados de {', '.join(geographic_scopes)}"
+    )
+    scoped_topic = f"{payload.topic}{geographic_suffix}"
+    if len(scoped_topic) > 300:
+        raise HTTPException(422, "Tema e recorte geográfico excedem 300 caracteres")
     today = date.today()
-    inferred_window = requested_topic_window(payload.topic)
+    inferred_window = requested_topic_window(scoped_topic)
 
     explicit_collection = bool(payload.collection_start or payload.collection_end)
     explicit_event = bool(payload.event_start or payload.event_end)
@@ -547,6 +576,8 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db), user: 
     execution_options["temporal_mode"] = (
         "EXPLICIT_WINDOW" if has_custom_window else "TOPIC_DRIVEN"
     )
+    execution_options["geographic_scopes"] = geographic_scopes
+    execution_options["geographic_scope"] = geographic_scopes[0] if len(geographic_scopes) == 1 else "NACIONAL"
     # O campo launch_date do banco continua preenchido por compatibilidade com
     # instalações antigas, mas só deve ser exibido como dado editorial quando
     # o usuário o informou ou quando o agente documentalista o confirmou.
@@ -564,7 +595,7 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db), user: 
         execution_options["enable_nominal_followup"] = False
 
     row = Project(
-        topic=payload.topic,
+        topic=scoped_topic,
         institution=payload.institution,
         owner_id=user.id,
         launch_date=payload.launch_date or today,

@@ -13,6 +13,9 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 class ProjectCreate(BaseModel):
     topic: str = Field(min_length=3, max_length=300)
+    geographic_scopes: list[str] = Field(default_factory=list, max_length=27)
+    # Compatibilidade com clientes que ainda enviam um único estado.
+    geographic_scope: str | None = Field(default=None, max_length=60)
     institution: str = "Instituto de Segurança Pública"
     launch_date: date | None = None
     collection_start: date | None = None

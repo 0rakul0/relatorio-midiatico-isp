@@ -23,9 +23,75 @@ async function renderAuth(){
   }
 }
 $('#auth-logout').onclick=doLogout;
-if(authState()){renderAuth();}else{window.location.href='/login';}
+bootstrapAuth().then(session=>{if(session){renderAuth();}else{window.location.href='/login';}}).catch(()=>window.location.href='/login');
 const table=(headers,rows)=>`<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(cell=>{const s=String(cell??'');return `<td>${s.startsWith(RAW_HTML)?s.slice(RAW_HTML.length):esc(s)}</td>`}).join('')}</tr>`).join('')}</tbody></table></div>`;
 let currentProjectId=null,currentRunId=null,pollTimer=null;
+
+const BRAZIL_STATES_GEOJSON='https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson';
+let selectedGeographicScopes=new Set();
+let geographyScrollTimer=null;
+const selectedGeography=()=>[...selectedGeographicScopes];
+function scheduleTopicScroll(){
+  if(geographyScrollTimer)window.clearTimeout(geographyScrollTimer);
+  geographyScrollTimer=window.setTimeout(()=>$('#topic-search')?.scrollIntoView({behavior:'smooth',block:'start'}),900);
+}
+function updateTopicGeographyHint(){
+  const hint=$('#topic-geography-hint'),topic=$('#topic');
+  if(!hint||!topic)return;
+  const states=[...selectedGeographicScopes];
+  if(!states.length){
+    hint.textContent='A busca será nacional.';
+    topic.placeholder='Pesquise seu tema';
+    return;
+  }
+  const stateLabel=states.length===1?states[0]:states.join(', ');
+  hint.textContent=`A busca será focada em: ${stateLabel}.`;
+  topic.placeholder=`Pesquise um tema sobre ${stateLabel}`;
+}
+function setGeographicScope(state=null,{toggle=false}={}){
+  const status=$('#selected-region');
+  if(!status)return;
+  if(state==='')selectedGeographicScopes.clear();
+  else if(state&&toggle&&selectedGeographicScopes.has(state))selectedGeographicScopes.delete(state);
+  else if(state)selectedGeographicScopes.add(state);
+  const selected=[...selectedGeographicScopes];
+  status.textContent=selected.length?`${selected.length} estado${selected.length>1?'s':''} selecionado${selected.length>1?'s':''}`:'Brasil · Nacional';
+  document.querySelectorAll('.brazil-state').forEach(node=>{
+    node.classList.toggle('selected',selectedGeographicScopes.has(node.__data__?.properties?.name));
+  });
+  updateTopicGeographyHint();
+  if(state!==null)scheduleTopicScroll();
+}
+async function initBrazilMap(){
+  const container=$('#brazil-map');
+  if(!container||typeof window.d3==='undefined')return;
+  try{
+    const response=await fetch(BRAZIL_STATES_GEOJSON,{cache:'force-cache'});
+    if(!response.ok)throw new Error('mapa indisponível');
+    const geojson=await response.json();
+    const states=(geojson.features||[]).sort((a,b)=>String(a.properties?.name).localeCompare(String(b.properties?.name),'pt-BR'));
+    const width=470,height=390;
+    const projection=d3.geoMercator().fitSize([width,height],geojson);
+    const path=d3.geoPath(projection);
+    container.querySelector('.map-loading')?.remove();
+    d3.select(container).selectAll('svg').remove();
+    const svg=d3.select(container).append('svg')
+      .attr('viewBox',`0 0 ${width} ${height}`).attr('role','img')
+      .attr('aria-label','Mapa interativo do Brasil. Selecione um estado ou clique no fundo para cobertura nacional.');
+    svg.append('rect').attr('class','brazil-map-background').attr('width',width).attr('height',height)
+      .on('click',()=>setGeographicScope(''));
+    const paths=svg.append('g').selectAll('path').data(states).join('path')
+      .attr('class','brazil-state').attr('d',path).attr('tabindex',0).attr('role','button')
+      .attr('aria-label',feature=>`Selecionar ${feature.properties.name}`)
+      .on('click',(event,feature)=>{event.stopPropagation();setGeographicScope(feature.properties.name,{toggle:true});})
+      .on('keydown',(event,feature)=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();setGeographicScope(feature.properties.name,{toggle:true});}});
+    paths.append('title').text(feature=>`${feature.properties.name} (${feature.properties.sigla})`);
+  }catch(_error){
+    const loading=container.querySelector('.map-loading');
+    if(loading)loading.textContent='Não foi possível carregar o mapa do Brasil.';
+  }
+}
+initBrazilMap();
 
 api('/health').then(d=>$('#api-status').textContent=`API conectada · ${d.version}`).catch(()=>$('#api-status').textContent='API indisponível');
 
@@ -793,6 +859,7 @@ async function loadHistory(){try{const rows=await api('/reports/history');const 
 $('#report-form').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#submit'),progress=$('#progress');btn.disabled=true;progress.classList.remove('hidden');$('#run-tracker').classList.add('hidden');try{
   progress.textContent='Preparando projeto…';
   const payload={topic:$('#topic').value.trim(),execution_profile:$('#execution-profile').value||'AUTO'};
+  if(selectedGeography().length)payload.geographic_scopes=selectedGeography();
   for(const [id,key] of [['collection-start','collection_start'],['collection-end','collection_end'],['event-start','event_start'],['event-end','event_end']]){if($(`#${id}`).value)payload[key]=$(`#${id}`).value}
   const created=await api('/projects',{method:'POST',body:JSON.stringify(payload)});currentProjectId=created.id;
   const started=await api(`/projects/${created.id}/run-async`,{method:'POST'});currentRunId=started.run.run_id;renderRun(started.run);progress.textContent='Relatório em processamento.';

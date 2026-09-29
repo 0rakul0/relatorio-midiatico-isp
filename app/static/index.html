@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Relatório de Repercussão Midiática</title>
-  <link rel="stylesheet" href="/static/styles.css?v=17">
+  <link rel="stylesheet" href="/static/styles.css?v=25">
 </head>
 <body>
 <header class="top index-top screen-only">
@@ -15,8 +15,20 @@
   </div>
 </header>
 <main class="wrap">
+  <section id="local-selection" class="location-hero screen-only" aria-labelledby="geographic-filter-title">
+    <div id="brazil-map" class="brazil-map brazil-map-hero" role="group" aria-label="Mapa do Brasil para selecionar um estado">
+      <div class="map-context">
+        <span class="section-kicker">Passo 1 de 2 · Local</span>
+        <h2 id="geographic-filter-title">Onde você quer acompanhar as notícias?</h2>
+        <p>Escolha um ou mais estados para receber notícias locais. Para uma visão do país, clique fora dos estados.</p>
+        <output id="selected-region" class="region-status" aria-live="polite">Brasil · Nacional</output>
+      </div>
+      <span class="map-loading">Carregando mapa do Brasil…</span>
+    </div>
+  </section>
+
   <div class="dashboard-grid screen-only">
-    <section class="panel report-builder">
+    <section id="topic-search" class="panel report-builder">
       <div class="session-bar">
         <div class="session-user">
           <span class="session-label">Sessão ativa</span>
@@ -29,12 +41,16 @@
       </div>
 
       <div class="builder-heading">
-        <span class="section-kicker">Nova análise</span>
+        <span class="section-kicker">Passo 2 de 2 · Tema</span>
         <h2>Gerar relatório de repercussão</h2>
         <p class="note">Defina o tema e, se necessário, os recortes de repercussão e dos fatos. O acompanhamento da execução aparece logo abaixo, etapa por etapa.</p>
       </div>
       <form id="report-form">
-        <div class="field topic-row"><label for="topic">Tema</label><input id="topic" placeholder="pesquise seu Tema" required minlength="3"></div>
+        <div class="field topic-row">
+          <label for="topic">Tema</label>
+          <input id="topic" placeholder="Pesquise seu tema" required minlength="3">
+          <p id="topic-geography-hint" class="topic-geography-hint" aria-live="polite">A busca será nacional.</p>
+        </div>
         <div class="date-grid">
           <div class="field"><label for="collection-start">Repercussão - início</label><input id="collection-start" type="date"></div>
           <div class="field"><label for="collection-end">Repercussão - fim</label><input id="collection-end" type="date"></div>
@@ -93,7 +109,7 @@
 <!-- bump ?v= a cada mudanca nos estaticos para furar o cache do navegador -->
 <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3-cloud@1.2.9/build/d3.layout.cloud.js"></script>
-<script src="/static/auth.js?v=2"></script>
-<script src="/static/app.js?v=13"></script>
+<script src="/static/auth.js?v=3"></script>
+<script src="/static/app.js?v=20"></script>
 </body>
 </html>
