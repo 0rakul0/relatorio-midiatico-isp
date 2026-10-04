@@ -140,6 +140,71 @@ def _candidate_urls(
         if rows
     }
 
+def _historical_post(db: Session, project_id: int, platform: str, url: str) -> SocialPost | None:
+    key = _url_key(url)
+    rows = db.scalars(
+        select(SocialPost)
+        .where(SocialPost.project_id != project_id, SocialPost.platform == platform)
+        .order_by(SocialPost.collected_at.desc(), SocialPost.id.desc())
+    ).all()
+    return next((row for row in rows if _url_key(row.url) == key), None)
+
+
+def _reuse_historical_comments(
+    db: Session,
+    project: Project,
+    target: SocialPost,
+    source: SocialPost,
+    existing_ids: set[str],
+) -> int:
+    copied = 0
+    for row in db.scalars(
+        select(SocialComment).where(SocialComment.social_post_id == source.id)
+    ).all():
+        if row.external_id in existing_ids:
+            continue
+        db.add(SocialComment(
+            project_id=project.id,
+            social_post_id=target.id,
+            platform=row.platform,
+            external_id=row.external_id,
+            parent_external_id=row.parent_external_id,
+            text=row.text,
+            published_at=row.published_at,
+            like_count=row.like_count,
+            reply_count=row.reply_count,
+            source_url=target.url,
+            collected_at=row.collected_at,
+        ))
+        existing_ids.add(row.external_id)
+        copied += 1
+    return copied
+
+
+def _social_reuse_state(
+    db: Session,
+    project: Project,
+    platform: str,
+    url: str,
+    target: SocialPost,
+    existing_ids: set[str],
+) -> tuple[str, int]:
+    source = _historical_post(db, project.id, platform, url)
+    if source is None:
+        return "COLLECT", 0
+    copied = _reuse_historical_comments(db, project, target, source, existing_ids)
+    if copied == 0:
+        return "COLLECT", 0
+    collected_at = source.collected_at
+    if collected_at is None:
+        return "REFRESH", copied
+    if collected_at.tzinfo is not None:
+        collected_at = collected_at.astimezone(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    ttl = timedelta(days=max(0, int(get_settings().social_reuse_max_age_days)))
+    return ("REFRESH" if ttl.days == 0 or now - collected_at > ttl else "REUSE"), copied
+
+
 def _nested(payload: dict, *keys: str) -> Any:
     current: Any = payload
     for key in keys:
