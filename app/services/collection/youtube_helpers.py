@@ -3,9 +3,6 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-from app.config import get_settings
-from app.media_scout import MediaScout
-from app.models import Project
 from app.source_registry import PRIORITY_YOUTUBE_CHANNELS, PRIORITY_YOUTUBE_CHANNEL_ALIASES
 from app.topic_profile import normalized_text
 
@@ -41,19 +38,3 @@ def matches_priority_youtube_channel(channel: str | None, label: str) -> bool:
         len(alias) >= 8 and (alias in source or source in alias)
         for alias in normalized_aliases
     )
-
-
-def youtube_tasks_for_execution(project: Project) -> list:
-    """Prioriza a auditoria de todos os canais antes das buscas temáticas.
-
-    O teto configurável controla as buscas temáticas adicionais, mas nunca pode
-    eliminar um canal prioritário da matriz de checagem.
-    """
-    settings = get_settings()
-    tasks = MediaScout(project.topic, project.topic_profile).youtube_tasks()
-    priority = [task for task in tasks if task.is_priority]
-    thematic = [task for task in tasks if not task.is_priority]
-    task_budget = max(settings.max_youtube_tasks, len(priority))
-    return [*priority, *thematic[: max(0, task_budget - len(priority))]]
-
-
