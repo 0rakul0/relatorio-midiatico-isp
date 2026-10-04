@@ -29,7 +29,6 @@ from app.tools.providers import (
     duckduckgo_available,
     search_news as duckduckgo_news,
     search_text as duckduckgo_text,
-    search_videos as duckduckgo_videos,
 )
 
 
@@ -138,75 +137,6 @@ def _search_web(
                             "published_at": row.get("published_at"),
                             "source_name": row.get("source_name"),
                             "provider": str(row.get("provider") or "duckduckgo"),
-                        }
-                    )
-                if normalized:
-                    return "duckduckgo", normalized
-            return "duckduckgo", []
-        except DuckDuckGoUnavailable as exc:
-            if observer is not None:
-                observer.provider_error(
-                    query=query,
-                    provider="duckduckgo",
-                    tool_name=tool_name,
-                    error=str(exc),
-                )
-            if raise_unavailable:
-                raise
-            return "duckduckgo", []
-
-    return "none", []
-
-
-def _search_videos(
-    query: str,
-    *,
-    max_results: int = 5,
-    providers: tuple[str, ...] = ("duckduckgo",),
-    window_start: str | None = None,
-    window_end: str | None = None,
-    observer: SearchObserver | None = None,
-    tool_name: str = "pesquisar_videos",
-    raise_unavailable: bool = False,
-) -> tuple[str, list[dict[str, Any]]]:
-    settings = get_settings()
-    limit = min(
-        _normalize_limit(max_results),
-        max(1, int(settings.agent_search_max_results)),
-    )
-
-    if "duckduckgo" in providers:
-        if observer is not None:
-            observer.provider_attempted(
-                query=query,
-                provider="duckduckgo",
-                tool_name=tool_name,
-            )
-        try:
-            rows = duckduckgo_videos(
-                query,
-                max_results=limit,
-                region=settings.duckduckgo_region,
-                safesearch=settings.duckduckgo_safesearch,
-                retries=settings.duckduckgo_max_retries,
-                retry_base_seconds=settings.duckduckgo_retry_base_seconds,
-            )
-            if rows:
-                normalized: list[dict[str, Any]] = []
-                for row in rows[:limit]:
-                    url = str(row.get("url") or "").strip()
-                    if not url:
-                        continue
-                    normalized.append(
-                        {
-                            "title": str(row.get("title") or "Video sem titulo"),
-                            "url": url,
-                            "snippet": row.get("description"),
-                            "content": row.get("description"),
-                            "published_at": row.get("published_at"),
-                            "source_name": row.get("channel"),
-                            "view_count": row.get("view_count"),
-                            "provider": str(row.get("provider") or "duckduckgo_video"),
                         }
                     )
                 if normalized:
