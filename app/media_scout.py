@@ -273,8 +273,10 @@ class MediaScout:
     @staticmethod
     def platform_status(youtube_enabled: bool) -> list[dict[str, str]]:
         return [
-            {"platform": "Sites jornalisticos", "status": "ativo"},
-            {"platform": "YouTube", "status": "ativo" if youtube_enabled else "indisponivel"},
-            {"platform": "Instagram", "status": "conector planejado"},
-            {"platform": "X", "status": "conector planejado"},
+            {"platform": "Sites jornalisticos", "status": "descoberta via DuckDuckGo"},
+            {"platform": "YouTube", "status": "roteado da descoberta DuckDuckGo"},
+            {"platform": "Instagram", "status": "DuckDuckGo -> Apify"},
+            {"platform": "Facebook", "status": "DuckDuckGo -> Apify"},
+            {"platform": "TikTok", "status": "DuckDuckGo -> Apify"},
+            {"platform": "X", "status": "DuckDuckGo -> Apify"},
         ]
