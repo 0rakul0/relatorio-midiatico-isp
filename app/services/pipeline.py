@@ -136,15 +136,6 @@ def run_full_methodology(
 
     # As soon as planning is done, expose optional stages that will not run.
     # This makes the execution tracker reflect the real methodology immediately.
-    if not flags["enable_youtube"]:
-        stage("youtube", "SKIPPED", (processes.get("youtube_collection") or {}).get("reason") or "Nao prevista no plano")
-    if not flags.get("enable_social_repercussion"):
-        stage(
-            "social_repercussion",
-            "SKIPPED",
-            (processes.get("social_repercussion") or {}).get("reason")
-            or "Nao prevista no plano",
-        )
     if not flags["enable_academic_research"]:
         stage("academic_research", "SKIPPED", (processes.get("academic_research") or {}).get("reason") or "Nao prevista no plano")
     if not flags["enable_fact_layer"]:
