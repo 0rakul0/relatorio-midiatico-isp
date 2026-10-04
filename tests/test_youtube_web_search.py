@@ -164,3 +164,52 @@ def test_youtube_metrics_list_all_priority_channels_and_exclude_conflicts():
     assert result["youtube_conflicts_excluded"] == 1
     assert all(row["channel"] != "CNN Brasil" for row in result["top_youtube_channels"])
     session.close()
+
+
+def test_youtube_result_is_derived_from_primary_web_discovery():
+    from app.services.collection.youtube import _youtube_result
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    project = Project(
+        topic="tema de teste",
+        launch_date=date(2026, 1, 1),
+        collection_start=date(2026, 8, 1),
+        collection_end=date(2026, 8, 31),
+    )
+    session.add(project)
+    session.flush()
+    session.add_all(
+        [
+            MediaItem(
+                project_id=project.id,
+                title="Video descoberto na busca principal",
+                url="https://www.youtube.com/watch?v=web123",
+                canonical_url="https://www.youtube.com/watch?v=web123",
+                domain="youtube.com",
+                status="PENDING",
+                media_origin="YOUTUBE",
+                search_source="duckduckgo",
+            ),
+            MediaItem(
+                project_id=project.id,
+                title="Materia tradicional",
+                url="https://example.com/materia",
+                canonical_url="https://example.com/materia",
+                domain="example.com",
+                status="PENDING",
+                media_origin="PORTAL_NOTICIAS",
+                search_source="duckduckgo",
+            ),
+        ]
+    )
+    session.commit()
+
+    result = _youtube_result(session, project.id)
+
+    assert result["status"] == "ROUTED"
+    assert result["provider"] == "duckduckgo"
+    assert result["collected"] == 1
+    assert result["stats"]["routed_from_web"] == 1
+    session.close()
