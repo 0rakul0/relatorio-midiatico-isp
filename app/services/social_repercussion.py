@@ -843,6 +843,9 @@ def collect_social_repercussion(db: Session, project: Project) -> dict:
     report["collection"] = {
         "actor_runs": actor_runs,
         "new_comments": new_comments,
+        "reused_comments": reused_comments,
+        "reused_posts": reused_posts,
+        "refreshed_posts": refreshed_posts,
         "platforms": platform_result,
     }
     return report
