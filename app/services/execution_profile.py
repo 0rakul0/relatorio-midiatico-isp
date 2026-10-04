@@ -12,7 +12,7 @@ EXECUTION_PROFILE_DEFAULTS = {
     "MIDIATICO_SIMPLES": {
         "enable_web_collection": True,
         "enable_youtube": True,
-        "enable_social_repercussion": False,
+        "enable_social_repercussion": True,
         "enable_academic_research": True,
         "enable_media_validation": True,
         "enable_fact_layer": False,
@@ -26,7 +26,7 @@ EXECUTION_PROFILE_DEFAULTS = {
     "MIDIATICO_COM_FATOS": {
         "enable_web_collection": True,
         "enable_youtube": True,
-        "enable_social_repercussion": False,
+        "enable_social_repercussion": True,
         "enable_academic_research": True,
         "enable_media_validation": True,
         "enable_fact_layer": True,
@@ -40,7 +40,7 @@ EXECUTION_PROFILE_DEFAULTS = {
     "COMPLETO_NOMINAL": {
         "enable_web_collection": True,
         "enable_youtube": True,
-        "enable_social_repercussion": False,
+        "enable_social_repercussion": True,
         "enable_academic_research": True,
         "enable_media_validation": True,
         "enable_fact_layer": True,
@@ -99,10 +99,13 @@ def heuristic_execution_plan(project: Project) -> dict[str, Any]:
     return {
         "processes": {
             "web_collection": _decision(True, "A coleta web e a base do relatorio midiatico."),
-            "youtube_collection": _decision(True, "Videos podem ampliar a cobertura observada."),
+            "youtube_collection": _decision(
+                True,
+                "URLs do YouTube sao roteadas automaticamente quando aparecem na descoberta DuckDuckGo.",
+            ),
             "social_repercussion": _decision(
-                False,
-                "Sem decisao do planejador, a coleta paga de comentarios sociais permanece desativada.",
+                True,
+                "Posts sociais descobertos pelo DuckDuckGo sao enriquecidos automaticamente quando o Apify estiver configurado.",
             ),
             "academic_research": _decision(True, "Literatura cientifica pode acrescentar contexto tecnico sem integrar a metrica de repercussao."),
             "media_validation": _decision(True, "Todo corpus coletado precisa ser validado antes da analise."),
@@ -158,8 +161,18 @@ def sanitize_execution_plan(project: Project, raw: dict[str, Any] | None) -> dic
     else:
         processes = _normalize_processes(raw, fallback)
 
-    # Core report steps are mandatory for this product.
-    for process_name in ("web_collection", "media_validation", "classification", "report_writer", "qa"):
+    # Core report steps and media routing are structural. YouTube/social do
+    # not open independent discovery searches; they only route/enrich URLs
+    # already returned by DuckDuckGo.
+    for process_name in (
+        "web_collection",
+        "youtube_collection",
+        "social_repercussion",
+        "media_validation",
+        "classification",
+        "report_writer",
+        "qa",
+    ):
         processes[process_name]["enabled"] = True
 
     # Logical dependencies.
@@ -173,11 +186,9 @@ def sanitize_execution_plan(project: Project, raw: dict[str, Any] | None) -> dic
     # Explicit API overrides win over AUTO/planner decisions.
     overrides = project.execution_options or {}
     override_map = {
-        "enable_youtube": "youtube_collection",
         "enable_fact_layer": "fact_extraction",
         "enable_nominal_followup": "nominal_followup",
         "enable_academic_research": "academic_research",
-        "enable_social_repercussion": "social_repercussion",
     }
     for option_name, process_name in override_map.items():
         value = overrides.get(option_name)
