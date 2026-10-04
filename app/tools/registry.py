@@ -18,9 +18,7 @@ from app.tools.search import (
     SearchContextResolver,
     SearchObserver,
     SearchSink,
-    make_bulk_video_search_tool,
     make_bulk_web_search_tool,
-    make_video_search_tool,
     make_web_search_tool,
 )
 
@@ -54,16 +52,9 @@ def build_agent_tools(
                 observer=web_observer,
             )
         )
-    if enable_video:
-        video_factory = make_bulk_video_search_tool if bulk else make_video_search_tool
-        tools.append(
-            video_factory(
-                sink=video_sink,
-                context=video_context,
-                providers=video_providers,
-                observer=video_observer,
-            )
-        )
+    # Video is no longer an independent discovery capability. YouTube URLs
+    # are routed from the primary DuckDuckGo web discovery.
+
     if enable_article_fetch:
         tools.append(make_bulk_article_fetch_tool(sink=article_sink))
     if enable_academic:
