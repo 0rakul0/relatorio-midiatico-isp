@@ -722,6 +722,9 @@ def collect_social_repercussion(db: Session, project: Project) -> dict:
     )
     platform_result: dict[str, dict] = {}
     new_comments = 0
+    reused_comments = 0
+    reused_posts = 0
+    refreshed_posts = 0
     actor_runs = 0
 
     for platform, rows in candidates.items():
