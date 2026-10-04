@@ -563,11 +563,9 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db), user: 
     execution_options = {
         key: value
         for key, value in {
-            "enable_youtube": payload.enable_youtube,
             "enable_fact_layer": payload.enable_fact_layer,
             "enable_nominal_followup": payload.enable_nominal_followup,
             "enable_academic_research": payload.enable_academic_research,
-            "enable_social_repercussion": payload.enable_social_repercussion,
         }.items()
         if value is not None
     }
@@ -587,8 +585,6 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db), user: 
     # Limites do plano: perfil permitido + recursos vetados.
     plan = plan_for(user)
     execution_profile, plan_notice = clamp_profile(plan, payload.execution_profile)
-    if not plan["youtube"]:
-        execution_options["enable_youtube"] = False
     if not plan["fact_layer"]:
         execution_options["enable_fact_layer"] = False
     if not plan["nominal_followup"]:
