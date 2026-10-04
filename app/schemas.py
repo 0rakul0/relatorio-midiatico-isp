@@ -29,12 +29,9 @@ class ProjectCreate(BaseModel):
         "MIDIATICO_COM_FATOS",
         "COMPLETO_NOMINAL",
     ] = "AUTO"
-
-    enable_youtube: bool | None = None
     enable_fact_layer: bool | None = None
     enable_nominal_followup: bool | None = None
     enable_academic_research: bool | None = None
-    enable_social_repercussion: bool | None = None
 
 
 class OfficialFactCreate(BaseModel):
@@ -86,14 +83,10 @@ class AgentWebSearchArgs(BaseModel):
     max_results: int = Field(default=5, ge=1, le=10, description="Maximum results")
 
 
-class AgentVideoSearchArgs(BaseModel):
-    query: str = Field(min_length=3, max_length=500, description="Video search query")
-    max_results: int = Field(default=5, ge=1, le=10, description="Maximum results")
-
-
 class AgentSearchHit(StrictLLMOutput):
     title: str
     url: str
+    media_origin: Literal["PORTAL_NOTICIAS", "REDE_SOCIAL", "YOUTUBE"] | None = None
     snippet: str | None = None
     content: str | None = None
     published_at: str | None = None
@@ -136,6 +129,9 @@ class AgentBulkSearchResponse(StrictLLMOutput):
 class CollectorExecutionResponse(StrictLLMOutput):
     status: Literal["COMPLETED", "PARTIAL", "UNAVAILABLE"]
     detail: str
+    portal_hits: int = Field(default=0, ge=0)
+    youtube_hits: int = Field(default=0, ge=0)
+    social_hits: int = Field(default=0, ge=0)
 
 
 class SocialCommentAssessment(StrictLLMOutput):
