@@ -92,14 +92,11 @@ def collect_media_sources(
     web_queries = web_queries_pending(project.id)
     web_counters = new_web_counters(max(1, settings.max_search_results))
 
-    web_state, _video_state = run_agent_collection(
+    web_state = run_agent_collection(
         project_id=project.id,
         web_queries=web_queries,
         web_counters=web_counters,
         web_progress=web_progress,
-        video_queries=None,
-        video_counters=None,
-        video_progress=None,
         cancel_check=cancel_check,
     )
 
