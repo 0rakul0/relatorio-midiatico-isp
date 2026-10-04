@@ -13,7 +13,7 @@
 
 O acompanhamento sistemático da cobertura jornalística sobre segurança pública exige mais do que a recuperação de páginas que contenham determinadas palavras-chave. Uma mesma consulta pode recuperar notícias efetivamente relacionadas ao objeto de interesse, documentos institucionais, republicações, resultados temporalmente incompatíveis, textos apenas tangenciais ao tema e conteúdos que descrevem o fato sem constituírem repercussão midiática. A introdução de modelos de linguagem amplia a capacidade de interpretação desse material, mas também cria problemas de reprodutibilidade, proveniência e auditabilidade quando busca, seleção de fontes, inferência factual e redação são executadas como uma única operação opaca.
 
-Este trabalho apresenta o **Relatório de Repercussão Midiática — ISP**, um sistema para coleta, validação, classificação e síntese de cobertura midiática. A arquitetura combina planejamento estruturado de consultas, pesquisa na Web, persistência dos resultados brutos, recuperação do conteúdo integral das matérias, validação semântica por modelo de linguagem, regras determinísticas, extração factual opcional, classificação temática, controle de qualidade e geração de relatório. O método distingue explicitamente o **fato**, a **evidência que sustenta o fato** e a **matéria que constitui repercussão**, evitando que fontes utilizadas para comprovação sejam automaticamente contabilizadas como cobertura jornalística.
+Este trabalho apresenta o **Relatório de Repercussão Midiática — ISP**, um sistema para coleta, validação, classificação e síntese de cobertura midiática. A arquitetura combina planejamento estruturado de consultas, descoberta centralizada pelo DuckDuckGo, roteamento determinístico dos resultados conforme a origem da mídia, persistência dos resultados brutos, enriquecimento especializado de conteúdos Web, YouTube e redes sociais, recuperação do conteúdo integral das matérias, validação semântica por modelo de linguagem, regras determinísticas, extração factual opcional, classificação temática, controle de qualidade e geração de relatório. O método distingue explicitamente o **fato**, a **evidência que sustenta o fato** e a **matéria que constitui repercussão**, evitando que fontes utilizadas para comprovação sejam automaticamente contabilizadas como cobertura jornalística.
 
 Uma segunda contribuição é a construção incremental de uma memória de corpus. Documentos coletados são normalizados, deduplicados e armazenados globalmente, podendo ser recuperados em pesquisas posteriores por similaridade temática, lexical e semântica. As decisões de validação geram exemplos supervisionados que alimentam um reranker local, mantendo a decisão final sob a camada auditável de validação. Dessa forma, pesquisas anteriores tornam-se conhecimento reutilizável sem assumir que a relevância de uma matéria para um novo tema seja idêntica à decisão tomada no projeto original.
 
@@ -30,6 +30,9 @@ O MVP operacional reúne, em uma única trilha auditável, descoberta, validaç�
 - busca temporal distribuída quando a natureza da pauta exige cobertura por períodos, inclusive consultas mensais para inventários anuais;
 - coleta paralela de frentes independentes para reduzir o tempo total de execução;
 - fallback de busca quando uma consulta retorna zero resultados, com novas tentativas por grafias alternativas, sinônimos jornalísticos e formulações mais amplas;
+- descoberta centralizada pelo DuckDuckGo, seguida de classificação determinística das URLs como portal/notícia, YouTube ou rede social;
+- enriquecimento especializado após a descoberta: páginas tradicionais seguem para hidratação Web, vídeos seguem para o tratamento de YouTube e posts sociais seguem para o Apify;
+- leitura de comentários públicos de posts sociais descobertos pelo DuckDuckGo, mantendo post e reação do público como unidades distintas e sem tratar comentários como evidência factual;
 - persistência dos resultados brutos, inclusive itens posteriormente rejeitados, preservando a trilha de auditoria;
 - hidratação, validação semântica, deduplicação e reutilização do corpus histórico;
 - camada factual opcional para pessoas, eventos, locais, circunstâncias e operações policiais;
@@ -113,7 +116,9 @@ Essa relação é persistida para permitir inspeção posterior.
 
 ### 3.1 Visão geral
 
-A aplicação é implementada em Python 3.12, FastAPI, SQLAlchemy e Pydantic. PostgreSQL é o banco principal, com suporte a SQLite para desenvolvimento. O DuckDuckGo é utilizado como mecanismo externo principal de descoberta Web/vídeos e o arXiv pode ser consultado para literatura científica. Quando o planejador considerar pertinente, URLs públicas de Instagram, Facebook e X descobertas pelo DuckDuckGo podem alimentar uma camada complementar de **repercussão social**: o Apify coleta comentários públicos desses posts e o sistema produz agregados de sentimento, emoção, posição e temas recorrentes. Comentários não viram `MediaItem` e a identidade do comentarista não é persistida. As tarefas semânticas são executadas por um `ReportAgent`, utilizando um modelo compatível com a API da OpenAI e suporte a fallback local compatível com esse protocolo.
+A aplicação é implementada em Python 3.12, FastAPI, SQLAlchemy e Pydantic. PostgreSQL é o banco principal, com suporte a SQLite para desenvolvimento. O **DuckDuckGo é a camada principal de descoberta externa**: os resultados retornados são persistidos e classificados deterministicamente conforme a origem da mídia. URLs de portais e páginas tradicionais seguem para hidratação Web; URLs do YouTube seguem para o tratamento especializado de vídeo; URLs públicas de Instagram, Facebook, TikTok e X seguem para a camada de **repercussão social**.
+
+O Apify não funciona como mecanismo paralelo de descoberta. Ele atua como **enriquecedor de URLs sociais previamente encontradas pelo DuckDuckGo**. Para posts sociais elegíveis, o sistema utiliza o conector correspondente para recuperar comentários públicos e produzir agregados de sentimento, emoção, posição e temas recorrentes. Os comentários permanecem vinculados ao post de origem, não se tornam `MediaItem`, não são usados como confirmação de fatos objetivos e a identidade do comentarista não é persistida. A proveniência mantém a cadeia de descoberta e enriquecimento, permitindo distinguir, por exemplo, um post descoberto por DuckDuckGo e posteriormente aprofundado pelo Apify. O arXiv pode ser consultado separadamente para literatura científica. As tarefas semânticas são executadas por um `ReportAgent`, utilizando um modelo compatível com a API da OpenAI e suporte a fallback local compatível com esse protocolo.
 
 O pipeline operacional pode ser representado por:
 
@@ -122,11 +127,19 @@ flowchart LR
     A[Tema] --> B[Perfil do tema]
     B --> C[Memória histórica]
     C --> D[Planejamento de consultas]
-    D --> E[Coleta Web / vídeo]
-    E --> S[Apify social opcional]
-    S --> T[Comentários públicos agregados]
+    D --> E[DuckDuckGo: descoberta]
     E --> F[SearchHit bruto]
-    F --> G[Hidratação do artigo]
+    F --> X{Roteamento por origem}
+    X --> W[Portal / notícia]
+    X --> Y[YouTube]
+    X --> S[Rede social]
+    W --> G[Hidratação Web]
+    Y --> V[Tratamento YouTube]
+    S --> A[Apify: enriquecimento]
+    A --> T[Post + comentários públicos]
+    T --> H[Análise de repercussão social]
+    V --> H
+    G --> H
     G --> H[Validação semântica]
     H --> I[Camada factual opcional]
     I --> J[Classificação]
@@ -287,7 +300,41 @@ FAILED
 SKIPPED
 ```
 
-### 3.7 Consolidação e proveniência
+### 3.7 Roteamento por origem da mídia
+
+A descoberta externa é centralizada no DuckDuckGo. Depois que uma URL é encontrada, o sistema não assume que todos os resultados devam receber o mesmo tratamento. A origem é classificada deterministicamente e encaminhada ao conector adequado:
+
+```text
+DuckDuckGo
+    ↓
+URL descoberta
+    ↓
+classificação da origem
+    ├── PORTAL_NOTICIAS → hidratação Web
+    ├── YOUTUBE         → tratamento especializado de vídeo
+    └── REDE_SOCIAL     → enriquecimento social via Apify
+```
+
+Esse desenho separa **descoberta** de **enriquecimento**. O DuckDuckGo determina quais conteúdos entram na trilha de descoberta; YouTube e Apify aprofundam apenas os resultados correspondentes ao seu tipo de mídia. O Apify, portanto, não executa uma busca social autônoma no fluxo principal.
+
+Para redes sociais, somente URLs de posts compatíveis e cuja proveniência de descoberta seja DuckDuckGo são candidatas ao enriquecimento. Atualmente são reconhecidos posts públicos de Instagram, Facebook, TikTok e X. Quando a plataforma e o Actor configurado permitem, os comentários públicos são coletados e vinculados ao post original.
+
+A cadeia auditável pode ser representada por:
+
+```text
+consulta
+  → DuckDuckGo
+  → SearchHit
+  → classificação REDE_SOCIAL
+  → Apify
+  → post social
+  → comentários públicos
+  → análise agregada da reação
+```
+
+Comentários representam **reação e percepção pública observável**, e não evidência factual. Por isso, permanecem fora do corpus jornalístico utilizado para confirmar fatos objetivos.
+
+### 3.8 Consolidação e proveniência
 
 Resultados que representam o mesmo endereço são consolidados em `MediaItem`, preservando a proveniência de suas diferentes descobertas.
 
@@ -301,7 +348,7 @@ YOUTUBE
 
 Além da URL, são preservados título, domínio, data de publicação, snippet, corpo textual quando recuperável, fonte, consulta de origem e horário de recuperação.
 
-### 3.8 Hidratação e validação semântica
+### 3.9 Hidratação e validação semântica
 
 O snippet retornado pelo mecanismo de busca pode ser insuficiente para decidir se uma matéria realmente pertence ao tema. Por isso, antes da validação semântica, o sistema pode recuperar o conteúdo integral da página.
 
@@ -315,7 +362,7 @@ resultado da busca ≠ item válido de repercussão
 
 A busca maximiza recuperação; a validação decide pertencimento ao corpus analítico.
 
-### 3.9 Camada factual
+### 3.10 Camada factual
 
 Em pautas que exigem identificação de eventos, vítimas, locais ou circunstâncias, uma camada factual separada estrutura afirmações e suas evidências.
 
@@ -339,7 +386,7 @@ resolução final
 
 Essa separação reduz o risco de inferir que uma matéria pertence à repercussão apenas porque foi útil para confirmar determinado fato.
 
-### 3.10 Memória global do corpus
+### 3.11 Memória global do corpus
 
 Uma característica central do sistema é não tratar cada relatório como uma investigação isolada.
 
@@ -357,7 +404,7 @@ A relação entre projeto e documento permanece separada em `ProjectCorpusLink`.
 
 Uma matéria considerada válida para o Projeto A pode ser recuperada no Projeto B, porém volta a ser avaliada em relação ao novo tema.
 
-### 3.11 Recuperação semântica
+### 3.12 Recuperação semântica
 
 Antes de abrir novas pesquisas externas, projetos anteriores semanticamente próximos são examinados.
 
@@ -377,7 +424,7 @@ Os embeddings utilizam `text-embedding-3-small` quando o endpoint OpenAI está c
 
 O corpus reutilizado não elimina automaticamente novas buscas. Ele serve como ponto de partida; o planejador pode reduzir consultas redundantes e posteriormente procurar lacunas de cobertura.
 
-### 3.12 Aprendizado supervisionado incremental
+### 3.13 Aprendizado supervisionado incremental
 
 Após a validação, decisões `VALID` e `NOT_RELATED` são convertidas em `RelevanceTrainingExample`.
 
@@ -409,7 +456,7 @@ decisão final
 
 Dessa maneira, o sistema aprende com o uso sem transformar previsões do modelo em verdade não supervisionada.
 
-### 3.13 Cobertura complementar
+### 3.14 Cobertura complementar
 
 Após validação e classificação, o sistema verifica lacunas, especialmente em veículos prioritários. Se a cobertura estiver incompleta, uma segunda fase pode gerar consultas adicionais.
 
@@ -417,7 +464,7 @@ O `gap_fill` ocorre **depois** da primeira análise. Portanto, a pergunta deixa 
 
 Essa estratégia reduz buscas redundantes.
 
-### 3.14 Geração e controle de qualidade
+### 3.15 Geração e controle de qualidade
 
 A redação é produzida apenas após consolidação do corpus, fatos e métricas. O relatório gerado é submetido a QA determinístico e, quando habilitado, QA por LLM.
 
@@ -450,8 +497,10 @@ Os principais resultados funcionais são:
 
 - preservação dos resultados brutos e das tentativas de pesquisa;
 - distinção entre pesquisa factual e pesquisa de repercussão;
-- suporte a portais de notícias, redes sociais e YouTube;
-- camada opcional de percepção observada em comentários públicos de Instagram, Facebook e X;
+- DuckDuckGo como camada central de descoberta, com roteamento posterior por origem da mídia;
+- suporte a portais de notícias, YouTube e redes sociais sem transformar os conectores especializados em mecanismos paralelos de descoberta;
+- Apify restrito ao enriquecimento de posts sociais previamente descobertos pelo DuckDuckGo;
+- camada opcional de percepção observada em comentários públicos de Instagram, Facebook, TikTok e X;
 - persistência separada de posts/comentários, sem misturar comentários ao corpus jornalístico;
 - agregação de sentimento, emoções, posição e temas recorrentes com ressalva explícita de não representatividade populacional;
 - tratamento independente das janelas factual e midiática;
@@ -619,6 +668,7 @@ APIFY_API_TOKEN=
 APIFY_SOCIAL_ENABLED=true
 APIFY_INSTAGRAM_COMMENTS_ACTOR_ID=apify/instagram-comment-scraper
 APIFY_FACEBOOK_COMMENTS_ACTOR_ID=apify/facebook-comments-scraper
+APIFY_TIKTOK_COMMENTS_ACTOR_ID=clockworks/tiktok-comments-scraper
 # X usa Actor comunitário e pode ser substituído por outro:
 APIFY_X_COMMENTS_ACTOR_ID=scraper_one/x-post-replies-scraper
 
