@@ -222,7 +222,6 @@ class Settings(BaseSettings):
     apify_social_timeout_seconds: int = Field(default=240, ge=30, le=295)
     social_analysis_max_comments: int = Field(default=120, ge=10, le=1000)
     social_analysis_batch_size: int = Field(default=30, ge=5, le=60)
-    max_social_discovery_queries: int = Field(default=3, ge=0, le=6)
 
     # Reparacao leve de metadados antigos no startup. Corrige origem
     # (portal/rede social/YouTube) e datas completas explicitas em URL/titulo.
