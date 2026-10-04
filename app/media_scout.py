@@ -6,7 +6,6 @@ from typing import Any
 from app.source_registry import (
     ISP_INSTITUTION_NAME,
     PRIORITY_MEDIA_SOURCES,
-    PRIORITY_YOUTUBE_CHANNELS,
 )
 from app.topic_profile import normalized_text, product_anchor_from_name
 from app.year_utils import find_year
@@ -28,8 +27,8 @@ class MediaScout:
 
     The LLM (when enabled) chooses the search strategy: one primary query and a
     very small number of materially different complementary queries. MediaScout
-    then expands only the deterministic coverage checks (priority portals and
-    priority YouTube channels). It does not generate a large paraphrase matrix.
+    then expands only deterministic portal coverage checks. YouTube and social
+    sources are routed from the same DuckDuckGo discovery results.
     """
 
     def __init__(self, topic: str, profile: dict | None = None):
@@ -238,33 +237,6 @@ class MediaScout:
                 )
             )
 
-        unique: dict[tuple[str, str], ScoutTask] = {}
-        for task in tasks:
-            unique.setdefault((task.platform, normalized_text(task.query)), task)
-        return list(unique.values())
-
-    def youtube_tasks(self) -> list[ScoutTask]:
-        primary = self._portal_anchor()
-        tasks = [
-            ScoutTask(
-                "youtube",
-                primary,
-                "Busca principal",
-                "Localizar videos materialmente relacionados ao objeto monitorado.",
-                role="PRIMARY",
-            )
-        ]
-        tasks.extend(
-            ScoutTask(
-                "youtube",
-                f"{primary} {channel_query}",
-                label,
-                f"Verificar cobertura no canal {label} usando a consulta principal.",
-                is_priority=True,
-                role="PRIORITY_CHANNEL",
-            )
-            for label, channel_query in PRIORITY_YOUTUBE_CHANNELS
-        )
         unique: dict[tuple[str, str], ScoutTask] = {}
         for task in tasks:
             unique.setdefault((task.platform, normalized_text(task.query)), task)
