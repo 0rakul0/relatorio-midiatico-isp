@@ -60,6 +60,7 @@ def test_social_collection_persists_comments_without_author_identity(monkeypatch
             apify_social_timeout_seconds=240,
             social_analysis_max_comments=120,
             social_analysis_batch_size=30,
+            social_reuse_max_age_days=30,
         ),
     )
     monkeypatch.setattr(
@@ -159,7 +160,7 @@ def test_tiktok_comment_shape_is_normalized():
     assert normalized["published_at"] is not None
 
 
-def test_social_candidates_only_accept_duckduckgo_discovery():
+def test_social_candidates_accept_duckduckgo_and_reused_provenance():
     db = _session()
     project = Project(
         topic="tema social",
@@ -188,6 +189,17 @@ def test_social_candidates_only_accept_duckduckgo_discovery():
             ),
             MediaItem(
                 project_id=project.id,
+                title="Post reutilizado",
+                url="https://www.instagram.com/p/REUSED123/",
+                canonical_url="https://www.instagram.com/p/REUSED123/",
+                domain="instagram.com",
+                status="PENDING",
+                media_origin="REDE_SOCIAL",
+                search_source="corpus_reuse",
+                source_provenance=[{"provider": "duckduckgo", "origin": "historical"}],
+            ),
+            MediaItem(
+                project_id=project.id,
                 title="Post manual",
                 url="https://www.instagram.com/p/MANUAL123/",
                 canonical_url="https://www.instagram.com/p/MANUAL123/",
@@ -205,5 +217,6 @@ def test_social_candidates_only_accept_duckduckgo_discovery():
     assert "instagram" in candidates
     urls = [row[0] for row in candidates["instagram"]]
     assert "https://www.instagram.com/p/DDG123/" in urls
+    assert "https://www.instagram.com/p/REUSED123/" in urls
     assert "https://www.instagram.com/p/MANUAL123/" not in urls
     db.close()
