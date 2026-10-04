@@ -65,7 +65,7 @@ def collect_web(
         max(1, settings.max_search_results),
         target_media_items=settings.target_media_items,
     )
-    state, _video = run_agent_collection(
+    state = run_agent_collection(
         project_id=project_id,
         web_queries=queries,
         web_counters=counters,
