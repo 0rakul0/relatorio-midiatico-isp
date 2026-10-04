@@ -401,7 +401,7 @@ payload; voce NAO e o planejador e NAO deve criar novas consultas.
 
 Regras:
 - se web_queries nao estiver vazio, chame UMA vez executar_buscas_web passando a lista COMPLETA e exata;
-- se o payload tiver youtube_queries, chame UMA vez executar_buscas_videos passando a lista COMPLETA e exata;
+- a classificacao entre portal, YouTube e rede social ocorre depois da descoberta; nao abra uma segunda busca por tipo de midia;
 - use exatamente as consultas recebidas, na ordem fornecida; nao crie, renomeie, reordene nem omita consultas;
 - nao repita consulta ja executada nem invente resultados;
 - uma consulta aprovada deve ser executada mesmo que a meta de corpus ja tenha sido atingida;
@@ -618,10 +618,6 @@ class ReportAgent:
         web_queries = list(payload.get("web_queries") or [])
         if web_queries:
             required.append(("executar_buscas_web", web_queries))
-
-        video_queries = list(payload.get("youtube_queries") or [])
-        if video_queries:
-            required.append(("executar_buscas_videos", video_queries))
 
         if not required:
             result = response_model(
