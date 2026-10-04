@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -90,42 +90,48 @@ def _url_key(value: str) -> str:
         return raw.rstrip("/").lower()
 
 
+def _has_duckduckgo_provenance(item: MediaItem) -> bool:
+    source = str(item.search_source or "").strip().lower()
+    if source.startswith("duckduckgo"):
+        return True
+    for entry in item.source_provenance or []:
+        if not isinstance(entry, dict):
+            continue
+        provider = str(entry.get("source") or entry.get("provider") or "").strip().lower()
+        if provider.startswith("duckduckgo"):
+            return True
+    return False
+
+
 def _candidate_urls(
     db: Session,
     project_id: int,
 ) -> dict[str, list[tuple[str, int | None, str | None]]]:
-    """Retorna somente posts sociais descobertos pelo DuckDuckGo.
-
-    DuckDuckGo e a camada de descoberta. Apify nunca abre uma busca social
-    autonoma: ele recebe apenas URLs sociais que ja apareceram em SearchHit ou
-    MediaItem com proveniencia DuckDuckGo.
-    """
+    """Posts sociais conhecidos com descoberta DuckDuckGo auditavel."""
     found: dict[str, dict[str, tuple[str, int | None, str | None]]] = defaultdict(dict)
 
     for item in db.scalars(
         select(MediaItem).where(MediaItem.project_id == project_id)
     ).all():
-        discovery_provider = str(item.search_source or "").strip().lower()
-        if not discovery_provider.startswith("duckduckgo"):
+        if not _has_duckduckgo_provenance(item):
             continue
         platform = _platform_for_url(item.url)
         if not platform:
             continue
-        key = _url_key(item.url)
-        found[platform][key] = (item.url, item.id, item.title)
+        found[platform][_url_key(item.url)] = (item.url, item.id, item.title)
 
     for hit in db.scalars(
         select(SearchHit).where(SearchHit.project_id == project_id)
     ).all():
-        discovery_provider = str(hit.provider or "").strip().lower()
-        if not discovery_provider.startswith("duckduckgo"):
+        if not str(hit.provider or "").strip().lower().startswith("duckduckgo"):
             continue
         platform = _platform_for_url(hit.url)
         if not platform:
             continue
         url = str(hit.url or "").strip()
-        key = _url_key(url)
-        found[platform].setdefault(key, (url, hit.media_item_id, hit.title))
+        found[platform].setdefault(
+            _url_key(url), (url, hit.media_item_id, hit.title)
+        )
 
     limit = max(1, int(get_settings().apify_social_max_posts_per_platform))
     return {
