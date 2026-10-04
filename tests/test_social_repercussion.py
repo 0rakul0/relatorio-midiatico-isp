@@ -52,6 +52,7 @@ def test_social_collection_persists_comments_without_author_identity(monkeypatch
             apify_api_token="token",
             apify_instagram_comments_actor_id="apify/instagram-comment-scraper",
             apify_facebook_comments_actor_id="apify/facebook-comments-scraper",
+            apify_tiktok_comments_actor_id="clockworks/tiktok-comments-scraper",
             apify_x_comments_actor_id=None,
             apify_social_max_posts_per_platform=8,
             apify_social_comments_per_post=50,
@@ -101,6 +102,9 @@ def test_platform_detection_only_accepts_post_urls():
         "https://www.facebook.com/page/posts/123"
     ) == "facebook"
     assert social._platform_for_url(
+        "https://www.tiktok.com/@usuario/video/7332342275151760642"
+    ) == "tiktok"
+    assert social._platform_for_url(
         "https://x.com/user/status/123"
     ) == "x"
     assert social._platform_for_url(
@@ -131,3 +135,75 @@ def test_x_reply_shape_is_normalized():
     assert normalized["reply_count"] == 2
     assert normalized["published_at"] is not None
     assert "author" not in normalized
+
+
+def test_tiktok_comment_shape_is_normalized():
+    row = {
+        "cid": "7500000000000000001",
+        "text": "Esse tema precisa de mais atencao.",
+        "createTimeISO": "2026-08-06T11:00:00.000Z",
+        "diggCount": 42,
+        "replyCommentTotal": 3,
+        "videoWebUrl": "https://www.tiktok.com/@exemplo/video/7332342275151760642",
+        "uniqueId": "nao-persistir",
+    }
+
+    normalized = social._normalize_comment("tiktok", row)
+
+    assert normalized is not None
+    assert normalized["external_id"] == "7500000000000000001"
+    assert normalized["text"] == "Esse tema precisa de mais atencao."
+    assert normalized["like_count"] == 42
+    assert normalized["reply_count"] == 3
+    assert normalized["source_url"].endswith("/7332342275151760642")
+    assert normalized["published_at"] is not None
+
+
+def test_social_candidates_only_accept_duckduckgo_discovery():
+    db = _session()
+    project = Project(
+        topic="tema social",
+        launch_date=date(2026, 1, 1),
+        collection_start=date(2026, 8, 1),
+        collection_end=date(2026, 8, 31),
+        has_custom_date_window=True,
+        project_type="GENERAL_TOPIC",
+        topic_profile={},
+        execution_options={},
+        execution_plan={},
+    )
+    db.add(project)
+    db.flush()
+    db.add_all(
+        [
+            MediaItem(
+                project_id=project.id,
+                title="Post descoberto",
+                url="https://www.instagram.com/p/DDG123/",
+                canonical_url="https://www.instagram.com/p/DDG123/",
+                domain="instagram.com",
+                status="PENDING",
+                media_origin="REDE_SOCIAL",
+                search_source="duckduckgo_news",
+            ),
+            MediaItem(
+                project_id=project.id,
+                title="Post manual",
+                url="https://www.instagram.com/p/MANUAL123/",
+                canonical_url="https://www.instagram.com/p/MANUAL123/",
+                domain="instagram.com",
+                status="PENDING",
+                media_origin="REDE_SOCIAL",
+                search_source="manual",
+            ),
+        ]
+    )
+    db.commit()
+
+    candidates = social._candidate_urls(db, project.id)
+
+    assert "instagram" in candidates
+    urls = [row[0] for row in candidates["instagram"]]
+    assert "https://www.instagram.com/p/DDG123/" in urls
+    assert "https://www.instagram.com/p/MANUAL123/" not in urls
+    db.close()
