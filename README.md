@@ -500,7 +500,7 @@ Os principais resultados funcionais são:
 - DuckDuckGo como camada central de descoberta, com roteamento posterior por origem da mídia;
 - suporte a portais de notícias, YouTube e redes sociais sem transformar os conectores especializados em mecanismos paralelos de descoberta;
 - Apify restrito ao enriquecimento de posts sociais previamente descobertos pelo DuckDuckGo;
-- camada opcional de percepção observada em comentários públicos de Instagram, Facebook, TikTok e X;
+- camada de percepção observada em comentários públicos de Instagram, Facebook, TikTok e X quando posts elegíveis forem descobertos e o Apify estiver configurado;
 - persistência separada de posts/comentários, sem misturar comentários ao corpus jornalístico;
 - agregação de sentimento, emoções, posição e temas recorrentes com ressalva explícita de não representatividade populacional;
 - tratamento independente das janelas factual e midiática;
