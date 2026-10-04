@@ -2,27 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import Project
-from app.services.collection.orchestrator import (
-    CollectionState,
-    run_agent_collection,
-    video_queries_pending,
-    web_queries_pending,
-)
+from app.models import MediaItem, Project
+from app.services.collection.media_origin import YOUTUBE
+from app.services.collection.orchestrator import CollectionState, run_agent_collection, web_queries_pending
 from app.services.collection.web import new_web_counters
-
-
-def _new_video_counters() -> dict[str, int]:
-    return {
-        "tasks_total": 0,
-        "tasks_resolved": 0,
-        "tasks_failed": 0,
-        "duckduckgo_attempts": 0,
-        "duckduckgo_added": 0,
-    }
 
 
 def _providers_label(*flags: tuple[str, bool]) -> str | None:
@@ -44,7 +31,7 @@ def _web_result(state: CollectionState) -> dict[str, object]:
         return {
             "status": "UNAVAILABLE",
             "collected": 0,
-            "error": "O agente de coleta não executou a coleta web planejada",
+            "error": "O agente de coleta nao executou a coleta web planejada",
             "provider": None,
             "stats": counters,
         }
@@ -60,35 +47,28 @@ def _web_result(state: CollectionState) -> dict[str, object]:
     }
 
 
-def _video_result(state: CollectionState | None) -> dict[str, object]:
-    if state is None:
-        return {"status": "DISABLED", "collected": 0, "error": None, "provider": None, "stats": {}}
-    counters = state.counters
-    if state.unavailable:
-        return {
-            "status": "UNAVAILABLE",
-            "collected": 0,
-            "error": state.unavailable,
-            "provider": None,
-            "stats": counters,
-        }
-    if state.expect_queries and not state.invoked:
-        return {
-            "status": "UNAVAILABLE",
-            "collected": 0,
-            "error": "O agente de coleta não executou a coleta de vídeos planejada",
-            "provider": None,
-            "stats": counters,
-        }
-    failed = int(counters.get("tasks_failed", 0))
+def _youtube_result(db: Session, project_id: int) -> dict[str, object]:
+    """Resume URLs do YouTube descobertas pela coleta principal do DuckDuckGo.
+
+    Nao existe uma segunda descoberta via DuckDuckGo Videos. O YouTube e uma
+    rota derivada dos resultados da busca web principal, identificada por
+    media_origin=YOUTUBE.
+    """
+    count = int(
+        db.scalar(
+            select(func.count(MediaItem.id)).where(
+                MediaItem.project_id == project_id,
+                MediaItem.media_origin == YOUTUBE,
+            )
+        )
+        or 0
+    )
     return {
-        "status": "PARTIAL" if failed else "COMPLETED",
-        "collected": state.added,
+        "status": "ROUTED",
+        "collected": count,
         "error": None,
-        "provider": _providers_label(
-            ("duckduckgo_video", int(counters.get("duckduckgo_attempts", 0)) > 0),
-        ),
-        "stats": counters,
+        "provider": "duckduckgo",
+        "stats": {"routed_from_web": count},
     }
 
 
@@ -101,40 +81,40 @@ def collect_media_sources(
     web_progress: Callable[[str], None] | None = None,
     youtube_progress: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
-    """Executa a coleta obrigatória de web (e vídeo opcional) pelo agente.
+    """Executa uma unica camada de descoberta externa: DuckDuckGo Web.
 
-    O serviço informa a metodologia (consultas web já planejadas e tarefas de
-    vídeo) e o agente executa o plano via ``pesquisar_internet`` /
-    ``pesquisar_videos``. Nenhum provedor é acessado aqui.
+    Os resultados sao persistidos e classificados por origem. URLs do YouTube
+    sao contabilizadas como rota especializada, sem abrir uma segunda busca.
+    Os parametros de YouTube permanecem na assinatura apenas por compatibilidade
+    com chamadas existentes.
     """
     settings = get_settings()
     web_queries = web_queries_pending(project.id)
     web_counters = new_web_counters(max(1, settings.max_search_results))
 
-    video_queries: list[str] | None = None
-    video_counters: dict[str, int] | None = None
-    if enable_youtube:
-        video_queries = video_queries_pending(project.id)
-        video_counters = _new_video_counters()
-
-    web_state, video_state = run_agent_collection(
+    web_state, _video_state = run_agent_collection(
         project_id=project.id,
         web_queries=web_queries,
         web_counters=web_counters,
         web_progress=web_progress,
-        video_queries=video_queries,
-        video_counters=video_counters,
-        video_progress=youtube_progress,
+        video_queries=None,
+        video_counters=None,
+        video_progress=None,
         cancel_check=cancel_check,
     )
 
-    if cancel_check and (web_state.cancelled or (video_state is not None and video_state.cancelled)):
-        exc = web_state.cancel_exc or (video_state.cancel_exc if video_state else None)
-        if exc is not None:
-            raise exc
+    if cancel_check and web_state.cancelled and web_state.cancel_exc is not None:
+        raise web_state.cancel_exc
+
+    db.expire_all()
+    youtube = _youtube_result(db, project.id)
+    if youtube_progress:
+        youtube_progress(
+            f"{youtube['collected']} URL(s) do YouTube roteada(s) a partir da descoberta DuckDuckGo"
+        )
 
     return {
         "web": _web_result(web_state),
-        "youtube": _video_result(video_state if enable_youtube else None),
+        "youtube": youtube,
         "parallel": False,
     }
