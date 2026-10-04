@@ -22,7 +22,6 @@ from app.schemas import (
     AgentBulkSearchResponse,
     AgentSearchHit,
     AgentSearchResponse,
-    AgentVideoSearchArgs,
     AgentWebSearchArgs,
 )
 from app.tools.providers import (
@@ -367,55 +366,6 @@ def make_web_search_tool(
     )
 
 
-def make_video_search_tool(
-    *,
-    sink: SearchSink | None = None,
-    context: SearchContextResolver | None = None,
-    providers: tuple[str, ...] = ("duckduckgo",),
-    observer: SearchObserver | None = None,
-) -> StructuredTool:
-    def pesquisar_videos(query: str, max_results: int = 5) -> dict[str, Any]:
-        limit, window_start, window_end, _purpose = _query_options(
-            context,
-            query,
-            max_results,
-        )
-
-        def run(chain: tuple[str, ...]) -> tuple[str, list[dict[str, Any]]]:
-            return _search_videos(
-                query,
-                max_results=limit,
-                providers=chain,
-                window_start=window_start,
-                window_end=window_end,
-                observer=observer,
-                tool_name="pesquisar_videos",
-            )
-
-        provider, rows = _execute_with_sink(
-            query=query,
-            providers=providers,
-            run=run,
-            sink=sink,
-            observer=observer,
-            tool_name="pesquisar_videos",
-        )
-        return _validated_response(
-            query=query,
-            provider=provider,
-            rows=rows,
-            sink=None,
-        )
-
-    return StructuredTool.from_function(
-        func=pesquisar_videos,
-        args_schema=AgentVideoSearchArgs,
-        name="pesquisar_videos",
-        description="Pesquisa videos relevantes usando DuckDuckGo Videos.",
-        return_direct=False,
-    )
-
-
 def make_bulk_web_search_tool(
     *,
     sink: SearchSink | None = None,
@@ -567,132 +517,6 @@ def make_bulk_web_search_tool(
             "Executa em lote todas as consultas web do plano aprovado no DuckDuckGo, "
             "sem criar, renomear ou omitir consultas. A meta de corpus nao interrompe "
             "buscas aprovadas; SKIPPED e reservado a guardrails de integridade do plano."
-        ),
-        return_direct=False,
-    )
-
-
-def make_bulk_video_search_tool(
-    *,
-    sink: SearchSink | None = None,
-    context: SearchContextResolver | None = None,
-    providers: tuple[str, ...] = ("duckduckgo",),
-    observer: SearchObserver | None = None,
-) -> StructuredTool:
-    def executar_buscas_videos(queries: list[str]) -> dict[str, Any]:
-        """Busca vídeos em paralelo; sink/observer permanecem sequenciais."""
-        settings = get_settings()
-        requested = list(queries)
-        result_by_index: dict[int, dict[str, Any]] = {}
-        active: list[dict[str, Any]] = []
-
-        for index, query in enumerate(requested):
-            limit, window_start, window_end, _purpose = _query_options(context, query, 5)
-            active.append(
-                {
-                    "index": index,
-                    "query": query,
-                    "limit": limit,
-                    "window_start": window_start,
-                    "window_end": window_end,
-                }
-            )
-
-        if active:
-            workers = (
-                min(len(active), max(1, int(settings.search_parallel_video_workers)))
-                if settings.search_parallel_enabled
-                else 1
-            )
-            futures: dict[int, Future] = {}
-
-            with ThreadPoolExecutor(
-                max_workers=workers,
-                thread_name_prefix="media-video",
-            ) as executor:
-                for item in active:
-                    query = str(item["query"])
-                    if observer is not None:
-                        observer.query_started(query=query, tool_name="executar_buscas_videos")
-                        if "duckduckgo" in providers:
-                            observer.provider_attempted(
-                                query=query,
-                                provider="duckduckgo",
-                                tool_name="executar_buscas_videos",
-                            )
-
-                    futures[int(item["index"])] = executor.submit(
-                        _search_videos,
-                        query,
-                        max_results=int(item["limit"]),
-                        providers=providers,
-                        window_start=item["window_start"],
-                        window_end=item["window_end"],
-                        observer=None,
-                        tool_name="executar_buscas_videos",
-                        raise_unavailable=True,
-                    )
-
-                for item in active:
-                    index = int(item["index"])
-                    query = str(item["query"])
-                    try:
-                        provider, raw_rows = futures[index].result()
-                        accepted_rows = sink(raw_rows, provider, query) if sink else raw_rows
-                        if observer is not None:
-                            observer.provider_result(
-                                query=query,
-                                provider=provider,
-                                tool_name="executar_buscas_videos",
-                                returned=len(raw_rows),
-                                accepted=len(accepted_rows),
-                            )
-                            observer.query_finished(
-                                query=query,
-                                tool_name="executar_buscas_videos",
-                            )
-                        result_by_index[index] = {
-                            "query": query,
-                            "provider": provider,
-                            "status": "OK" if accepted_rows else "NO_RESULTS",
-                            "returned": len(raw_rows),
-                            "accepted": len(accepted_rows),
-                            "hits": [],
-                        }
-                    except Exception as exc:
-                        if observer is not None:
-                            observer.provider_error(
-                                query=query,
-                                provider="duckduckgo",
-                                tool_name="executar_buscas_videos",
-                                error=str(exc),
-                            )
-                            observer.query_finished(
-                                query=query,
-                                tool_name="executar_buscas_videos",
-                            )
-                        result_by_index[index] = {
-                            "query": query,
-                            "provider": "duckduckgo",
-                            "status": "ERROR",
-                            "error": str(exc),
-                            "returned": 0,
-                            "accepted": 0,
-                            "hits": [],
-                        }
-
-        results = [result_by_index[index] for index in range(len(requested))]
-        return AgentBulkSearchResponse.model_validate(
-            {"results": results}
-        ).model_dump(mode="json")
-
-    return StructuredTool.from_function(
-        func=executar_buscas_videos,
-        args_schema=AgentBulkSearchArgs,
-        name="executar_buscas_videos",
-        description=(
-            "Executa em lote todas as consultas de video do plano aprovado no "
-            "DuckDuckGo Videos, sem criar, renomear ou omitir consultas."
         ),
         return_direct=False,
     )
