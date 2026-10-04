@@ -214,6 +214,7 @@ class Settings(BaseSettings):
     apify_api_base_url: str = "https://api.apify.com/v2"
     apify_instagram_comments_actor_id: str | None = "apify/instagram-comment-scraper"
     apify_facebook_comments_actor_id: str | None = "apify/facebook-comments-scraper"
+    apify_tiktok_comments_actor_id: str | None = "clockworks/tiktok-comments-scraper"
     # X usa Actor comunitario e permanece sobrescrevivel no .env.
     apify_x_comments_actor_id: str | None = "scraper_one/x-post-replies-scraper"
     apify_social_max_posts_per_platform: int = Field(default=8, ge=1, le=50)
