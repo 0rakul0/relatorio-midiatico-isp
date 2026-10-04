@@ -20,6 +20,7 @@ def _actor_for_platform(platform: str) -> str | None:
     return {
         "instagram": settings.apify_instagram_comments_actor_id,
         "facebook": settings.apify_facebook_comments_actor_id,
+        "tiktok": settings.apify_tiktok_comments_actor_id,
         "x": settings.apify_x_comments_actor_id,
     }.get(platform)
 
@@ -36,6 +37,13 @@ def _actor_input(platform: str, urls: list[str], limit: int) -> dict:
             "startUrls": [{"url": url} for url in urls],
             "resultsLimit": limit,
             "includeNestedComments": False,
+        }
+    if platform == "tiktok":
+        return {
+            "postURLs": urls,
+            "commentsPerPost": limit,
+            "maxRepliesPerComment": 0,
+            "resultsPerPage": min(100, limit),
         }
     if platform == "x":
         return {
