@@ -165,19 +165,19 @@ def run_full_methodology(
         "RUNNING",
         "Executando buscas aprovadas em modo leve: metadados/snippets e hits brutos auditaveis",
     )
-    if flags["enable_youtube"]:
-        stage("youtube", "RUNNING", "Pesquisando videos: DuckDuckGo Videos")
-    else:
-        reason = (processes.get("youtube_collection") or {}).get("reason") or "Desativado pelo plano"
-        stage("youtube", "SKIPPED", reason)
+    stage(
+        "youtube",
+        "RUNNING",
+        "Classificando URLs do YouTube encontradas na descoberta principal do DuckDuckGo",
+    )
 
     collection_sources = collect_media_sources(
         db,
         project,
-        enable_youtube=flags["enable_youtube"],
+        enable_youtube=True,
         cancel_check=check,
         web_progress=detail_for("collection"),
-        youtube_progress=detail_for("youtube") if flags["enable_youtube"] else None,
+        youtube_progress=detail_for("youtube"),
     )
     web = collection_sources["web"]
     collected = int(web["collected"])
@@ -209,12 +209,11 @@ def run_full_methodology(
     youtube_collected = int(youtube["collected"])
     project.youtube_collection_status = str(youtube["status"])
     project.youtube_collection_error = youtube.get("error")
-    if not flags["enable_youtube"] or project.youtube_collection_status == "DISABLED":
-        stage("youtube", "SKIPPED", (processes.get("youtube_collection") or {}).get("reason") or "Desativado")
-    elif project.youtube_collection_status == "UNAVAILABLE":
-        stage("youtube", "SKIPPED", "Coleta de videos indisponivel; nao sera interpretada como ausencia de cobertura")
-    else:
-        stage("youtube", "DONE", f"{youtube_collected} video(s) consolidados")
+    stage(
+        "youtube",
+        "DONE",
+        f"{youtube_collected} URL(s) do YouTube roteada(s) da descoberta DuckDuckGo",
+    )
     db.commit()
 
     # 3b. Repercussao social: comentarios permanecem fora do corpus de noticias.
@@ -229,57 +228,49 @@ def run_full_methodology(
         ),
     }
     check()
-    if not flags.get("enable_social_repercussion"):
+    stage(
+        "social_repercussion",
+        "RUNNING",
+        "Roteando posts sociais descobertos pelo DuckDuckGo e enriquecendo comentarios via Apify",
+    )
+    try:
+        social_repercussion = collect_social_repercussion(db, project)
+    except RuntimeError as exc:
+        from app.orchestration.state import RunCancelled
+
+        if isinstance(exc, RunCancelled):
+            raise
+        social_repercussion = {
+            "status": "UNAVAILABLE",
+            "reason": str(exc)[:500],
+            "posts": 0,
+            "comments": 0,
+            "analyzed_comments": 0,
+        }
         stage(
             "social_repercussion",
             "SKIPPED",
-            (processes.get("social_repercussion") or {}).get("reason")
-            or "Nao prevista no plano",
+            f"Repercussao social indisponivel: {str(exc)[:180]}",
         )
     else:
-        stage(
-            "social_repercussion",
-            "RUNNING",
-            "Coletando comentarios publicos dos posts sociais localizados pelo DuckDuckGo",
-        )
-        try:
-            social_repercussion = collect_social_repercussion(db, project)
-        except RuntimeError as exc:
-            from app.orchestration.state import RunCancelled
-
-            if isinstance(exc, RunCancelled):
-                raise
-            social_repercussion = {
-                "status": "UNAVAILABLE",
-                "reason": str(exc)[:500],
-                "posts": 0,
-                "comments": 0,
-                "analyzed_comments": 0,
-            }
+        social_status = str(social_repercussion.get("status") or "")
+        if social_status in {"DISABLED", "NOT_CONFIGURED", "NO_POSTS"}:
             stage(
                 "social_repercussion",
                 "SKIPPED",
-                f"Repercussao social indisponivel: {str(exc)[:180]}",
+                str(
+                    social_repercussion.get("reason")
+                    or "Nenhum comentario social disponivel na amostra"
+                )[:180],
             )
         else:
-            social_status = str(social_repercussion.get("status") or "")
-            if social_status in {"DISABLED", "NOT_CONFIGURED", "NO_POSTS"}:
-                stage(
-                    "social_repercussion",
-                    "SKIPPED",
-                    str(
-                        social_repercussion.get("reason")
-                        or "Nenhum comentario social disponivel na amostra"
-                    )[:180],
-                )
-            else:
-                stage(
-                    "social_repercussion",
-                    "DONE",
-                    f"{social_repercussion.get('posts', 0)} post(s); "
-                    f"{social_repercussion.get('comments', 0)} comentario(s); "
-                    f"{social_repercussion.get('analyzed_comments', 0)} analisado(s)",
-                )
+            stage(
+                "social_repercussion",
+                "DONE",
+                f"{social_repercussion.get('posts', 0)} post(s); "
+                f"{social_repercussion.get('comments', 0)} comentario(s); "
+                f"{social_repercussion.get('analyzed_comments', 0)} analisado(s)",
+            )
 
     # Literatura cientifica: contexto separado da metrica de repercussao.
     academic_research = {
