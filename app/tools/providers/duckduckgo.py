@@ -157,60 +157,6 @@ def search_news(
     return _with_retries(run, retries=retries, base_delay=retry_base_seconds)
 
 
-def search_videos(
-    query: str,
-    *,
-    max_results: int = 5,
-    region: str = "br-pt",
-    safesearch: str = "moderate",
-    retries: int = 2,
-    retry_base_seconds: float = 0.8,
-) -> list[dict[str, Any]]:
-    def run() -> list[dict[str, Any]]:
-        with _client() as ddgs:
-            rows = _invoke_with_query_alias(
-                ddgs.videos,
-                query,
-                region=region,
-                safesearch=safesearch,
-                max_results=max(1, max_results),
-            )
-        normalized: list[dict[str, Any]] = []
-        for row in rows:
-            url = str(
-                row.get("content")
-                or row.get("url")
-                or row.get("href")
-                or row.get("embed_url")
-                or ""
-            ).strip()
-            if not url:
-                continue
-            statistics = row.get("statistics") if isinstance(row.get("statistics"), dict) else {}
-            raw_views = statistics.get("viewCount") if statistics else row.get("view_count")
-            try:
-                view_count = int(raw_views) if raw_views not in (None, "") else None
-            except (TypeError, ValueError):
-                view_count = None
-
-            normalized.append(
-                {
-                    "title": str(row.get("title") or "Video sem titulo"),
-                    "url": url,
-                    "description": row.get("description"),
-                    "published_at": row.get("published") or row.get("date"),
-                    "channel": row.get("uploader") or row.get("creator") or row.get("publisher"),
-                    "view_count": view_count,
-                    "duration": row.get("duration"),
-                    "provider": "duckduckgo_video",
-                    "raw": row,
-                }
-            )
-        return normalized
-
-    return _with_retries(run, retries=retries, base_delay=retry_base_seconds)
-
-
 _BLOCKED_HOSTNAMES = {
     "localhost",
     "localhost.localdomain",
