@@ -5,9 +5,7 @@ from app.tools.search import (
     SearchContextResolver,
     SearchObserver,
     SearchSink,
-    make_bulk_video_search_tool,
     make_bulk_web_search_tool,
-    make_video_search_tool,
     make_web_search_tool,
 )
 
@@ -18,8 +16,6 @@ __all__ = [
     "SearchSink",
     "build_agent_tools",
     "make_bulk_article_fetch_tool",
-    "make_bulk_video_search_tool",
     "make_bulk_web_search_tool",
-    "make_video_search_tool",
     "make_web_search_tool",
 ]
