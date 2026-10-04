@@ -10,7 +10,6 @@ from app.tools.providers.duckduckgo import (
     fetch_url_text,
     search_news,
     search_text,
-    search_videos,
 )
 
 __all__ = [
@@ -19,5 +18,4 @@ __all__ = [
     "fetch_url_text",
     "search_news",
     "search_text",
-    "search_videos",
 ]
