@@ -63,6 +63,9 @@ def _platform_for_url(value: str | None) -> str | None:
         ):
             return "facebook"
 
+    if host.endswith("tiktok.com") and "/video/" in path:
+        return "tiktok"
+
     if (
         host == "x.com"
         or host.endswith(".x.com")
@@ -91,11 +94,20 @@ def _candidate_urls(
     db: Session,
     project_id: int,
 ) -> dict[str, list[tuple[str, int | None, str | None]]]:
+    """Retorna somente posts sociais descobertos pelo DuckDuckGo.
+
+    DuckDuckGo e a camada de descoberta. Apify nunca abre uma busca social
+    autonoma: ele recebe apenas URLs sociais que ja apareceram em SearchHit ou
+    MediaItem com proveniencia DuckDuckGo.
+    """
     found: dict[str, dict[str, tuple[str, int | None, str | None]]] = defaultdict(dict)
 
     for item in db.scalars(
         select(MediaItem).where(MediaItem.project_id == project_id)
     ).all():
+        discovery_provider = str(item.search_source or "").strip().lower()
+        if not discovery_provider.startswith("duckduckgo"):
+            continue
         platform = _platform_for_url(item.url)
         if not platform:
             continue
@@ -105,6 +117,9 @@ def _candidate_urls(
     for hit in db.scalars(
         select(SearchHit).where(SearchHit.project_id == project_id)
     ).all():
+        discovery_provider = str(hit.provider or "").strip().lower()
+        if not discovery_provider.startswith("duckduckgo"):
+            continue
         platform = _platform_for_url(hit.url)
         if not platform:
             continue
@@ -118,7 +133,6 @@ def _candidate_urls(
         for platform, rows in found.items()
         if rows
     }
-
 
 def _nested(payload: dict, *keys: str) -> Any:
     current: Any = payload
@@ -195,6 +209,8 @@ def _source_url(row: dict) -> str:
             "sourceUrl",
             "facebookUrl",
             "facebook_url",
+            "videoWebUrl",
+            "webVideoUrl",
             "metadata.sourceTweetUrl",
             "metadata.source_tweet_url",
         ),
@@ -216,6 +232,7 @@ def _external_id(
             "commentId",
             "comment_id",
             "replyId",
+            "cid",
             "id",
             "pk",
             "tweet_id",
@@ -267,6 +284,8 @@ def _normalize_comment(
                 "date",
                 "createdAt",
                 "created_at",
+                "createTimeISO",
+                "create_time_iso",
                 "publishedAt",
                 "legacy.created_at",
             ),
@@ -288,6 +307,8 @@ def _normalize_comment(
                     (
                         "parentCommentId",
                         "parent_comment_id",
+                        "repliesToId",
+                        "replies_to_id",
                         "in_reply_to_status_id_str",
                     ),
                 )
@@ -303,6 +324,8 @@ def _normalize_comment(
                 (
                     "likesCount",
                     "likeCount",
+                    "diggCount",
+                    "digg_count",
                     "favouriteCount",
                     "favoriteCount",
                     "likes",
@@ -318,6 +341,8 @@ def _normalize_comment(
                 (
                     "repliesCount",
                     "replyCount",
+                    "replyCommentTotal",
+                    "reply_comment_total",
                     "reply_count",
                     "legacy.reply_count",
                 ),
