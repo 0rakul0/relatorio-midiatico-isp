@@ -31,17 +31,11 @@ from app.services.collection.common import (
 )
 from app.services.collection.guards import collection_guard
 from app.services.collection.media_origin import PORTAL_NOTICIAS, classify_media_origin
-from app.services.collection.youtube_helpers import (
-    is_youtube_url,
-    matches_priority_youtube_channel,
-)
 
 
 _HARD_USABILITY_FLAGS = {
     "INVALID_URL",
     "DOMAIN_MISMATCH",
-    "NON_YOUTUBE_RESULT",
-    "PRIORITY_CHANNEL_MISMATCH",
     "OUTSIDE_COLLECTION_WINDOW",
     "COLLECTION_GUARD_MISMATCH",
     "OVER_NEW_ITEM_BUDGET",
@@ -263,7 +257,6 @@ def persist_web_rows(
         "rejected": 0,  # backward-compatible field: collection no longer discards hits
     }
     site_domain = _site_domain_from_query(query.query) if query else None
-    is_youtube_query = bool(query and query.kind == "youtube")
     purpose = str(query.purpose if query else "MEDIA_REPERCUSSION")
     usable_rows: list[dict[str, Any]] = []
     budget_remaining, budget_cap = _new_item_budget(existing_items)
@@ -291,9 +284,6 @@ def persist_web_rows(
 
             if has_window and published_at and start and end and not (start <= published_at <= end):
                 flags.append("OUTSIDE_COLLECTION_WINDOW")
-
-            if is_youtube_query and not is_youtube_url(url):
-                flags.append("NON_YOUTUBE_RESULT")
 
             if purpose == "MEDIA_REPERCUSSION" and not collection_guard(
                 project,
@@ -362,153 +352,6 @@ def persist_web_rows(
             f"{counters['returned']} hit(s), {counters['persisted']} armazenado(s), "
             f"{counters['added']} URL(s) unica(s), {counters['duplicates']} duplicado(s), "
             f"{counters['flagged']} sinalizado(s); nenhum hit descartado por relevancia"
-        )
-
-    return counters, usable_rows
-
-
-def persist_video_rows(
-    db: Session,
-    project: Project,
-    task,
-    existing_items: dict[str, MediaItem],
-    rows: list[dict[str, Any]],
-    *,
-    has_window: bool,
-    start: date | None = None,
-    end: date | None = None,
-    max_accepted: int | None = None,
-    enforce_priority_channel: bool = True,
-    progress_detail: Callable[[str], None] | None = None,
-) -> tuple[dict[str, int], list[dict[str, Any]]]:
-    """Persist every video-search row; channel/window/theme mismatches become flags."""
-    counters = {
-        "returned": len(rows),
-        "persisted": 0,
-        "added": 0,
-        "duplicates": 0,
-        "flagged": 0,
-        "invalid": 0,
-        "usable": 0,
-        "over_budget": 0,
-        "rejected": 0,
-    }
-    purpose = "MEDIA_REPERCUSSION"
-    usable_rows: list[dict[str, Any]] = []
-    budget_remaining, budget_cap = _new_item_budget(existing_items)
-    counters["new_item_budget"] = budget_cap
-
-    for row in rows:
-        url = str(row.get("url") or "").strip()
-        channel = str(row.get("source_name") or "").strip() or None
-        provider = str(row.get("provider") or "duckduckgo_video")
-        published_at = result_publication_date(row.get("published_at"))
-        description = row.get("content") or row.get("snippet") or None
-        title = str(row.get("title") or "Video sem titulo")
-        flags: list[str] = []
-        canonical: str | None = None
-        host: str | None = None
-        media_origin = PORTAL_NOTICIAS
-
-        raw_view_count = row.get("view_count")
-        view_count = (
-            raw_view_count
-            if isinstance(raw_view_count, int)
-            and not isinstance(raw_view_count, bool)
-            and raw_view_count >= 0
-            else None
-        )
-
-        if not _valid_http_url(url):
-            flags.append("INVALID_URL")
-            counters["invalid"] += 1
-        else:
-            host = urlparse(url).netloc.lower().split(":")[0]
-            canonical = canonicalize(url)
-            media_origin = classify_media_origin(url, host)
-            if not is_youtube_url(url):
-                flags.append("NON_YOUTUBE_RESULT")
-                counters["rejected"] += 1
-            if (
-                task.is_priority
-                and enforce_priority_channel
-                and not matches_priority_youtube_channel(channel, task.target)
-            ):
-                flags.append("PRIORITY_CHANNEL_MISMATCH")
-            if has_window and published_at and start and end and not (start <= published_at <= end):
-                flags.append("OUTSIDE_COLLECTION_WINDOW")
-            if not collection_guard(
-                project,
-                title=title,
-                snippet=description,
-                content=description,
-            ):
-                flags.append("COLLECTION_GUARD_MISMATCH")
-
-        source_name = channel or host or "Fonte de video nao identificada"
-        media_item: MediaItem | None = None
-        normalized_row = {**row, "title": title, "content": description, "snippet": description}
-        rejected = "NON_YOUTUBE_RESULT" in flags
-        if rejected or (canonical and host and canonical not in existing_items and budget_remaining <= 0):
-            if canonical and host and not rejected:
-                flags.append("OVER_NEW_ITEM_BUDGET")
-                counters["over_budget"] += 1
-        elif canonical and host:
-            media_item, duplicate = _consolidate_media_item(
-                db,
-                project=project,
-                query=None,
-                existing_items=existing_items,
-                row=normalized_row,
-                canonical=canonical,
-                host=host,
-                published_at=published_at,
-                source_name=source_name,
-                provider=provider,
-                purpose=purpose,
-                view_count=view_count,
-                target=task.target,
-                media_origin=media_origin,
-            )
-            if duplicate:
-                counters["duplicates"] += 1
-                flags.append("DUPLICATE_URL")
-            else:
-                counters["added"] += 1
-                budget_remaining -= 1
-
-        _persist_search_hit(
-            db,
-            project=project,
-            query=None,
-            provider=provider,
-            row=normalized_row,
-            purpose=purpose,
-            flags=flags,
-            canonical_url=canonical,
-            domain=host,
-            published_at=published_at,
-            source_name=source_name,
-            media_item_id=media_item.id if media_item else None,
-            target=task.target,
-            view_count=view_count,
-            media_origin=media_origin,
-        )
-        counters["persisted"] += 1
-        if flags:
-            counters["flagged"] += 1
-
-        if _provider_usable(flags):
-            if max_accepted is None or len(usable_rows) < max_accepted:
-                usable_rows.append({**normalized_row, "source_name": source_name, "provider": provider})
-                counters["usable"] += 1
-
-    if progress_detail:
-        progress_detail(
-            "Coleta de video preservada: "
-            f"{counters['returned']} hit(s), {counters['persisted']} armazenado(s), "
-            f"{counters['added']} URL(s) unica(s), {counters['duplicates']} duplicado(s), "
-            f"{counters['flagged']} sinalizado(s)"
         )
 
     return counters, usable_rows
