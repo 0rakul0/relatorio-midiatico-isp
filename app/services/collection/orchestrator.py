@@ -26,8 +26,7 @@ from app.services.collection.common import (
     media_window,
     query_window,
 )
-from app.services.collection.persist import persist_video_rows, persist_web_rows
-from app.services.collection.youtube_helpers import youtube_tasks_for_execution
+from app.services.collection.persist import persist_web_rows
 from app.tools import SearchObserver, build_agent_tools
 from app.tools.search import search_providers_available
 
@@ -103,17 +102,6 @@ def web_queries_pending(project_id: int) -> list[str]:
         session.close()
 
 
-def video_queries_pending(project_id: int) -> list[str]:
-    session = SessionLocal()
-    try:
-        project = session.get(Project, project_id)
-        if not project:
-            return []
-        return [task.query for task in youtube_tasks_for_execution(project)]
-    finally:
-        session.close()
-
-
 def _check_cancel(state: CollectionState) -> bool:
     if state.cancel_check is None:
         return True
@@ -179,20 +167,6 @@ def _make_web_context(
         }
 
     return context
-
-def _make_video_context(project: Project):
-    settings = get_settings()
-
-    def context(query: str) -> dict[str, Any]:
-        # Same raw-first rule as web: preserve provider hits, validate dates later.
-        return {
-            "max_results": max(1, settings.max_youtube_results_per_task),
-            "window_start": None,
-            "window_end": None,
-        }
-
-    return context
-
 
 class SearchAuditObserver(SearchObserver):
     def __init__(
@@ -408,60 +382,6 @@ def _make_web_sink(
 
     return sink
 
-def _make_video_sink(
-    state: CollectionState,
-    session: Session,
-    project: Project,
-    plan: dict[str, Any],
-    existing_items: dict[str, MediaItem],
-):
-    counters = state.counters
-    settings = get_settings()
-    per_task_cap = max(1, settings.max_youtube_results_per_task)
-    start, end = media_window(project)
-    has_window = _valid_search_window(start, end)
-    progress = state.progress_detail
-
-    def sink(rows: list[dict[str, Any]], provider: str, query: str) -> list[dict[str, Any]]:
-        state.invoked = True
-        state.attempted.add(query)
-        if not _check_cancel(state):
-            return []
-
-        task = plan.get(query)
-        if task is None:
-            state.errors.append(f"{query}: task outside approved plan")
-            return []
-
-        if provider == "duckduckgo":
-            counters["duckduckgo_attempts"] = counters.get("duckduckgo_attempts", 0) + 1
-        else:
-            return []
-
-        local, usable_rows = persist_video_rows(
-            session,
-            project,
-            task,
-            existing_items,
-            rows,
-            has_window=has_window,
-            start=start,
-            end=end,
-            max_accepted=per_task_cap,
-            enforce_priority_channel=True,
-            progress_detail=progress,
-        )
-        counters["raw_hits"] = counters.get("raw_hits", 0) + int(local.get("persisted", 0))
-        counters["flagged_hits"] = counters.get("flagged_hits", 0) + int(local.get("flagged", 0))
-        if provider == "duckduckgo":
-            counters["duckduckgo_added"] = counters.get("duckduckgo_added", 0) + int(local.get("added", 0))
-        state.added += int(local.get("added", 0))
-        if usable_rows:
-            state.resolved.add(query)
-        return usable_rows
-
-    return sink
-
 def _mark_web_missed(state: CollectionState, planned: list[str]) -> None:
     missed = [query for query in planned if query not in state.attempted]
     if not missed:
@@ -476,11 +396,13 @@ def run_agent_collection(
     web_queries: list[str],
     web_counters: dict[str, int] | None = None,
     web_progress: Callable[[str], None] | None = None,
-    video_queries: list[str] | None = None,
-    video_counters: dict[str, int] | None = None,
-    video_progress: Callable[[str], None] | None = None,
     cancel_check: Callable[[], None] | None = None,
-) -> tuple[CollectionState, CollectionState | None]:
+) -> CollectionState:
+    """Executa somente a descoberta Web aprovada via DuckDuckGo.
+
+    YouTube e redes sociais nao possuem descoberta paralela. O roteamento por
+    origem ocorre depois que os hits Web ja foram persistidos.
+    """
     web_state = CollectionState(
         project_id=project_id,
         counters=web_counters if web_counters is not None else {},
@@ -488,26 +410,13 @@ def run_agent_collection(
         cancel_check=cancel_check,
         progress_detail=web_progress,
     )
-    video_state: CollectionState | None = None
-    if video_queries is not None:
-        video_state = CollectionState(
-            project_id=project_id,
-            counters=video_counters if video_counters is not None else {},
-            expect_queries=len(video_queries),
-            cancel_check=cancel_check,
-            progress_detail=video_progress,
-        )
 
-    if not web_queries and not (video_state and video_state.expect_queries):
-        return web_state, video_state
+    if not web_queries:
+        return web_state
 
     if not search_providers_available():
-        message = "No search provider is available. Install ddgs."
-        if web_queries:
-            web_state.unavailable = message
-        if video_state and video_state.expect_queries:
-            video_state.unavailable = message
-        return web_state, video_state
+        web_state.unavailable = "No search provider is available. Install ddgs."
+        return web_state
 
     session = SessionLocal()
     try:
@@ -516,65 +425,31 @@ def run_agent_collection(
             raise RuntimeError("Projeto nao encontrado")
         existing_items = _existing_items(session, project_id)
 
-        web_plan: dict[str, SearchQuery] = {}
-        web_context = None
-        web_sink = None
-        web_observer = None
-        if web_queries:
-            pending = session.scalars(
-                select(SearchQuery).where(
-                    SearchQuery.project_id == project_id,
-                    SearchQuery.executed_at.is_(None),
-                )
-            ).all()
-            web_plan = {row.query: row for row in pending}
-            web_state.counters["queries_total"] = max(
-                web_state.counters.get("queries_total", 0), len(web_queries)
+        pending = session.scalars(
+            select(SearchQuery).where(
+                SearchQuery.project_id == project_id,
+                SearchQuery.executed_at.is_(None),
             )
-            web_context = _make_web_context(project, web_plan, web_state)
-            web_observer = SearchAuditObserver(
-                session=session,
-                project_id=project_id,
-                plan=web_plan,
-                state=web_state,
-                count_key="queries_attempted",
-            )
-            web_sink = _make_web_sink(web_state, session, project, web_plan, existing_items)
-
-        video_plan: dict[str, Any] = {}
-        video_context = None
-        video_sink = None
-        video_observer = None
-        if video_state is not None and video_state.expect_queries:
-            video_plan = {task.query: task for task in youtube_tasks_for_execution(project)}
-            video_state.counters["tasks_total"] = max(
-                video_state.counters.get("tasks_total", 0), len(video_queries or [])
-            )
-            video_context = _make_video_context(project)
-            video_observer = SearchAuditObserver(
-                session=session,
-                project_id=project_id,
-                plan=video_plan,
-                state=video_state,
-                count_key="tasks_attempted",
-            )
-            video_sink = _make_video_sink(
-                video_state,
-                session,
-                project,
-                video_plan,
-                existing_items,
-            )
+        ).all()
+        web_plan = {row.query: row for row in pending}
+        web_state.counters["queries_total"] = max(
+            web_state.counters.get("queries_total", 0), len(web_queries)
+        )
+        web_context = _make_web_context(project, web_plan, web_state)
+        web_observer = SearchAuditObserver(
+            session=session,
+            project_id=project_id,
+            plan=web_plan,
+            state=web_state,
+            count_key="queries_attempted",
+        )
+        web_sink = _make_web_sink(web_state, session, project, web_plan, existing_items)
 
         tools = build_agent_tools(
-            enable_web=bool(web_sink),
-            enable_video=bool(video_sink),
+            enable_web=True,
             web_sink=web_sink,
-            video_sink=video_sink,
             web_context=web_context,
-            video_context=video_context,
             web_observer=web_observer,
-            video_observer=video_observer,
             bulk=True,
         )
 
@@ -583,8 +458,6 @@ def run_agent_collection(
             "topic": project.topic,
             "web_queries": web_queries,
         }
-        if video_state is not None and video_state.expect_queries:
-            payload["youtube_queries"] = video_queries
 
         try:
             run_collector_agent(
@@ -593,37 +466,20 @@ def run_agent_collection(
                 max_tool_rounds=max(3, get_settings().max_agent_tool_rounds),
             )
         except Exception as exc:
-            if web_state.cancelled or (video_state is not None and video_state.cancelled):
-                raise (web_state.cancel_exc or video_state.cancel_exc)  # type: ignore[misc]
-            message = f"Collector agent unavailable: {str(exc)[:1000]}"
-            if web_queries and not web_state.invoked:
-                web_state.unavailable = message
-            if video_state is not None and video_state.expect_queries and not video_state.invoked:
-                video_state.unavailable = message
+            if web_state.cancelled:
+                raise web_state.cancel_exc  # type: ignore[misc]
+            if not web_state.invoked:
+                web_state.unavailable = f"Collector agent unavailable: {str(exc)[:1000]}"
 
-        if web_queries and not web_state.invoked and not web_state.unavailable:
+        if not web_state.invoked and not web_state.unavailable:
             web_state.unavailable = "Collector agent did not execute the approved web plan"
-        if (
-            video_state is not None
-            and video_state.expect_queries
-            and not video_state.invoked
-            and not video_state.unavailable
-        ):
-            video_state.unavailable = "Collector agent did not execute the approved video plan"
 
         _mark_web_missed(web_state, web_queries)
-        if video_state is not None and video_state.expect_queries:
-            planned_video = list(video_queries or [])
-            resolved = len([query for query in planned_video if query in video_state.resolved])
-            video_state.counters["tasks_resolved"] = resolved
-            video_state.counters["tasks_failed"] = max(0, len(planned_video) - resolved)
-
         session.commit()
     finally:
         session.close()
 
-    return web_state, video_state
-
+    return web_state
 
 def run_collector_agent(
     *,
