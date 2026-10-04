@@ -219,6 +219,7 @@ class Settings(BaseSettings):
     apify_x_comments_actor_id: str | None = "scraper_one/x-post-replies-scraper"
     apify_social_max_posts_per_platform: int = Field(default=8, ge=1, le=50)
     apify_social_comments_per_post: int = Field(default=50, ge=1, le=1000)
+    social_reuse_max_age_days: int = Field(default=30, ge=0, le=3650)
     apify_social_timeout_seconds: int = Field(default=240, ge=30, le=295)
     social_analysis_max_comments: int = Field(default=120, ge=10, le=1000)
     social_analysis_batch_size: int = Field(default=30, ge=5, le=60)
