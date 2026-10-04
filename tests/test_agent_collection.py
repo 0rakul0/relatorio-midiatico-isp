@@ -11,7 +11,6 @@ from app.services.collection import (
     web as collection_web,
     youtube as collection_youtube,
 )
-from app.services.collection.youtube_helpers import youtube_tasks_for_execution
 from app.tools import search as tools_search
 
 
@@ -40,18 +39,6 @@ def _web_row() -> dict:
     }
 
 
-def _video_row() -> dict:
-    return {
-        "title": "Video sobre tema de teste",
-        "url": "https://www.youtube.com/watch?v=abc123",
-        "snippet": "Cobertura em video sobre o tema de teste",
-        "content": "Cobertura em video sobre o tema de teste",
-        "published_at": "2026-08-12",
-        "source_name": "ISP RJ",
-        "view_count": 100,
-        "provider": "duckduckgo_video",
-    }
-
 
 class _FakeAgent:
     """Agente de teste: executa cada consulta do plano via tool, como o real."""
@@ -64,8 +51,6 @@ class _FakeAgent:
         for tool in tools:
             if tool.name == "executar_buscas_web":
                 queries = payload.get("web_queries", [])
-            elif tool.name == "executar_buscas_videos":
-                queries = payload.get("youtube_queries", [])
             else:
                 continue
             if not queries:
@@ -79,11 +64,6 @@ def _patch_search(monkeypatch, session_factory, fake_agent):
     def fake_search_web(query, *, providers=("duckduckgo",), **_kwargs):
         return "duckduckgo", [_web_row()]
 
-    def fake_search_videos(query, *, providers=("duckduckgo",), **_kwargs):
-        if "duckduckgo" in providers:
-            return "duckduckgo", [_video_row()]
-        return "none", []
-
     monkeypatch.setattr(orchestrator, "SessionLocal", session_factory)
     monkeypatch.setattr(orchestrator, "get_report_agent", lambda: fake_agent)
     monkeypatch.setattr(
@@ -92,7 +72,6 @@ def _patch_search(monkeypatch, session_factory, fake_agent):
     monkeypatch.setattr(orchestrator, "search_providers_available", lambda: True)
     monkeypatch.setattr(collection_web, "search_providers_available", lambda: True)
     monkeypatch.setattr(tools_search, "_search_web", fake_search_web)
-    monkeypatch.setattr(tools_search, "_search_videos", fake_search_videos)
 
 
 def _pending_web_query(session, project) -> None:
@@ -129,7 +108,7 @@ def test_collect_web_is_executed_by_agent(monkeypatch):
     assert [item.url for item in stored] == ["https://midia.example.com/materia"]
 
 
-def test_collect_media_sources_runs_web_and_video_tools(monkeypatch):
+def test_collect_media_sources_uses_only_web_discovery(monkeypatch):
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine)
@@ -137,27 +116,17 @@ def test_collect_media_sources_runs_web_and_video_tools(monkeypatch):
     project = _make_project(session)
     _pending_web_query(session, project)
 
-    video_queries = [task.query for task in youtube_tasks_for_execution(project)]
-    assert video_queries, "o perfil deve gerar pelo menos uma busca de vídeo"
-
     fake_agent = _FakeAgent()
     _patch_search(monkeypatch, session_factory, fake_agent)
 
     result = collection_youtube.collect_media_sources(session, project)
 
-    tool_names = {name for name, _query in fake_agent.calls}
-    assert tool_names == {"executar_buscas_web", "executar_buscas_videos"}
-    web_calls = [query for name, query in fake_agent.calls if name == "executar_buscas_web"]
-    video_calls = [query for name, query in fake_agent.calls if name == "executar_buscas_videos"]
-    assert web_calls == [("consulta web",)]
-    assert video_calls == [tuple(video_queries)]
-
+    assert fake_agent.calls == [("executar_buscas_web", ("consulta web",))]
     assert result["web"]["status"] == "COMPLETED"
-    assert result["youtube"]["collected"] == 1
-    assert result["youtube"]["status"] == "PARTIAL"
+    assert result["youtube"]["status"] == "ROUTED"
+    assert result["youtube"]["collected"] == 0
     urls = {item.url for item in session.scalars(select(MediaItem)).all()}
-    assert "https://midia.example.com/materia" in urls
-    assert "https://www.youtube.com/watch?v=abc123" in urls
+    assert urls == {"https://midia.example.com/materia"}
 
 
 def test_collect_media_sources_marks_unavailable_when_agent_fails(monkeypatch):
@@ -180,7 +149,8 @@ def test_collect_media_sources_marks_unavailable_when_agent_fails(monkeypatch):
 
     assert result["web"]["status"] == "UNAVAILABLE"
     assert "agente fora do ar" in result["web"]["error"]
-    assert "agente fora do ar" in result["youtube"]["error"]
+    assert result["youtube"]["status"] == "ROUTED"
+    assert result["youtube"]["collected"] == 0
 
 
 def test_collector_executes_required_web_tool_without_llm_decision(monkeypatch):
