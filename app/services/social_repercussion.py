@@ -728,6 +728,30 @@ def collect_social_repercussion(db: Session, project: Project) -> dict:
     actor_runs = 0
 
     for platform, rows in candidates.items():
+        pending = []
+        for url, media_item_id, title in rows:
+            post = _ensure_post(
+                db, project=project, platform=platform, url=url,
+                media_item_id=media_item_id, post_text=title, actor_id=None,
+            )
+            state, copied = _social_reuse_state(
+                db, project, platform, url, post, existing_ids
+            )
+            reused_comments += copied
+            if state == "REUSE":
+                reused_posts += 1
+                continue
+            if state == "REFRESH":
+                refreshed_posts += 1
+            pending.append((url, media_item_id, title))
+
+        db.flush()
+        if not pending:
+            platform_result[platform] = {
+                "status": "REUSED", "posts": len(rows), "comments": 0
+            }
+            continue
+        rows = pending
         urls = [row[0] for row in rows]
 
         try:
