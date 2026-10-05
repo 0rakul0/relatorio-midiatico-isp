@@ -95,6 +95,9 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "abstract_ptbr": "TEXT",
         "original_language": "VARCHAR(20)",
     },
+    "social_posts": {
+        "view_count": "INTEGER",
+    },
     "social_analyses": {
         "discourse_analysis": "JSON",
     },
