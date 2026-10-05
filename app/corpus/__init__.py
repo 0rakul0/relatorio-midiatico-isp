@@ -1,1 +1,1 @@
-"""Reuso, similaridade e recuperação do corpus global.\n"""\n
+# package
