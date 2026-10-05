@@ -9,7 +9,10 @@ obrigar cada chamador a repassar esses dados; ``llm.py`` apenas registra o
 que a API devolveu.
 """
 
+import atexit
 import logging
+import queue
+import threading
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -17,7 +20,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy.exc import OperationalError
 
-from app.database import SessionLocal
+from app.database import SessionLocal, engine
 from app.models import LLMCall
 
 logger = logging.getLogger(__name__)
@@ -163,6 +166,100 @@ def _is_sqlite_busy(exc: OperationalError) -> bool:
     return "locked" in message or "busy" in message
 
 
+_cost_queue: "queue.Queue[dict | None]" = queue.Queue()
+_cost_worker_lock = threading.Lock()
+_cost_worker: threading.Thread | None = None
+
+
+def _using_sqlite() -> bool:
+    return engine.url.get_backend_name() == "sqlite"
+
+
+def _persist_cost_payload(payload: dict, *, max_attempts: int = 8) -> bool:
+    """Grava uma linha de telemetria com retry curto para contenção do SQLite."""
+    for attempt in range(max(1, max_attempts)):
+        db = SessionLocal()
+        try:
+            db.add(LLMCall(**payload))
+            db.commit()
+            return True
+        except OperationalError as exc:
+            db.rollback()
+            if not _is_sqlite_busy(exc):
+                logger.warning(
+                    "Falha ao gravar custo da chamada LLM (%s): %s",
+                    payload.get("caller"),
+                    exc,
+                )
+                return False
+            if attempt >= max_attempts - 1:
+                return False
+            # Backoff curto: o gravador roda fora da thread da execução, então
+            # pode esperar a transação principal liberar o lock sem criar deadlock.
+            time.sleep(min(0.25 * (attempt + 1), 2.0))
+        except Exception as exc:
+            db.rollback()
+            logger.warning(
+                "Falha inesperada ao gravar custo da chamada LLM (%s): %s",
+                payload.get("caller"),
+                exc,
+            )
+            return False
+        finally:
+            db.close()
+    return False
+
+
+def _cost_writer_loop() -> None:
+    while True:
+        payload = _cost_queue.get()
+        try:
+            if payload is None:
+                return
+            if not _persist_cost_payload(payload):
+                # Em SQLite a transação principal pode permanecer aberta por
+                # vários segundos. Recoloca no fim da fila em vez de perder a
+                # telemetria ou bloquear a chamada da LLM.
+                time.sleep(0.5)
+                _cost_queue.put(payload)
+        finally:
+            _cost_queue.task_done()
+
+
+def _ensure_cost_worker() -> None:
+    global _cost_worker
+    if _cost_worker is not None and _cost_worker.is_alive():
+        return
+    with _cost_worker_lock:
+        if _cost_worker is not None and _cost_worker.is_alive():
+            return
+        _cost_worker = threading.Thread(
+            target=_cost_writer_loop,
+            name="llm-cost-writer",
+            daemon=True,
+        )
+        _cost_worker.start()
+
+
+def flush_pending_cost_records(timeout: float = 5.0) -> bool:
+    """Espera a fila de custos esvaziar; útil em shutdown/testes.
+
+    Não bloqueia indefinidamente: retorna False quando o banco segue ocupado.
+    """
+    deadline = time.monotonic() + max(0.0, timeout)
+    while _cost_queue.unfinished_tasks and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return _cost_queue.unfinished_tasks == 0
+
+
+def _shutdown_cost_writer() -> None:
+    # Tenta preservar a telemetria pendente sem atrasar excessivamente o exit.
+    flush_pending_cost_records(timeout=2.0)
+
+
+atexit.register(_shutdown_cost_writer)
+
+
 def record_llm_call(
     *,
     model: str,
@@ -177,10 +274,11 @@ def record_llm_call(
 ) -> None:
     """Persiste um registro de chamada usando o contexto corrente.
 
-    A gravação abre uma conexão própria e, sob SQLite multithread, pode colidir
-    com a conexão da execução (``database is locked``). Esse registro é somente
-    telemetria: tentamos por alguns instantes e, se ainda assim falhar, seguimos
-    sem derrubar a pipeline que acabou de gastar tokens na chamada LLM.
+    Em PostgreSQL a gravação continua síncrona. Em SQLite ela vai para um
+    gravador assíncrono dedicado. Isso é importante porque a chamada da LLM
+    pode ocorrer enquanto a Session principal já possui uma transação de
+    escrita: tentar abrir outra conexão e gravar ``llm_calls`` nesse mesmo
+    instante cria um auto-bloqueio até o timeout (``database is locked``).
     """
     cost = estimate_cost(
         model,
@@ -189,39 +287,28 @@ def record_llm_call(
         cached_input_tokens=cached_input_tokens,
         search_calls=search_calls,
     )
+    payload = {
+        "project_id": _context_project_id.get(),
+        "run_id": _context_run_id.get(),
+        "operation": _context_operation.get(),
+        "schema_name": schema_name or _context_schema_name.get(),
+        "caller": caller,
+        "model": model,
+        "success": success,
+        "error": ((error or "")[:2000] or None),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "search_calls": search_calls,
+        "cost_usd": cost,
+    }
 
-    def row() -> LLMCall:
-        return LLMCall(
-            project_id=_context_project_id.get(),
-            run_id=_context_run_id.get(),
-            operation=_context_operation.get(),
-            schema_name=schema_name or _context_schema_name.get(),
-            caller=caller,
-            model=model,
-            success=success,
-            error=((error or "")[:2000] or None),
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cached_input_tokens=cached_input_tokens,
-            search_calls=search_calls,
-            cost_usd=cost,
-        )
+    if _using_sqlite():
+        _ensure_cost_worker()
+        _cost_queue.put(payload)
+        return
 
-    max_attempts = 3
-    for attempt in range(max_attempts):
-        db = SessionLocal()
-        try:
-            db.add(row())
-            db.commit()
-            return
-        except OperationalError as exc:
-            db.rollback()
-            if attempt >= max_attempts - 1 or not _is_sqlite_busy(exc):
-                logger.warning("Falha ao gravar custo da chamada LLM (%s): %s", caller, exc)
-                return
-            time.sleep(0.5 * (attempt + 1))
-        finally:
-            db.close()
+    _persist_cost_payload(payload, max_attempts=1)
 
 
 # Conveniência para testes: injeta um "sink" alternativo.

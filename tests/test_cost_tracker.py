@@ -1,4 +1,10 @@
-from app.cost_tracker import cost_context, emit, estimate_cost, set_record_sink
+from app.cost_tracker import (
+    _persist_cost_payload,
+    cost_context,
+    emit,
+    estimate_cost,
+    set_record_sink,
+)
 
 
 def test_estimate_cost_uses_model_prices():
@@ -56,3 +62,49 @@ def test_cost_context_only_project_keeps_project():
         emit(model="gpt-5-mini", caller="x", success=True)
     assert recorded[0]["project_id"] == 11
     assert recorded[0]["operation"] is None
+
+
+def test_persist_cost_payload_retries_sqlite_busy(monkeypatch):
+    import app.cost_tracker as tracker
+
+    class FakeDB:
+        def __init__(self, attempt):
+            self.attempt = attempt
+        def add(self, _row):
+            pass
+        def commit(self):
+            if self.attempt == 1:
+                from sqlalchemy.exc import OperationalError
+                raise OperationalError("INSERT", {}, Exception("database is locked"))
+        def rollback(self):
+            pass
+        def close(self):
+            pass
+
+    attempts = {"count": 0}
+
+    def fake_session():
+        attempts["count"] += 1
+        return FakeDB(attempts["count"])
+
+    monkeypatch.setattr(tracker, "SessionLocal", fake_session)
+    monkeypatch.setattr(tracker.time, "sleep", lambda _seconds: None)
+
+    payload = {
+        "project_id": None,
+        "run_id": None,
+        "operation": "academic_research",
+        "schema_name": "academic_research_v1",
+        "caller": "report_agent_tool_decision",
+        "model": "gpt-5-mini",
+        "success": True,
+        "error": None,
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "cached_input_tokens": 0,
+        "search_calls": 0,
+        "cost_usd": 0.001,
+    }
+
+    assert _persist_cost_payload(payload, max_attempts=3) is True
+    assert attempts["count"] == 2
