@@ -148,11 +148,14 @@ def _enrich_posts_from_apify_dataset(
             post.published_at = published_at
             updated += 1
 
-        view_count, _view_source = post_view_count(raw)
+        view_count, view_source = post_view_count(raw)
         if view_count is not None and (
             post.view_count is None or view_count > int(post.view_count or 0)
         ):
             post.view_count = view_count
+            post.view_count_source = (
+                f"apify:{view_source}" if view_source else "apify"
+            )
 
         _append_post_date_provenance(
             media,
@@ -204,6 +207,7 @@ def _ensure_post(
             post_text=post_text,
             published_at=resolved_date,
             view_count=media_views,
+            view_count_source="media_item" if media_views is not None else None,
             actor_id=actor_id,
         )
         db.add(post)
@@ -218,6 +222,7 @@ def _ensure_post(
             post.published_at = resolved_date
         if post.view_count is None and media_views is not None:
             post.view_count = media_views
+            post.view_count_source = post.view_count_source or "media_item"
 
     if resolved_date is not None:
         _append_post_date_provenance(
