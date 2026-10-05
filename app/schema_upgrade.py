@@ -95,6 +95,9 @@ ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "abstract_ptbr": "TEXT",
         "original_language": "VARCHAR(20)",
     },
+    "social_analyses": {
+        "discourse_analysis": "JSON",
+    },
     "fact_events": {
         "operation_name": "VARCHAR(300)",
         "death_place_name": "VARCHAR(300)",
@@ -248,6 +251,9 @@ def ensure_schema() -> None:
 
         if "corpus_documents" in existing_tables:
             connection.execute(text("UPDATE corpus_documents SET media_origin = 'PORTAL_NOTICIAS' WHERE media_origin IS NULL"))
+
+        if "social_analyses" in existing_tables:
+            connection.execute(text("UPDATE social_analyses SET discourse_analysis = '{}' WHERE discourse_analysis IS NULL"))
 
         if "generated_reports" in existing_tables:
             connection.execute(text("UPDATE generated_reports SET qa_status = 'PENDING' WHERE qa_status IS NULL"))
