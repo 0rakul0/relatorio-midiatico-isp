@@ -315,6 +315,8 @@ def build_pdf(data: dict) -> bytes:
         )
     ]
     social_repercussion = data.get("social_repercussion") or {}
+    public_opinion = data.get("public_opinion") or {}
+    public_opinion_surveys = list(public_opinion.get("surveys") or [])
     social_post_inventory = list(social_repercussion.get("post_inventory") or [])
     word_cloud = data.get("word_cloud") or {}
     by_origin = _split_by_origin(corpus)
@@ -653,6 +655,82 @@ def build_pdf(data: dict) -> bytes:
                     small,
                 )
             )
+
+        if public_opinion_surveys:
+            story.append(Paragraph("Opinião pública sobre o tema", heading))
+            public_summary = report.get("public_opinion_summary")
+            if public_summary:
+                story.append(Paragraph(escape(_text(public_summary)), body))
+            story.append(
+                Paragraph(
+                    "Esta camada reúne levantamentos amostrais identificados separadamente da cobertura jornalística e dos comentários em redes sociais. "
+                    "Os resultados devem ser lidos dentro do universo pesquisado, do período de campo e das limitações de cada estudo.",
+                    small,
+                )
+            )
+            survey_rows = [["Instituto", "Campo", "População / amostra", "Metodologia", "Fonte"]]
+            for survey in public_opinion_surveys:
+                field_start = _text(survey.get("field_start")).strip()
+                field_end = _text(survey.get("field_end")).strip()
+                field_label = (
+                    f"{field_start} a {field_end}"
+                    if field_start and field_end
+                    else field_start or field_end or "N/D"
+                )
+                population = _text(survey.get("population")).strip() or "N/D"
+                sample_size = survey.get("sample_size")
+                if sample_size:
+                    population += f" · n={sample_size}"
+                method_bits = [
+                    _text(survey.get("sampling_method")).strip(),
+                    _text(survey.get("margin_of_error")).strip(),
+                    _text(survey.get("confidence_level")).strip(),
+                ]
+                method_label = " · ".join(bit for bit in method_bits if bit) or _text(survey.get("methodology")).strip() or "N/D"
+                survey_rows.append([
+                    survey.get("institute") or "N/D",
+                    field_label,
+                    population,
+                    method_label,
+                    _pdf_link(survey.get("source_url")),
+                ])
+            story.append(
+                _table(
+                    survey_rows,
+                    [3.0 * cm, 3.1 * cm, 4.8 * cm, 3.8 * cm, 1.9 * cm],
+                    small,
+                )
+            )
+
+            indicator_rows = [["Instituto", "Indicador / pergunta", "Resultado", "Recorte"]]
+            for survey in public_opinion_surveys:
+                for indicator in survey.get("indicators") or []:
+                    question = indicator.get("question") or indicator.get("label") or "Indicador"
+                    value = _text(indicator.get("value")).strip()
+                    unit = _text(indicator.get("unit")).strip()
+                    result_label = (value + (f" {unit}" if unit else "")).strip() or "N/D"
+                    indicator_rows.append([
+                        survey.get("institute") or "N/D",
+                        question,
+                        result_label,
+                        indicator.get("subgroup") or survey.get("representative_scope") or "Total da amostra",
+                    ])
+            if len(indicator_rows) > 1:
+                story.append(Paragraph("Indicadores de opinião pública", heading))
+                story.append(
+                    _table(
+                        indicator_rows,
+                        [3.0 * cm, 6.6 * cm, 2.8 * cm, 4.2 * cm],
+                        small,
+                    )
+                )
+            if public_opinion.get("methodology_note"):
+                story.append(
+                    Paragraph(
+                        "<b>Nota metodológica:</b> " + escape(_text(public_opinion.get("methodology_note"))),
+                        small,
+                    )
+                )
 
         social_comments = int(social_repercussion.get("comments") or 0)
         social_analyzed = int(social_repercussion.get("analyzed_comments") or 0)
