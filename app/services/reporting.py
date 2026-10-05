@@ -18,6 +18,7 @@ from app.services.project_profile import project_payload
 from app.services.metrics import corpus_for_project, metrics, split_corpus, split_corpus_by_origin
 from app.services.word_cloud import word_cloud_for_project
 from app.services.social_repercussion import social_repercussion_for_report
+from app.services.public_opinion import public_opinion_for_report
 from app.services.cache import hydrate_cached_report
 
 
@@ -83,6 +84,7 @@ def _writer_grounding(db: Session, project: Project) -> dict:
         else []
     )
     social_repercussion = social_repercussion_for_report(db, project.id)
+    public_opinion = public_opinion_for_report(db, project.id)
     recovery_rows = db.scalars(
         select(SearchQuery)
         .where(
@@ -119,6 +121,7 @@ def _writer_grounding(db: Session, project: Project) -> dict:
         "fact_evidence": fact_evidence,
         "academic_papers": academic_papers,
         "social_repercussion": social_repercussion,
+        "public_opinion": public_opinion,
         "search_recovery": search_recovery,
     }
 
@@ -132,6 +135,9 @@ def _writer_instructions(flags: dict) -> str:
         + "identificadores em snake_case, códigos de status em inglês ou valores como NOT_ATTEMPTED, UNAVAILABLE, DISABLED ou NOT_CONFIGURED. "
         + "Traduza estados operacionais para linguagem editorial. Quando houver vídeos validados no corpus, priorize a evidência do corpus "
         + "e informe a quantidade disponível; não trate um status operacional legado ou da execução corrente como ausência de conteúdo no YouTube. "
+        + "Quando houver public_opinion, trate pesquisas de opinião como camada independente da cobertura jornalística e das redes sociais. "
+        + "Ao descrever percentuais, informe o universo/população pesquisada, instituto e período de campo quando disponíveis; não generalize além do representative_scope documentado. "
+        + "Não misture enquete aberta, comentários ou engajamento de redes sociais com pesquisa amostral. "
         + "Quando houver social_perception, trate-a exclusivamente como percepção observada na amostra de comentários públicos. "
         + "Nunca a descreva como opinião da população, pesquisa de opinião ou estimativa representativa do estado. "
         + "Se social_perception.posts for maior que zero, diferencie explicitamente posts sociais monitorados do corpus jornalístico validado. "
@@ -176,6 +182,7 @@ def _agent_payload(db: Session, project: Project, grounding: dict) -> dict:
         "operation_events": grounding["operation_events"],
         "academic_context": grounding["academic_papers"],
         "social_perception": grounding["social_repercussion"],
+        "public_opinion": grounding["public_opinion"],
         "search_recovery": grounding["search_recovery"],
         "validated_items": [
             {
@@ -206,6 +213,7 @@ def _save_report(db: Session, project: Project, result: dict, grounding: dict) -
         "fact_evidence": grounding["fact_evidence"],
         "academic_papers": grounding["academic_papers"],
         "social_repercussion": grounding["social_repercussion"],
+        "public_opinion": grounding["public_opinion"],
         "search_recovery": grounding["search_recovery"],
         "word_cloud": word_cloud_for_project(db, project.id),
         "project": project_payload(project, for_report=True),
