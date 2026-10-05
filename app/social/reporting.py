@@ -76,6 +76,8 @@ def social_repercussion_for_report(db: Session, project_id: int) -> dict:
                 "comments_collected": comment_counts.get(post.id, 0),
                 "like_count": post.like_count,
                 "share_count": post.share_count,
+                "view_count": post.view_count,
+                "view_count_source": post.view_count_source,
                 "discovery_source": (
                     media.search_source
                     if media is not None and media.search_source
@@ -86,10 +88,28 @@ def social_repercussion_for_report(db: Session, project_id: int) -> dict:
             }
         )
 
+    known_view_posts = [
+        post for post in posts if post.view_count is not None
+    ]
+    platform_view_counts: dict[str, int] = {}
+    for post in known_view_posts:
+        platform_view_counts[post.platform] = (
+            platform_view_counts.get(post.platform, 0)
+            + int(post.view_count or 0)
+        )
+
     base = {
         "posts": total_posts,
         "comments": total_comments,
         "post_inventory": post_inventory,
+        "view_count_total": sum(int(post.view_count or 0) for post in known_view_posts),
+        "view_count_known_posts": len(known_view_posts),
+        "view_count_missing_posts": total_posts - len(known_view_posts),
+        "platform_view_counts": platform_view_counts,
+        "view_count_note": (
+            "Soma bruta das visualizações reportadas pelas plataformas/coletor nos posts com métrica disponível. "
+            "Não representa pessoas únicas e pode conter sobreposição de audiência entre posts e plataformas."
+        ),
     }
     if analysis is None:
         return {
