@@ -431,13 +431,14 @@ function render(result){
   const socialAnnexTable=(rows)=>{
     if(!rows.length)return '<p>Nenhum post social monitorado nesta execução.</p>';
     return `<div class="annex-table">${table(
-      ['#','Plataforma','Data','Post / referência','Comentários','Descoberta','URL'],
+      ['#','Plataforma','Data','Post / referência','Comentários','Visualizações','Descoberta','URL'],
       rows.map((x,i)=>[
         String(i+1),
         socialLabel(x.platform),
         x.published_at||'N/D',
         x.title||'Post social',
         String(Number(x.comments_collected||0)),
+        x.view_count===null||x.view_count===undefined?'N/D':viewLabel(Number(x.view_count||0)),
         x.discovery_source||'monitoramento social',
         x.url?raw(`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">Abrir</a>`):'N/D'
       ])
@@ -509,9 +510,17 @@ function render(result){
 
   const socialComments=Number(socialPerception.comments||0);
   const socialAnalyzed=Number(socialPerception.analyzed_comments||0);
-  const platformRows=Object.entries(socialPerception.platform_counts||{})
-    .sort((a,b)=>Number(b[1]||0)-Number(a[1]||0))
-    .map(([platform,count])=>[socialLabel(platform),String(Number(count||0))]);
+  const socialViews=Number(socialPerception.view_count_total||0);
+  const socialViewPosts=Number(socialPerception.view_count_known_posts||0);
+  const platformCommentCounts=socialPerception.platform_counts||{};
+  const platformViewCounts=socialPerception.platform_view_counts||{};
+  const platformRows=[...new Set([...Object.keys(platformCommentCounts),...Object.keys(platformViewCounts)])]
+    .sort((a,b)=>Number(platformViewCounts[b]||0)-Number(platformViewCounts[a]||0))
+    .map(platform=>[
+      socialLabel(platform),
+      String(Number(platformCommentCounts[platform]||0)),
+      platform in platformViewCounts?viewLabel(Number(platformViewCounts[platform]||0)):'N/D'
+    ]);
   const themeRows=(socialPerception.themes||[]).map((item,i)=>[
     String(i+1),item.theme||'N/D',String(Number(item.count||0))
   ]);
@@ -538,9 +547,11 @@ function render(result){
     <div class="table-wrap"><table><tbody>
       <tr><th>Posts sociais</th><td>${esc(socialPerception.posts||0)}</td>
           <th>Comentários coletados</th><td>${esc(socialComments)}</td>
-          <th>Comentários analisados</th><td>${esc(socialAnalyzed)}</td></tr>
+          <th>Comentários analisados</th><td>${esc(socialAnalyzed)}</td>
+          <th>Visualizações disponíveis</th><td>${socialViewPosts?esc(viewLabel(socialViews)):'N/D'}</td></tr>
     </tbody></table></div>
-    ${platformRows.length?'<h3>Distribuição por plataforma</h3>'+table(['Plataforma','Comentários'],platformRows):''}
+    ${socialViewPosts?`<p class="note"><strong>Alcance observado:</strong> ${esc(socialPerception.view_count_note||'Soma bruta das visualizações disponíveis; não representa pessoas únicas.')}</p>`:''}
+    ${platformRows.length?'<h3>Distribuição por plataforma</h3>'+table(['Plataforma','Comentários','Visualizações disponíveis'],platformRows):''}
     ${socialAnalyzed&&Object.keys(socialPerception.sentiment_counts||{}).length?'<h3>Sentimento observado</h3>'+table(['Classificação','Comentários','Participação na amostra'],socialRows(socialPerception.sentiment_counts,socialAnalyzed)):''}
     ${socialAnalyzed&&Object.keys(socialPerception.emotion_counts||{}).length?'<h3>Emoções observadas</h3>'+table(['Classificação','Comentários','Participação na amostra'],socialRows(socialPerception.emotion_counts,socialAnalyzed)):''}
     ${socialAnalyzed&&Object.keys(socialPerception.position_counts||{}).length?'<h3>Posição em relação ao tema</h3>'+table(['Classificação','Comentários','Participação na amostra'],socialRows(socialPerception.position_counts,socialAnalyzed)):''}
