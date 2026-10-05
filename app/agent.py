@@ -21,9 +21,7 @@ from app.config import get_settings
 from app.llm import create_chat_model, record_llm_usage, usage_counts
 from app.prompts.report_agent import BASE_PROMPT, TASK_PROMPTS
 
-- responda em portugues, de forma direta e auditavel.
-""",
-}
+ResponseModelT = TypeVar("ResponseModelT", bound=BaseModel)
 
 
 class ReportAgent:
