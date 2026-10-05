@@ -450,3 +450,88 @@ def test_report_agent_knows_social_discourse_analysis_task():
 
     assert "ANALISE DISCURSIVA" in prompt
     assert "nao generalize" in prompt.lower()
+
+
+
+def test_social_terms_prioritize_compact_profile_variants_over_literal_question():
+    project = Project(
+        topic="como está a polarização política e como ficou a eleição no Brasil em 2026?",
+        launch_date=date(2026, 1, 1),
+        collection_start=date(2026, 1, 1),
+        collection_end=date(2026, 10, 5),
+        has_custom_date_window=True,
+        project_type="GENERAL_TOPIC",
+        topic_profile={
+            "subject_terms": ["polarização política", "eleições 2026"],
+            "actors": ["Lula", "Bolsonaro"],
+            "search_synonyms": ["polarização eleitoral Brasil"],
+        },
+        execution_options={},
+        execution_plan={},
+    )
+
+    terms = social._social_discovery_terms(project)
+
+    assert terms[0] == "polarização eleitoral Brasil"
+    assert "polarização política" in terms[:4]
+    assert "eleições 2026" in terms[:4]
+    assert "Lula Bolsonaro" in terms
+
+
+def test_social_discovery_runs_broader_second_round_when_first_is_empty(monkeypatch):
+    db = _session()
+    project = Project(
+        topic="como está a polarização política no Brasil em 2026?",
+        launch_date=date(2026, 1, 1),
+        collection_start=date(2026, 1, 1),
+        collection_end=date(2026, 10, 5),
+        has_custom_date_window=True,
+        project_type="GENERAL_TOPIC",
+        topic_profile={
+            "subject_terms": ["polarização política"],
+            "actors": ["Lula", "Bolsonaro"],
+        },
+        execution_options={},
+        execution_plan={},
+    )
+    db.add(project)
+    db.commit()
+
+    monkeypatch.setattr(
+        social,
+        "get_settings",
+        lambda: SimpleNamespace(
+            social_discovery_enabled=True,
+            social_discovery_queries_per_platform=2,
+            social_discovery_results_per_query=8,
+            apify_social_max_posts_per_platform=8,
+        ),
+    )
+
+    calls = []
+    def fake_discover(**kwargs):
+        calls.append(list(kwargs["terms"]))
+        if len(calls) == 1:
+            return {"instagram": [], "facebook": [], "tiktok": [], "x": []}
+        return {
+            "instagram": [],
+            "facebook": [],
+            "tiktok": [],
+            "x": [{
+                "title": "Debate eleitoral",
+                "url": "https://x.com/exemplo/status/2026",
+                "snippet": "Polarização e eleição",
+                "discovery_query": "site:x.com polarização política Brasil 2026",
+            }],
+        }
+
+    monkeypatch.setattr(social, "discover_public_posts", fake_discover)
+
+    stats = social._discover_and_persist_social_posts(db, project)
+
+    assert len(calls) == 2
+    assert stats["rounds"] == 2
+    assert stats["returned"] == 1
+    assert stats["eligible_posts"] == 1
+    assert stats["platforms"]["x"]["returned"] == 1
+    db.close()
