@@ -18,8 +18,6 @@ from app.models import (
     Project,
 )
 from app.schemas import ProjectCreate
-from app.services import (
-)
 from app.topic_profile import requested_topic_window
 
 
