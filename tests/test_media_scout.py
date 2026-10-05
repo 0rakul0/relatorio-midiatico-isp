@@ -88,3 +88,19 @@ def test_general_scout_prefers_canonical_location_variant():
     assert "Muzema" in primary
     assert "mazuema" not in primary.lower()
     assert any("mazuema" in query.lower() for query in complementaries)
+
+
+def test_general_scout_uses_contextual_profile_angles():
+    topic = "polarização política no Brasil em 2026"
+    profile = heuristic_topic_profile(topic)
+    profile["actors"] = ["Lula", "Bolsonaro"]
+    profile["actions"] = ["polarização eleitoral", "rejeição política"]
+    profile["organizations"] = ["Datafolha"]
+
+    scout = MediaScout(topic, profile)
+    strategy = scout.fallback_search_strategy(max_complementary=4)
+    queries = [strategy["primary_query"], *strategy["complementary_queries"]]
+
+    assert len(queries) >= 4
+    assert any("Lula" in query for query in queries)
+    assert any("Bolsonaro" in query for query in queries)
