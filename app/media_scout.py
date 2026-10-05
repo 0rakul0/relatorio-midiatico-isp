@@ -122,15 +122,70 @@ class MediaScout:
         return self._dedupe([self._with_event_context(value) for value in variants])
 
     def _general_fallback_queries(self) -> list[str]:
-        # O perfil pode trazer uma variante territorial canonica primeiro
-        # (ex.: "Mazuema" -> "Muzema"). Ela deve ser a consulta principal;
-        # o texto bruto do usuario permanece como fallback auditavel.
+        """Amplia tema geral sem soltar palavras isoladas.
+
+        O objetivo é aumentar recall para pautas amplas mantendo cada consulta
+        semanticamente ancorada. Primeiro preservamos as variantes do perfil;
+        depois combinamos atores, ações e organizações com o contexto temporal
+        e territorial do tema.
+        """
         values = [
             str(value).strip()
             for value in (self.profile.get("search_synonyms") or [])
             if str(value).strip()
         ]
         values.append(self.topic)
+
+        locations = [
+            " ".join(str(value).split()).strip()
+            for value in (self.profile.get("locations") or [])
+            if str(value).strip()
+        ]
+        location = next((value for value in locations if len(value) > 2), "")
+        year = find_year(self.topic) or ""
+
+        def contextual_query(*parts: str) -> str:
+            query_parts = [self._quote(part) for part in parts if str(part).strip()]
+            if location and all(
+                normalized_text(location) not in normalized_text(part)
+                for part in parts
+            ):
+                query_parts.append(self._quote(location))
+            if year and all(year not in str(part) for part in parts):
+                query_parts.append(year)
+            return " ".join(part for part in query_parts if part).strip()
+
+        actors = [
+            " ".join(str(value).split()).strip()
+            for value in (self.profile.get("actors") or [])
+            if str(value).strip()
+        ][:4]
+        actions = [
+            " ".join(str(value).split()).strip()
+            for value in (self.profile.get("actions") or [])
+            if str(value).strip()
+        ][:4]
+        organizations = [
+            " ".join(str(value).split()).strip()
+            for value in (self.profile.get("organizations") or [])
+            if str(value).strip()
+        ][:3]
+
+        for action in actions:
+            for actor in actors:
+                values.append(contextual_query(action, actor))
+
+        anchor = next(
+            (
+                value
+                for value in (self.profile.get("search_synonyms") or [])
+                if str(value).strip()
+            ),
+            self.topic,
+        )
+        for organization in organizations:
+            values.append(contextual_query(str(anchor), organization))
+
         return self._dedupe(values)
 
     def fallback_search_strategy(self, max_complementary: int = 2) -> dict[str, Any]:
