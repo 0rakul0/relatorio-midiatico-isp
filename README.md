@@ -788,11 +788,13 @@ A organização segue uma regra simples: `utils/` contém apenas helpers transve
 
 O `app/main.py` passou a funcionar essencialmente como **composition root**: inicializa o FastAPI, registra routers, monta arquivos estáticos, executa o lifespan e expõe apenas endpoints institucionais mínimos como health, login e configuração pública de autenticação.
 
+O `app/models.py` também passou a ser uma **fachada de compatibilidade**: as classes SQLAlchemy reais ficam em `app/model_groups/`, mas o restante do código pode continuar importando `Project`, `MediaItem`, `SocialComment` e demais entidades por `app.models`. A mesma estratégia é usada em `services/pipeline.py`, que agora delega blocos compostos para `app/pipeline/`.
+
 ```text
 app/
 ├── main.py
 ├── agent.py                     # orquestra o ReportAgent
-├── models.py
+├── models.py                    # fachada compatível dos modelos SQLAlchemy
 ├── schemas.py
 ├── config.py
 ├── topic_profile.py
@@ -805,6 +807,15 @@ app/
 │
 ├── utils/
 │   └── rendering.py             # helpers realmente transversais
+│
+├── model_groups/
+│   ├── core.py                  # projetos, fatos oficiais e literatura
+│   ├── search.py                # consultas, chamadas e hits brutos
+│   ├── corpus.py                # corpus global, vínculos e MediaItem
+│   ├── social.py                # posts, comentários e opinião pública
+│   ├── facts.py                 # eventos, asserções, operações e classificação
+│   ├── reports.py               # relatório ativo, versões e execuções
+│   └── users.py                 # usuários, chat, assinatura e custos LLM
 │
 ├── facts/
 │   ├── normalization.py         # identidade, datas e normalização factual
@@ -850,6 +861,10 @@ app/
 ├── orchestration/
 │   ├── executor.py
 │   └── state.py
+│
+├── pipeline/
+│   ├── optional_layers.py       # social + opinião pública
+│   └── gap_fill.py              # cobertura complementar e corpus zero
 │
 ├── services/
 │   ├── pipeline.py
