@@ -483,6 +483,40 @@ class MediaClassificationBatchResponse(StrictLLMOutput):
 
 
 # ---------------------------------------------------------------------------
+# Public opinion research
+# ---------------------------------------------------------------------------
+
+
+class PublicOpinionIndicatorOutput(StrictLLMOutput):
+    label: str
+    question: str | None
+    value: str
+    unit: str | None
+    subgroup: str | None
+    evidence: str
+
+
+class PublicOpinionSurveyExtractionResponse(StrictLLMOutput):
+    is_public_opinion_research: bool
+    institute: str | None
+    sponsor: str | None
+    population: str | None
+    geography: str | None
+    field_start: str | None
+    field_end: str | None
+    publication_date: str | None
+    sample_size: int | None = Field(default=None, ge=1)
+    margin_of_error: str | None
+    confidence_level: str | None
+    methodology: str | None
+    sampling_method: str | None
+    representative_scope: str | None
+    caveats: str | None
+    indicators: list[PublicOpinionIndicatorOutput] = Field(default_factory=list, max_length=20)
+    evidence_summary: str | None
+
+
+# ---------------------------------------------------------------------------
 # Final report
 # ---------------------------------------------------------------------------
 
@@ -509,6 +543,7 @@ class StructuredMediaReportResponse(StrictLLMOutput):
     interpretive_title: str
     subtitle: str
     executive_summary: str
+    public_opinion_summary: str
     fact_layer_intro: str
     opening: str
     panorama: str
