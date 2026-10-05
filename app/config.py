@@ -222,7 +222,7 @@ class Settings(BaseSettings):
     # Descoberta social dedicada. O DuckDuckGo procura URLs públicas de posts
     # com consultas site: por plataforma; o Apify entra depois para comentários.
     social_discovery_enabled: bool = True
-    social_discovery_queries_per_platform: int = Field(default=2, ge=1, le=5)
+    social_discovery_queries_per_platform: int = Field(default=4, ge=1, le=5)
     social_discovery_results_per_query: int = Field(default=8, ge=1, le=10)
     apify_social_max_posts_per_platform: int = Field(default=8, ge=1, le=50)
     apify_social_comments_per_post: int = Field(default=50, ge=1, le=1000)
