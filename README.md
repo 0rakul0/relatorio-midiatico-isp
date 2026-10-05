@@ -790,6 +790,8 @@ O `app/main.py` passou a funcionar essencialmente como **composition root**: ini
 
 O `app/models.py` também passou a ser uma **fachada de compatibilidade**: as classes SQLAlchemy reais ficam em `app/model_groups/`, mas o restante do código pode continuar importando `Project`, `MediaItem`, `SocialComment` e demais entidades por `app.models`. A mesma estratégia é usada em `services/pipeline.py`, que agora delega blocos compostos para `app/pipeline/`.
 
+A decomposição também alcançou `services/metrics.py`, `services/search_planning.py` e `services/social_repercussion.py`: deduplicação de corpus, planejamento de gap-fill e descoberta social passaram para pacotes de domínio, mantendo os serviços como fachadas/orquestradores menores.
+
 ```text
 app/
 ├── main.py
@@ -824,17 +826,23 @@ app/
 │
 ├── search/
 │   ├── guards.py                # âncoras, similaridade e redundância
+│   ├── persistence.py           # criação/idempotência das consultas
 │   ├── gap_fill.py              # heurísticas de recuperação complementar
+│   ├── gap_planning.py          # detecção de lacunas e planejamento de expansão
 │   └── inventory.py             # varredura mensal factual/oficial
 │
 ├── social/
 │   ├── analysis.py              # classificação e leitura discursiva
+│   ├── discovery.py             # termos, candidatos e proveniência DuckDuckGo
 │   ├── comments.py              # normalização dos comentários
 │   ├── dates.py                 # datas DDG/Apify/X/TikTok
 │   ├── methodology.py           # nota metodológica compartilhada
 │   ├── reporting.py             # projeção auditável para o relatório
 │   ├── sampling.py              # amostragem plataforma → post → comentário
 │   └── urls.py                  # reconhecimento/canonicalização social
+│
+├── metrics/
+│   └── corpus.py                # deduplicação, normalização e buckets do corpus
 │
 ├── reports/
 │   └── pdf/
