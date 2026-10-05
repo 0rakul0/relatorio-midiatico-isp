@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from app.fact_layer import _operation_display_name, event_identity_key, normalize_fact_value
 from app.main import app
 from app.search.guards import is_redundant
+from app.search.gap_fill import has_site_operator
 from app.services import search_planning
 
 
@@ -35,6 +36,8 @@ def test_search_planning_facade_preserves_redundancy_helper():
         '2026 "Rio de Janeiro" "policiais mortos"',
         ['"policiais mortos" "Rio de Janeiro" 2026'],
     )
+    assert has_site_operator("site:example.com tema")
+    assert search_planning._has_site_operator("site:example.com tema")
 
 
 def test_modular_api_routes_remain_registered():
@@ -46,5 +49,9 @@ def test_modular_api_routes_remain_registered():
         "/chat/projects",
         "/reports/history",
         "/reports/cache",
+        "/projects/{project_id}/run-async",
+        "/projects/{project_id}/facts",
+        "/projects/{project_id}/report",
+        "/projects/{project_id}/export.pdf",
     }
     assert expected.issubset(paths)
