@@ -440,3 +440,13 @@ def test_social_analysis_generates_discursive_reading(monkeypatch):
     assert report["discourse_analysis"]["dominant_narratives"][0]["title"] == "Fadiga"
     assert fake.calls == 2
     db.close()
+
+
+
+def test_report_agent_knows_social_discourse_analysis_task():
+    from app.agent import ReportAgent
+
+    prompt = ReportAgent().prompt_for("social_discourse_analysis")
+
+    assert "ANALISE DISCURSIVA" in prompt
+    assert "nao generalize" in prompt.lower()
