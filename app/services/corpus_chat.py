@@ -9,8 +9,6 @@ como corpus validado do relatorio.
 from __future__ import annotations
 
 import math
-import re
-import unicodedata
 from datetime import date
 from urllib.parse import urlparse
 
@@ -24,42 +22,14 @@ from app.llm import llm_is_configured
 from app.models import GeneratedReport, MediaItem, Project
 from app.schemas import ChatResponse
 from app.tools.registry import build_agent_tools
-
-
-_STOPWORDS = {
-    "a", "as", "o", "os", "de", "da", "das", "do", "dos", "e", "em",
-    "no", "na", "nos", "nas", "para", "por", "com", "um", "uma", "ao",
-    "aos", "que", "sobre", "qual", "quais", "como", "foi", "foram", "ser",
-    "tem", "teve", "mais", "menos", "entre", "me", "diga", "mostre",
-}
-
-_CASUAL_GREETINGS = {
-    "oi", "ola", "opa", "e ai", "bom dia", "boa tarde", "boa noite",
-    "oi tudo bem", "ola tudo bem", "e ai tudo bem", "tudo bem",
-}
-_CASUAL_THANKS = {
-    "obrigado", "obrigada", "muito obrigado", "muito obrigada", "valeu",
-    "agradecido", "agradecida",
-}
-_CASUAL_FAREWELLS = {
-    "tchau", "ate mais", "ate logo", "falou",
-}
-
-
-def _topic_key(value: str | None) -> str:
-    text = unicodedata.normalize("NFKD", value or "")
-    text = "".join(char for char in text if not unicodedata.combining(char))
-    text = text.casefold()
-    text = re.sub(r"[^a-z0-9]+", " ", text)
-    return " ".join(text.split())
-
-
-def _tokens(value: str | None) -> set[str]:
-    return {
-        token
-        for token in re.findall(r"[a-z0-9]+", _topic_key(value))
-        if len(token) >= 3 and token not in _STOPWORDS
-    }
+from app.corpus.chat_text import (
+    casual_kind as _casual_kind,
+    latest_user_question as _latest_user_question,
+    normalize_member_references as _normalize_member_references,
+    retrieval_question as _retrieval_question,
+    tokens as _tokens,
+    topic_key as _topic_key,
+)
 
 
 def _visible_projects(db: Session, user) -> list[Project]:
