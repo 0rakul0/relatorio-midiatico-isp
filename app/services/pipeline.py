@@ -23,8 +23,7 @@ from app.services.news_validation import validate_news_stage
 from app.services.project_profile import discover_project_profile, project_payload, trusted_launch_date
 from app.services.reporting import draft_report_with_llm, refine_report_with_qa
 from app.services.search_planning import plan_report_with_llm
-from app.services.social_repercussion import collect_social_repercussion
-from app.services.public_opinion import collect_public_opinion
+from app.pipeline.optional_layers import run_public_opinion_layer, run_social_layer
 
 
 def run_full_methodology(
@@ -296,133 +295,19 @@ def run_full_methodology(
                 f"{academic_research.get('persisted', 0)} artigo(s) relevante(s) preservado(s)",
             )
 
-    # 3b. Repercussao social: comentarios permanecem fora do corpus de noticias.
-    social_repercussion = {
-        "status": "SKIPPED",
-        "posts": 0,
-        "comments": 0,
-        "analyzed_comments": 0,
-        "methodology_note": (
-            "Comentarios em redes sociais descrevem apenas a amostra observada "
-            "e nao representam a populacao."
-        ),
-    }
-    check()
-    stage(
-        "social_repercussion",
-        "RUNNING",
-        "Buscando posts diretamente por plataforma no DuckDuckGo e enriquecendo comentarios via Apify",
+    # 3b/3c. Camadas sociais e de opinião pública ----------------------
+    social_repercussion = run_social_layer(
+        db,
+        project,
+        stage=stage,
+        check=check,
     )
-    try:
-        social_repercussion = collect_social_repercussion(db, project)
-    except RuntimeError as exc:
-        from app.orchestration.state import RunCancelled
-
-        if isinstance(exc, RunCancelled):
-            raise
-        social_repercussion = {
-            "status": "UNAVAILABLE",
-            "reason": str(exc)[:500],
-            "posts": 0,
-            "comments": 0,
-            "analyzed_comments": 0,
-        }
-        stage(
-            "social_repercussion",
-            "SKIPPED",
-            f"Repercussao social indisponivel: {str(exc)[:180]}",
-        )
-    else:
-        social_status = str(social_repercussion.get("status") or "")
-        if social_status in {"DISABLED", "NOT_CONFIGURED", "NO_POSTS"}:
-            discovery = social_repercussion.get("discovery") or {}
-            platform_audit = discovery.get("platforms") or {}
-            platform_text = ", ".join(
-                f"{name}: {int((data or {}).get('returned') or 0)}"
-                for name, data in platform_audit.items()
-            )
-            detail = str(
-                social_repercussion.get("reason")
-                or "Nenhum comentario social disponivel na amostra"
-            )
-            if discovery:
-                detail += (
-                    f" | {discovery.get('queries', 0)} consulta(s), "
-                    f"{discovery.get('rounds', 0)} rodada(s), "
-                    f"{discovery.get('returned', 0)} retorno(s)"
-                )
-                if platform_text:
-                    detail += f" | {platform_text}"
-            stage(
-                "social_repercussion",
-                "SKIPPED",
-                detail[:500],
-            )
-        else:
-            discovery = social_repercussion.get("discovery") or {}
-            discovery_note = (
-                f"; descoberta dedicada: {discovery.get('eligible_posts', 0)} post(s) elegivel(is), "
-                f"{discovery.get('new_items', 0)} novo(s), "
-                f"{discovery.get('queries', 0)} consulta(s), "
-                f"{discovery.get('rounds', 1)} rodada(s)"
-                if discovery
-                else ""
-            )
-            stage(
-                "social_repercussion",
-                "DONE",
-                f"{social_repercussion.get('posts', 0)} post(s); "
-                f"{social_repercussion.get('comments', 0)} comentario(s); "
-                f"{social_repercussion.get('analyzed_comments', 0)} analisado(s)"
-                + discovery_note,
-            )
-
-    # 3c. Opinião pública: pesquisas amostrais permanecem separadas
-    # tanto do corpus jornalístico quanto dos comentários de redes sociais.
-    public_opinion = {
-        "status": "NO_SURVEYS",
-        "count": 0,
-        "surveys": [],
-    }
-    check()
-    stage(
-        "public_opinion",
-        "RUNNING",
-        "Buscando pesquisas de opinião com população, amostra, período de campo e metodologia auditáveis",
+    public_opinion = run_public_opinion_layer(
+        db,
+        project,
+        stage=stage,
+        check=check,
     )
-    try:
-        public_opinion = collect_public_opinion(db, project)
-    except RuntimeError as exc:
-        public_opinion = {
-            "status": "UNAVAILABLE",
-            "count": 0,
-            "surveys": [],
-            "reason": str(exc)[:500],
-        }
-        stage(
-            "public_opinion",
-            "SKIPPED",
-            f"Camada de opinião pública indisponível: {str(exc)[:180]}",
-        )
-    else:
-        opinion_status = str(public_opinion.get("status") or "")
-        if opinion_status == "DISABLED":
-            stage("public_opinion", "SKIPPED", "Camada de opinião pública desativada na configuração")
-        elif opinion_status in {"NO_SURVEYS", "DISCOVERED_ONLY"}:
-            detail = (
-                f"Busca executada: {public_opinion.get('candidates', 0)} fonte(s) candidata(s); "
-                f"{public_opinion.get('count', 0)} pesquisa(s) estruturada(s)"
-            )
-            if opinion_status == "DISCOVERED_ONLY":
-                detail += "; LLM indisponível para estruturar a metodologia"
-            stage("public_opinion", "DONE", detail)
-        else:
-            stage(
-                "public_opinion",
-                "DONE",
-                f"{public_opinion.get('count', 0)} pesquisa(s) de opinião estruturada(s) "
-                f"a partir de {public_opinion.get('candidates', 0)} fonte(s) candidata(s)",
-            )
 
     # 4. News validation ------------------------------------------------
     validation = {
