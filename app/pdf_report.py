@@ -1,6 +1,10 @@
 from io import BytesIO
 from xml.sax.saxutils import escape
 
+from app.reports.pdf.corpus import (
+    deduplicated_corpus as _deduplicated_corpus,
+    split_by_origin as _split_by_origin,
+)
 from app.reports.pdf.helpers import (
     pdf_link as _pdf_link,
     scope_label as _scope_label,
@@ -9,6 +13,7 @@ from app.reports.pdf.helpers import (
     window_label as _window_label,
 )
 from app.reports.pdf.word_cloud import pdf_word_cloud_flowable as _pdf_word_cloud_flowable
+from app.reports.pdf.table import table as _table
 from app.utils.rendering import (
     has_content as _has_content,
     has_meaningful_fields as _has_meaningful_fields,
@@ -1181,109 +1186,3 @@ def build_pdf(data: dict) -> bytes:
     return buffer.getvalue()
 
 
-def _deduplicated_corpus(
-    corpus: list[dict],
-    by_origin: dict[str, list[dict]] | None = None,
-) -> list[dict]:
-    """Normaliza snapshots atuais e legados sem alterar o conteúdo persistido."""
-    from app.services.metrics import deduplicate_corpus
-
-    rows = list(corpus or [])
-    if not rows and by_origin:
-        rows = [
-            *list(by_origin.get("redes_sociais") or []),
-            *list(by_origin.get("youtube") or []),
-            *list(by_origin.get("portal_noticias") or []),
-        ]
-    return deduplicate_corpus(rows)
-
-
-def _split_by_origin(corpus: list[dict]) -> dict[str, list[dict]]:
-    """Import tardio: app.services.* não pode ser importado no topo (ciclo)."""
-    from app.services.metrics import split_corpus_by_origin
-
-    return split_corpus_by_origin(corpus or [])
-
-
-def _table(
-    rows: list[list[object]],
-    widths: list[float],
-    style,
-    header_color=None,
-    header_text=None,
-    nowrap_columns: set[int] | None = None,
-):
-    from reportlab.lib import colors
-    from reportlab.lib.styles import ParagraphStyle
-    from reportlab.platypus import Paragraph, Table, TableStyle
-
-    header_style = ParagraphStyle(
-        "TableHeader",
-        parent=style,
-        textColor=header_text if header_text is not None else colors.white,
-    )
-    nowrap_columns = set(nowrap_columns or set())
-
-    def cell_paragraph(cell: object, cell_style, row_index: int, column_index: int):
-        if isinstance(cell, dict) and "_pdf_links" in cell:
-            parts = []
-            for link_item in cell.get("_pdf_links") or []:
-                href = _text((link_item or {}).get("href")).strip()
-                label = escape(_text((link_item or {}).get("label") or "Abrir"))
-                if not href:
-                    continue
-                safe_href = escape(href, {'"': '&quot;', "'": '&apos;'})
-                parts.append(
-                    f'<link href="{safe_href}" color="#1F5E8C"><u>{label}</u></link>'
-                )
-            return Paragraph(" · ".join(parts) if parts else "N/D", cell_style)
-        if isinstance(cell, dict) and "_pdf_link" in cell:
-            href = _text(cell.get("_pdf_link")).strip()
-            label = escape(_text(cell.get("label") or "Abrir"))
-            if not href:
-                return Paragraph("N/D", cell_style)
-            safe_href = escape(href, {'"': '&quot;', "'": '&apos;'})
-            return Paragraph(
-                f'<link href="{safe_href}" color="#1F5E8C"><u>{label}</u></link>',
-                cell_style,
-            )
-        if row_index > 0 and column_index in nowrap_columns:
-            # String simples dentro da Table não é quebrada pelo Paragraph.
-            # As larguras dessas colunas são dimensionadas para conter o valor.
-            return _text(cell)
-        return Paragraph(escape(_text(cell)), cell_style)
-
-    formatted = [
-        [
-            cell_paragraph(
-                cell,
-                header_style if row_index == 0 else style,
-                row_index,
-                column_index,
-            )
-            for column_index, cell in enumerate(row)
-        ]
-        for row_index, row in enumerate(rows)
-    ]
-    table = Table(
-        formatted,
-        colWidths=widths,
-        repeatRows=1,
-        # Tabelas extensas continuam por linha na página seguinte,
-        # repetindo o cabeçalho sem tentar manter o bloco inteiro junto.
-        splitByRow=1,
-    )
-    table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), header_color or colors.HexColor("#102b46")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), header_text or colors.white),
-                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#dbe4ec")),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("PADDING", (0, 0), (-1, -1), 5),
-                ("FONTNAME", (0, 1), (-1, -1), getattr(style, "fontName", "Helvetica")),
-                ("FONTSIZE", (0, 1), (-1, -1), getattr(style, "fontSize", 7.2)),
-            ]
-        )
-    )
-    return table
