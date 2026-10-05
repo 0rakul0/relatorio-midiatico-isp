@@ -784,17 +784,38 @@ pytest
 
 ## 8. Estrutura resumida do software
 
+A organização segue uma regra simples: `utils/` contém apenas helpers transversais; regras específicas permanecem em pacotes de domínio como `social/` e `reports/pdf/`. Arquivos históricos como `pdf_report.py` e `services/social_repercussion.py` continuam como fachadas compatíveis, para não quebrar imports existentes enquanto a implementação é distribuída em módulos menores.
+
 ```text
 app/
 ├── main.py
-├── agent.py
+├── agent.py                     # orquestra o ReportAgent
 ├── models.py
 ├── schemas.py
 ├── config.py
 ├── topic_profile.py
 ├── fact_layer.py
 ├── report_qa.py
-├── pdf_report.py
+├── pdf_report.py                # fachada/orquestração editorial do PDF
+│
+├── prompts/
+│   └── report_agent.py          # BASE_PROMPT e prompts por tarefa
+│
+├── utils/
+│   └── rendering.py             # helpers realmente transversais
+│
+├── social/
+│   ├── comments.py              # normalização dos comentários
+│   ├── dates.py                 # datas DDG/Apify/X/TikTok
+│   ├── sampling.py              # amostragem plataforma → post → comentário
+│   └── urls.py                  # reconhecimento/canonicalização social
+│
+├── reports/
+│   └── pdf/
+│       ├── corpus.py            # deduplicação e buckets por origem
+│       ├── helpers.py           # labels e links
+│       ├── table.py             # tabelas ReportLab
+│       └── word_cloud.py        # nuvem de palavras
 │
 ├── orchestration/
 │   ├── executor.py
@@ -808,7 +829,7 @@ app/
 │   ├── validation.py
 │   ├── classification.py
 │   ├── reporting.py
-│   ├── social_repercussion.py
+│   ├── social_repercussion.py   # orquestração/persistência social
 │   ├── public_opinion.py
 │   └── collection/
 │
@@ -817,6 +838,7 @@ app/
     ├── hydration.py
     ├── academic.py
     ├── social.py
+    ├── public_opinion.py
     └── providers/
 ```
 
