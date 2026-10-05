@@ -13,7 +13,7 @@
 
 O acompanhamento sistemático da cobertura jornalística sobre segurança pública exige mais do que a recuperação de páginas que contenham determinadas palavras-chave. Uma mesma consulta pode recuperar notícias efetivamente relacionadas ao objeto de interesse, documentos institucionais, republicações, resultados temporalmente incompatíveis, textos apenas tangenciais ao tema e conteúdos que descrevem o fato sem constituírem repercussão midiática. A introdução de modelos de linguagem amplia a capacidade de interpretação desse material, mas também cria problemas de reprodutibilidade, proveniência e auditabilidade quando busca, seleção de fontes, inferência factual e redação são executadas como uma única operação opaca.
 
-Este trabalho apresenta o **Relatório de Repercussão Midiática — ISP**, um sistema para coleta, validação, classificação e síntese de cobertura midiática. A arquitetura combina planejamento estruturado de consultas, descoberta centralizada pelo DuckDuckGo, roteamento determinístico dos resultados conforme a origem da mídia, persistência dos resultados brutos, enriquecimento especializado de conteúdos Web, YouTube e redes sociais, recuperação do conteúdo integral das matérias, validação semântica por modelo de linguagem, regras determinísticas, extração factual opcional, classificação temática, controle de qualidade e geração de relatório. O método distingue explicitamente o **fato**, a **evidência que sustenta o fato** e a **matéria que constitui repercussão**, evitando que fontes utilizadas para comprovação sejam automaticamente contabilizadas como cobertura jornalística.
+Este trabalho apresenta o **Relatório de Repercussão Midiática — ISP**, um sistema para coleta, validação, classificação e síntese de cobertura midiática. A arquitetura combina planejamento estruturado de consultas, descoberta centralizada pelo DuckDuckGo, roteamento determinístico dos resultados conforme a origem da mídia, persistência dos resultados brutos, enriquecimento especializado de conteúdos Web, YouTube e redes sociais, recuperação do conteúdo integral das matérias, validação semântica por modelo de linguagem, regras determinísticas, extração factual opcional, classificação temática, controle de qualidade e geração de relatório. A camada social possui descoberta dedicada de posts públicos em Instagram, Facebook, TikTok e X, enriquecimento de comentários via Apify, recuperação auditável de datas de publicação e análise quantitativa e discursiva dos comentários. O método distingue explicitamente o **fato**, a **evidência que sustenta o fato**, a **matéria que constitui repercussão** e a **percepção observada em comentários públicos**, evitando que fontes utilizadas para comprovação ou reações sociais sejam automaticamente contabilizadas como cobertura jornalística.
 
 Uma segunda contribuição é a construção incremental de uma memória de corpus. Documentos coletados são normalizados, deduplicados e armazenados globalmente, podendo ser recuperados em pesquisas posteriores por similaridade temática, lexical e semântica. As decisões de validação geram exemplos supervisionados que alimentam um reranker local, mantendo a decisão final sob a camada auditável de validação. Dessa forma, pesquisas anteriores tornam-se conhecimento reutilizável sem assumir que a relevância de uma matéria para um novo tema seja idêntica à decisão tomada no projeto original.
 
@@ -32,7 +32,12 @@ O MVP operacional reúne, em uma única trilha auditável, descoberta, validaç�
 - fallback de busca quando uma consulta retorna zero resultados, com novas tentativas por grafias alternativas, sinônimos jornalísticos e formulações mais amplas;
 - descoberta centralizada pelo DuckDuckGo, seguida de classificação determinística das URLs como portal/notícia, YouTube ou rede social;
 - enriquecimento especializado após a descoberta: páginas tradicionais seguem para hidratação Web, vídeos seguem para o tratamento de YouTube e posts sociais seguem para o Apify;
+- descoberta social dedicada por plataforma, com consultas `site:` mais curtas e específicas para Instagram, Facebook, TikTok e X; se a primeira rodada não encontra posts elegíveis, uma segunda rodada de recuperação usa termos mais amplos antes de aceitar ausência de resultados;
+- recuperação auditável da data dos posts sociais por cascata de evidências: metadado explícito do Apify, data estruturada do DuckDuckGo, data relativa do DuckDuckGo calculada a partir do instante real da coleta e, quando tecnicamente possível, data derivada do identificador da URL em X e TikTok;
 - leitura de comentários públicos de posts sociais descobertos pelo DuckDuckGo, mantendo post e reação do público como unidades distintas e sem tratar comentários como evidência factual;
+- amostragem hierárquica de comentários por **plataforma → post → comentário**, combinando exemplos mais curtidos, mais respondidos, recentes e de baixo engajamento para reduzir a dominância de poucos posts muito movimentados;
+- classificação dos comentários por sentimento, emoção, posição e temas, seguida de análise qualitativa/discursiva das narrativas, argumentos recorrentes, tensões, formas de interação e sinais de polarização observados na amostra;
+- separação explícita entre corpus jornalístico validado e camada social monitorada: posts e comentários permanecem auditáveis em anexo próprio, sem serem somados às métricas de notícias validadas;
 - persistência dos resultados brutos, inclusive itens posteriormente rejeitados, preservando a trilha de auditoria;
 - hidratação, validação semântica, deduplicação e reutilização do corpus histórico;
 - camada factual opcional para pessoas, eventos, locais, circunstâncias e operações policiais;
@@ -118,7 +123,13 @@ Essa relação é persistida para permitir inspeção posterior.
 
 A aplicação é implementada em Python 3.12, FastAPI, SQLAlchemy e Pydantic. PostgreSQL é o banco principal, com suporte a SQLite para desenvolvimento. O **DuckDuckGo é a camada principal de descoberta externa**: os resultados retornados são persistidos e classificados deterministicamente conforme a origem da mídia. URLs de portais e páginas tradicionais seguem para hidratação Web; URLs do YouTube seguem para o tratamento especializado de vídeo; URLs públicas de Instagram, Facebook, TikTok e X seguem para a camada de **repercussão social**.
 
-O Apify não funciona como mecanismo paralelo de descoberta. Ele atua como **enriquecedor de URLs sociais previamente encontradas pelo DuckDuckGo**. Para posts sociais elegíveis, o sistema utiliza o conector correspondente para recuperar comentários públicos e produzir agregados de sentimento, emoção, posição e temas recorrentes. Os comentários permanecem vinculados ao post de origem, não se tornam `MediaItem`, não são usados como confirmação de fatos objetivos e a identidade do comentarista não é persistida. A proveniência mantém a cadeia de descoberta e enriquecimento, permitindo distinguir, por exemplo, um post descoberto por DuckDuckGo e posteriormente aprofundado pelo Apify. O arXiv pode ser consultado separadamente para literatura científica. As tarefas semânticas são executadas por um `ReportAgent`, utilizando um modelo compatível com a API da OpenAI e suporte a fallback local compatível com esse protocolo.
+O Apify não funciona como mecanismo paralelo de descoberta. Ele atua como **enriquecedor de URLs sociais previamente encontradas pelo DuckDuckGo**. A camada social executa consultas dedicadas por plataforma, priorizando termos curtos extraídos do perfil do tema em vez de reproduzir literalmente a pergunta do usuário. Se a primeira rodada não encontrar posts elegíveis, uma segunda rodada de recuperação amplia os termos antes de concluir `NO_POSTS`.
+
+Para posts sociais elegíveis, o sistema utiliza o conector correspondente para recuperar comentários públicos. A data da publicação é enriquecida por uma cascata auditável de fontes: metadado explícito do post retornado pelo Apify, data estruturada do DuckDuckGo, expressão temporal relativa do DuckDuckGo calculada contra o `retrieved_at` real da coleta (por exemplo, `3 days ago` → data da coleta menos três dias) e, quando tecnicamente confiável, data derivada do identificador da publicação em X ou TikTok. O valor bruto e a origem da data são preservados na proveniência.
+
+Os comentários permanecem vinculados ao post de origem, não se tornam `MediaItem`, não são usados como confirmação de fatos objetivos e a identidade do comentarista não é persistida. Para análise semântica, a amostra é construída hierarquicamente por **plataforma → post → comentário**, alternando posts e combinando sinais de engajamento, resposta, recência e baixo engajamento. Até o limite configurado, os comentários selecionados são classificados por sentimento, emoção, posição e temas. O mesmo conjunto efetivamente classificado alimenta uma segunda leitura qualitativa/discursiva, voltada a narrativas dominantes, argumentos recorrentes, tensões, formas de interação, personalização, ironia, fadiga, confiança, desconfiança e sinais de polarização quando sustentados pelo material observado.
+
+A proveniência mantém a cadeia de descoberta e enriquecimento, permitindo distinguir um post descoberto pelo DuckDuckGo, a origem de sua data e o aprofundamento posterior pelo Apify. A camada social é apresentada separadamente do corpus jornalístico validado: ela descreve **percepção observada nos comentários públicos monitorados** e não constitui amostra representativa da população. O arXiv pode ser consultado separadamente para literatura científica. As tarefas semânticas são executadas por um `ReportAgent`, utilizando um modelo compatível com a API da OpenAI e suporte a fallback local compatível com esse protocolo.
 
 O pipeline operacional pode ser representado por:
 
@@ -317,22 +328,48 @@ classificação da origem
 
 Esse desenho separa **descoberta** de **enriquecimento**. O DuckDuckGo determina quais conteúdos entram na trilha de descoberta; YouTube e Apify aprofundam apenas os resultados correspondentes ao seu tipo de mídia. O Apify, portanto, não executa uma busca social autônoma no fluxo principal.
 
-Para redes sociais, somente URLs de posts compatíveis e cuja proveniência de descoberta seja DuckDuckGo são candidatas ao enriquecimento. Atualmente são reconhecidos posts públicos de Instagram, Facebook, TikTok e X. Quando a plataforma e o Actor configurado permitem, os comentários públicos são coletados e vinculados ao post original.
+Para redes sociais, o sistema executa uma etapa adicional de descoberta com consultas `site:` específicas para Instagram, Facebook, TikTok e X. Os termos sociais são mais compactos do que a pergunta original e priorizam sinônimos, assuntos, atores e variantes produzidas pelo perfil do tema. A configuração padrão permite múltiplas consultas por plataforma e, se a primeira rodada não retornar URLs elegíveis, uma segunda rodada de recuperação é executada automaticamente.
+
+Somente URLs reconhecidas como posts públicos entram no enriquecimento. Quando a plataforma e o Actor configurado permitem, comentários públicos são coletados pelo Apify e vinculados ao `SocialPost` correspondente. O sistema também tenta preencher a data da publicação sem confundir a data do comentário com a data do post.
+
+A resolução temporal segue a ordem de evidência disponível:
+
+```text
+metadado explícito do post no Apify
+        ↓
+data estruturada retornada pelo DuckDuckGo
+        ↓
+data relativa do DuckDuckGo + retrieved_at
+        ↓
+ID temporal da publicação (X/TikTok, quando aplicável)
+        ↓
+N/D
+```
+
+Datas relativas são calculadas contra o instante real da coleta. Assim, se o resultado retornar `3 days ago` e tiver sido coletado em 05/10/2026, a data derivada será 02/10/2026. O texto bruto (`published_at_raw`) e a origem da inferência são preservados para auditoria.
 
 A cadeia auditável pode ser representada por:
 
 ```text
-consulta
-  → DuckDuckGo
-  → SearchHit
-  → classificação REDE_SOCIAL
+tema
+  → termos sociais compactos
+  → DuckDuckGo por plataforma
+  → SearchHit / MediaItem social
+  → resolução da data do post
   → Apify
-  → post social
+  → SocialPost
   → comentários públicos
-  → análise agregada da reação
+  → amostragem hierárquica
+  → classificação semântica
+  → análise discursiva
+  → seção social + anexo auditável
 ```
 
-Comentários representam **reação e percepção pública observável**, e não evidência factual. Por isso, permanecem fora do corpus jornalístico utilizado para confirmar fatos objetivos.
+A amostragem é hierárquica por **plataforma → post → comentário**. O round-robin entre plataformas e posts reduz o peso excessivo de uma única publicação muito movimentada. Dentro de cada post, a ordenação mistura comentários mais curtidos, mais respondidos, mais recentes e de baixo engajamento. O conjunto efetivamente classificado — até o limite configurado — é também o conjunto utilizado na análise discursiva, evitando que uma segunda amostra menor altere a base qualitativa.
+
+A classificação produz agregados de sentimento, emoção, posição e temas. Em seguida, a leitura discursiva procura narrativas dominantes, argumentos recorrentes, tensões e contradições, formas de interação e sinais de polarização quando sustentados pelos comentários. O relatório utiliza formulações restritas à amostra, como **“entre os comentários analisados”**, porque comentários públicos de posts monitorados não representam a população nem o eleitorado.
+
+Comentários representam **reação e percepção pública observável**, e não evidência factual. Posts monitorados e comentários permanecem fora do corpus jornalístico validado, mas são apresentados em seção própria e em anexo auditável com plataforma, data quando recuperável, referência, quantidade de comentários, método de descoberta e link.
 
 ### 3.8 Consolidação e proveniência
 
