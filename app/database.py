@@ -9,7 +9,16 @@ _database_url = get_settings().database_url
 
 def _engine_kwargs() -> dict:
     if _database_url.startswith("sqlite"):
-        return {}
+        # SQLite aceita uma única escrita por vez. O timeout do driver se soma
+        # ao PRAGMA busy_timeout abaixo e evita falhas imediatas sob concorrência.
+        # check_same_thread=False é necessário porque o pipeline usa workers de
+        # I/O e a telemetria de custo possui um gravador assíncrono próprio.
+        return {
+            "connect_args": {
+                "timeout": 30,
+                "check_same_thread": False,
+            }
+        }
     settings = get_settings()
     return {
         "pool_size": settings.db_pool_size,
