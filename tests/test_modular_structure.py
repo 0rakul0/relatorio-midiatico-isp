@@ -7,6 +7,8 @@ from app.database import Base
 from app.facts.resolution import resolve_assertions as domain_resolve_assertions
 from app.facts.selection import is_annual_police_operation_project
 from app.corpus.similarity import project_similarity as corpus_project_similarity
+from app.prompts.report_agent import TASK_PROMPTS
+from app.schemas import FactExtractionResponse, ProjectCreate, ReportQAResponse
 from app.models import (
     AppUser,
     MediaItem,
@@ -153,4 +155,33 @@ def test_corpus_similarity_keeps_identical_topic_at_one():
         event_end=None,
     )
     assert corpus_project_similarity(project_a, project_b) == 1.0
+
+def test_prompt_registry_keeps_all_expected_tasks():
+    expected = {
+        "topic_profile",
+        "documentalist",
+        "report_planner",
+        "public_opinion_extraction",
+        "social_comment_analysis",
+        "social_discourse_analysis",
+        "article_hydrator",
+        "search_planner",
+        "fact_extraction",
+        "media_relevance",
+        "academic_research",
+        "classification",
+        "report_writer",
+        "report_reviser",
+        "gap_planner",
+        "collector",
+        "qa",
+        "chat",
+    }
+    assert expected == set(TASK_PROMPTS)
+
+
+def test_schema_facade_keeps_public_models():
+    assert ProjectCreate.__name__ == "ProjectCreate"
+    assert FactExtractionResponse.__name__ == "FactExtractionResponse"
+    assert ReportQAResponse.__name__ == "ReportQAResponse"
 
