@@ -1,66 +1,19 @@
-from collections import Counter
-from datetime import date
 from contextlib import asynccontextmanager
 import logging
 
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import delete, select
-from sqlalchemy.orm import Session
 
-from app.config import get_settings
-from app.auth import AuthUser, get_current_user
-from app.api.deps import project_or_404
 from app.api.chat import router as chat_router
-from app.api.costs import router as costs_router, summarize_costs as _summarize_costs
-from app.api.reports import router as reports_router
+from app.api.costs import router as costs_router
 from app.api.projects import router as projects_router
-from app.billing import check_quota, clamp_profile, plan_for, router as billing_router
-from app.cost_tracker import cost_context
-from app.database import SessionLocal, get_db
-from app.fact_layer import fact_assertions_for_report, fact_events_for_main_report, fact_events_for_report
-from app.orchestration import request_cancel, resume_run, run_snapshot, start_qa_refinement, start_run
-from app.models import (
-    AcademicPaper,
-    Classification,
-    FactAssertion,
-    FactEvent,
-    GeneratedReport,
-    LLMCall,
-    MediaItem,
-    OfficialFact,
-    Project,
-    SearchQuery,
-)
-from app.report_qa import run_report_qa
+from app.api.reports import router as reports_router
+from app.billing import router as billing_router
+from app.config import get_settings
+from app.database import SessionLocal
 from app.schema_upgrade import ensure_schema
-from app.schemas import ChatAskRequest, ManualMediaItemCreate, OfficialFactCreate, ProjectCreate
-from app.services import (
-    cached_report_for_project,
-    cached_report_for_topic,
-    canonicalize,
-    chat_with_all_corpus,
-    chat_with_corpus,
-    delete_chat_conversation,
-    get_chat_conversation,
-    list_chat_conversations,
-    persist_chat_exchange,
-    classify_with_llm,
-    collect_web,
-    discover_project_profile,
-    draft_report_with_llm,
-    export_report_pdf,
-    list_chat_projects,
-    metrics,
-    plan_queries,
-    plan_queries_with_llm,
-    run_full_methodology,
-    validate_and_classify,
-)
-from app.services.collection.media_origin import classify_media_origin
 from app.services.corpus_metadata import repair_corpus_metadata
-from app.topic_profile import requested_topic_window
 
 
 logger = logging.getLogger("app.main")
