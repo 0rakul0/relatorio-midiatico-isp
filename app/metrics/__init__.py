@@ -1,1 +1,0 @@
-"""Cálculos e projeções de métricas do relatório.\n"""\n
