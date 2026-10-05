@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from datetime import date
 from urllib.parse import urlparse
 
-from sqlalchemy import and_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.agent import get_report_agent
 from app.llm import llm_is_configured
 from app.schemas import FactExtractionResponse
-from app.models import FactAssertion, FactEvent, MediaItem, OperationEvent, OperationMediaLink, Project, SearchQuery
+from app.models import FactAssertion, FactEvent, MediaItem, Project, SearchQuery
 from app.source_registry import OFFICIAL_SECURITY_SOURCES
 from app.topic_profile import normalized_text
 from app.facts.normalization import (
