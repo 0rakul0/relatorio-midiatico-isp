@@ -4,12 +4,8 @@ import re
 
 from app.models import Project
 from app.source_registry import ISP_INSTITUTION_NAME
-from app.topic_profile import (
-    GENERIC_PRODUCT_TERMS,
-    normalized_terms,
-    normalized_text,
-    product_anchor_from_name,
-)
+from app.topic_profile import normalized_terms, normalized_text
+from app.topics.products import GENERIC_PRODUCT_TERMS, product_anchor_from_name
 from app.year_utils import find_year, find_years
 
 

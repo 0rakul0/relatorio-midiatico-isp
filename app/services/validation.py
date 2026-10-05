@@ -13,12 +13,8 @@ from app.llm import llm_is_configured
 from app.models import Classification, MediaItem, Project
 from app.schemas import MediaRelevanceBatchResponse
 from app.source_registry import ISP_INSTITUTION_NAME
-from app.topic_profile import (
-    GENERIC_PRODUCT_TERMS,
-    normalized_terms,
-    normalized_text,
-    product_anchor_from_name,
-)
+from app.topic_profile import normalized_terms, normalized_text
+from app.topics.products import GENERIC_PRODUCT_TERMS, product_anchor_from_name
 from app.services.collection.common import inferred_publication_date, media_window
 from app.services.corpus_reuse import sync_media_item_to_corpus
 from app.services.relevance_learning import (
