@@ -7,8 +7,14 @@ providers diretamente.
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from app.config import get_settings
 from app.tools.providers.apify_social import ApifyUnavailable, run_actor_dataset
+from app.tools.providers.duckduckgo import (
+    DuckDuckGoUnavailable,
+    search_text as duckduckgo_text,
+)
 
 
 class SocialCollectionUnavailable(RuntimeError):
@@ -91,3 +97,75 @@ def collect_public_comments(
     except ApifyUnavailable as exc:
         raise SocialCollectionUnavailable(str(exc)) from exc
     return actor_id, rows
+
+
+
+_SOCIAL_DISCOVERY_DOMAINS = {
+    "instagram": ("instagram.com",),
+    "facebook": ("facebook.com",),
+    "tiktok": ("tiktok.com",),
+    "x": ("x.com", "twitter.com"),
+}
+
+
+def discover_public_posts(
+    *,
+    terms: list[str],
+    max_queries_per_platform: int = 2,
+    results_per_query: int = 8,
+) -> dict[str, list[dict]]:
+    """Descobre URLs públicas de posts sociais via DuckDuckGo Text.
+
+    O Apify continua responsável pelo enriquecimento/coleta de comentários.
+    A descoberta fica independente dos Actors pagos e usa consultas site:
+    específicas para cada plataforma.
+    """
+    settings = get_settings()
+    cleaned_terms = list(dict.fromkeys(
+        " ".join(str(term or "").split()).strip()
+        for term in terms
+        if " ".join(str(term or "").split()).strip()
+    ))
+    cleaned_terms = cleaned_terms[: max(1, int(max_queries_per_platform))]
+
+    found: dict[str, dict[str, dict]] = {
+        platform: {} for platform in _SOCIAL_DISCOVERY_DOMAINS
+    }
+    if not cleaned_terms:
+        return {platform: [] for platform in _SOCIAL_DISCOVERY_DOMAINS}
+
+    for platform, domains in _SOCIAL_DISCOVERY_DOMAINS.items():
+        for term in cleaned_terms:
+            for domain in domains:
+                query = f'site:{domain} "{term}"'
+                try:
+                    rows = duckduckgo_text(
+                        query,
+                        max_results=max(1, int(results_per_query)),
+                        region=settings.duckduckgo_region,
+                        safesearch=settings.duckduckgo_safesearch,
+                        retries=settings.duckduckgo_max_retries,
+                        retry_base_seconds=settings.duckduckgo_retry_base_seconds,
+                    )
+                except DuckDuckGoUnavailable:
+                    continue
+
+                for row in rows:
+                    url = str(row.get("url") or "").strip()
+                    if not url:
+                        continue
+                    host = urlparse(url).netloc.lower().split(":", 1)[0]
+                    if host.startswith("www."):
+                        host = host[4:]
+                    if not any(host == base or host.endswith("." + base) for base in domains):
+                        continue
+                    item = dict(row)
+                    item["discovery_query"] = query
+                    item["social_platform"] = platform
+                    item["provider"] = "duckduckgo_social"
+                    found[platform].setdefault(url.rstrip("/").lower(), item)
+
+    return {
+        platform: list(rows.values())
+        for platform, rows in found.items()
+    }
