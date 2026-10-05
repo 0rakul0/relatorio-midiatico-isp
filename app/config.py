@@ -150,6 +150,17 @@ class Settings(BaseSettings):
     duckduckgo_fetch_max_chars: int = Field(default=12000, ge=1000, le=100000)
     duckduckgo_fetch_timeout_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
 
+    # Camada independente de opinião pública. Busca levantamentos que
+    # informem população-alvo, amostra, período de campo e metodologia; esses
+    # resultados não são somados ao corpus jornalístico nem aos comentários.
+    public_opinion_enabled: bool = True
+    public_opinion_max_queries: int = Field(default=4, ge=1, le=12)
+    public_opinion_results_per_query: int = Field(default=6, ge=1, le=10)
+    public_opinion_max_documents: int = Field(default=12, ge=1, le=40)
+    public_opinion_fetch_max_chars: int = Field(default=18000, ge=2000, le=60000)
+    public_opinion_fetch_timeout_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
+    public_opinion_llm_max_chars: int = Field(default=14000, ge=2000, le=30000)
+
     # Full article hydration happens after collection, during news validation.
     article_fetch_enabled: bool = True
     article_fetch_max_items: int = Field(default=80, ge=1, le=500)
