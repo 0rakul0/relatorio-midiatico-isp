@@ -913,3 +913,120 @@ def test_discourse_analysis_uses_all_classified_comments(monkeypatch):
     assert report["analyzed_comments"] == 120
     assert discourse_sizes == [120]
     db.close()
+
+def test_social_view_metric_accepts_common_apify_fields():
+    from app.social.engagement import int_metric, post_view_count
+
+    assert int_metric("12.5k") == 12500
+    assert int_metric("1,2m") == 1200000
+    assert post_view_count({"playCount": 3210}) == (3210, "playCount")
+    assert post_view_count({"statistics": {"viewCount": "4500"}}) == (
+        4500,
+        "statistics.viewCount",
+    )
+
+
+def test_social_report_aggregates_post_and_media_views():
+    from app.social.reporting import social_repercussion_for_report
+
+    db = _session()
+    project = Project(
+        topic="tema com alcance social",
+        launch_date=date(2026, 1, 1),
+        collection_start=date(2026, 1, 1),
+        collection_end=date(2026, 10, 5),
+        has_custom_date_window=True,
+        project_type="GENERAL_TOPIC",
+        topic_profile={},
+        execution_options={},
+        execution_plan={},
+    )
+    db.add(project)
+    db.flush()
+
+    media = MediaItem(
+        project_id=project.id,
+        title="Post com views herdadas",
+        url="https://www.instagram.com/p/VIEWS1/",
+        canonical_url="https://www.instagram.com/p/VIEWS1/",
+        domain="instagram.com",
+        media_origin="REDE_SOCIAL",
+        search_source="duckduckgo_social",
+        view_count=1500,
+    )
+    db.add(media)
+    db.flush()
+
+    db.add_all([
+        SocialPost(
+            project_id=project.id,
+            media_item_id=media.id,
+            platform="instagram",
+            url=media.url,
+            post_text="post 1",
+        ),
+        SocialPost(
+            project_id=project.id,
+            platform="tiktok",
+            url="https://www.tiktok.com/@u/video/123",
+            post_text="post 2",
+            view_count=2500,
+            view_count_source="apify:playCount",
+        ),
+    ])
+    db.commit()
+
+    report = social_repercussion_for_report(db, project.id)
+
+    assert report["view_count_total"] == 4000
+    assert report["view_count_known_posts"] == 2
+    assert report["view_count_missing_posts"] == 0
+    assert report["platform_view_counts"]["instagram"] == 1500
+    assert report["platform_view_counts"]["tiktok"] == 2500
+    assert report["post_inventory"][0]["view_count"] in {1500, 2500}
+    db.close()
+
+
+def test_apify_post_metadata_updates_social_post_views():
+    from app.social.persistence import _enrich_posts_from_apify_dataset
+
+    db = _session()
+    project = Project(
+        topic="tema social",
+        launch_date=date(2026, 1, 1),
+        collection_start=date(2026, 1, 1),
+        collection_end=date(2026, 10, 5),
+        has_custom_date_window=True,
+        project_type="GENERAL_TOPIC",
+        topic_profile={},
+        execution_options={},
+        execution_plan={},
+    )
+    db.add(project)
+    db.flush()
+    post = SocialPost(
+        project_id=project.id,
+        platform="tiktok",
+        url="https://www.tiktok.com/@u/video/123456789",
+        post_text="vídeo",
+    )
+    db.add(post)
+    db.flush()
+
+    updated = _enrich_posts_from_apify_dataset(
+        db,
+        platform="tiktok",
+        dataset=[{
+            "postUrl": post.url,
+            "postCreatedAt": "2026-10-01T10:00:00Z",
+            "playCount": 98765,
+        }],
+        post_by_url={social._url_key(post.url): post},
+    )
+    db.flush()
+
+    assert updated == 1
+    assert post.view_count == 98765
+    assert post.view_count_source == "apify:playCount"
+    db.close()
+
