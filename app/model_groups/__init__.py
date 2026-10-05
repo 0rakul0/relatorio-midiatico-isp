@@ -1,1 +1,4 @@
-"""Modelos SQLAlchemy organizados por domínio.\n\nO módulo público compatível continua sendo app.models.\n"""\n
+"""Modelos SQLAlchemy organizados por domínio.
+
+O módulo público compatível continua sendo app.models.
+"""
