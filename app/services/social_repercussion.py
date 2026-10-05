@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+import re
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -575,6 +576,171 @@ def _parse_datetime(value: Any) -> datetime | None:
     return None
 
 
+
+def _post_datetime_from_row(platform: str, row: dict) -> tuple[datetime | None, str | None]:
+    """Extrai somente timestamps que descrevem o POST de origem.
+
+    Não reutiliza o timestamp genérico do comentário, pois isso faria a data
+    do comentário parecer data do post no anexo.
+    """
+    keys = (
+        "postCreatedAt",
+        "post_created_at",
+        "postTimestamp",
+        "post_timestamp",
+        "postDate",
+        "post_date",
+        "publicationDate",
+        "publication_date",
+        "takenAt",
+        "taken_at",
+        "post.createdAt",
+        "post.created_at",
+        "post.timestamp",
+        "post.date",
+        "post.takenAt",
+        "post.taken_at",
+        "metadata.sourceTweetCreatedAt",
+        "metadata.source_tweet_created_at",
+        "metadata.sourceTweet.created_at",
+        "sourceTweet.createdAt",
+        "sourceTweet.created_at",
+        "tweet.createdAt",
+        "tweet.created_at",
+    )
+    value = _first(row, keys)
+    parsed = _parse_datetime(value)
+    if parsed is not None:
+        return parsed, "apify_post_metadata"
+    return None, None
+
+
+def _post_datetime_from_url(platform: str, url: str) -> tuple[datetime | None, str | None]:
+    """Deriva data apenas de IDs cuja codificação temporal é conhecida."""
+    raw = str(url or "")
+    try:
+        path = urlparse(raw).path
+    except Exception:
+        return None, None
+
+    try:
+        if platform == "x":
+            match = re.search(r"/status/(\d+)", path)
+            if not match:
+                return None, None
+            snowflake = int(match.group(1))
+            timestamp_ms = (snowflake >> 22) + 1288834974657
+            parsed = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc).replace(tzinfo=None)
+            if 2010 <= parsed.year <= datetime.now(timezone.utc).year + 1:
+                return parsed, "x_snowflake"
+
+        if platform == "tiktok":
+            match = re.search(r"/video/(\d+)", path)
+            if not match:
+                return None, None
+            video_id = int(match.group(1))
+            timestamp = video_id >> 32
+            parsed = datetime.fromtimestamp(timestamp, tz=timezone.utc).replace(tzinfo=None)
+            if 2016 <= parsed.year <= datetime.now(timezone.utc).year + 1:
+                return parsed, "tiktok_video_id"
+    except (OverflowError, OSError, ValueError):
+        return None, None
+
+    return None, None
+
+
+def _resolve_post_datetime(
+    platform: str,
+    *,
+    row: dict | None = None,
+    url: str = "",
+    media_published_at: date | None = None,
+) -> tuple[datetime | None, str | None]:
+    if row:
+        parsed, source = _post_datetime_from_row(platform, row)
+        if parsed is not None:
+            return parsed, source
+    if media_published_at is not None:
+        return datetime.combine(media_published_at, datetime.min.time()), "duckduckgo_metadata"
+    return _post_datetime_from_url(platform, url)
+
+
+def _append_post_date_provenance(
+    media: MediaItem | None,
+    *,
+    published_at: datetime,
+    source: str,
+) -> None:
+    if media is None:
+        return
+    if media.published_at is None:
+        media.published_at = published_at.date()
+    provenance = list(media.source_provenance or [])
+    if not any(
+        isinstance(entry, dict)
+        and entry.get("source") == "social_post_date"
+        and entry.get("date_source") == source
+        and entry.get("published_at") == published_at.isoformat()
+        for entry in provenance
+    ):
+        provenance.append(
+            {
+                "source": "social_post_date",
+                "date_source": source,
+                "published_at": published_at.isoformat(),
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        media.source_provenance = provenance
+
+
+def _enrich_posts_from_apify_dataset(
+    db: Session,
+    *,
+    platform: str,
+    dataset: list[dict],
+    post_by_url: dict[str, SocialPost],
+) -> int:
+    updated = 0
+    for raw in dataset:
+        if not isinstance(raw, dict):
+            continue
+        source_key = _url_key(_source_url(raw))
+        post = post_by_url.get(source_key)
+        if post is None and source_key:
+            post = next(
+                (
+                    candidate
+                    for key, candidate in post_by_url.items()
+                    if source_key.startswith(key) or key.startswith(source_key)
+                ),
+                None,
+            )
+        if post is None:
+            continue
+
+        media = db.get(MediaItem, post.media_item_id) if post.media_item_id else None
+        media_date = media.published_at if media is not None else None
+        published_at, date_source = _resolve_post_datetime(
+            platform,
+            row=raw,
+            url=post.url,
+            media_published_at=media_date,
+        )
+        if published_at is None:
+            continue
+
+        if post.published_at is None:
+            post.published_at = published_at
+            updated += 1
+        _append_post_date_provenance(
+            media,
+            published_at=published_at,
+            source=date_source or "unknown",
+        )
+    return updated
+
+
 def _int_or_none(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
@@ -787,6 +953,14 @@ def _ensure_post(
             SocialPost.url == url,
         )
     )
+    media = db.get(MediaItem, media_item_id) if media_item_id else None
+    media_date = media.published_at if media is not None else None
+    resolved_date, date_source = _resolve_post_datetime(
+        platform,
+        url=url,
+        media_published_at=media_date,
+    )
+
     if post is None:
         post = SocialPost(
             project_id=project.id,
@@ -795,6 +969,7 @@ def _ensure_post(
             url=url,
             external_id="url:" + sha256(url.encode("utf-8")).hexdigest()[:40],
             post_text=post_text,
+            published_at=resolved_date,
             actor_id=actor_id,
         )
         db.add(post)
@@ -805,6 +980,15 @@ def _ensure_post(
             post.media_item_id = media_item_id
         if not post.post_text and post_text:
             post.post_text = post_text
+        if post.published_at is None and resolved_date is not None:
+            post.published_at = resolved_date
+
+    if resolved_date is not None:
+        _append_post_date_provenance(
+            media,
+            published_at=resolved_date,
+            source=date_source or "unknown",
+        )
     return post
 
 
@@ -1170,6 +1354,13 @@ def collect_social_repercussion(db: Session, project: Project) -> dict:
             post_by_url[_url_key(url)] = post
         db.flush()
 
+        metadata_dates_updated = _enrich_posts_from_apify_dataset(
+            db,
+            platform=platform,
+            dataset=dataset,
+            post_by_url=post_by_url,
+        )
+
         accepted = 0
         sole_post = next(iter(post_by_url.values())) if len(post_by_url) == 1 else None
         for raw in dataset:
@@ -1220,6 +1411,7 @@ def collect_social_repercussion(db: Session, project: Project) -> dict:
             "returned": len(dataset),
             "comments": accepted,
             "actor_id": actor_id,
+            "post_dates_updated": metadata_dates_updated,
         }
 
     db.commit()
@@ -1279,15 +1471,20 @@ def social_repercussion_for_report(db: Session, project_id: int) -> dict:
     for post in posts:
         media = media_by_id.get(post.media_item_id)
         published_at = post.published_at
-        published_label = (
-            published_at.date().isoformat()
-            if published_at is not None
-            else (
-                media.published_at.isoformat()
-                if media is not None and media.published_at is not None
-                else None
+        date_source = None
+        if published_at is None:
+            published_at, date_source = _resolve_post_datetime(
+                post.platform,
+                url=post.url,
+                media_published_at=(
+                    media.published_at
+                    if media is not None
+                    else None
+                ),
             )
-        )
+        else:
+            date_source = "social_post"
+        published_label = published_at.date().isoformat() if published_at is not None else None
         post_inventory.append(
             {
                 "platform": post.platform,
@@ -1307,6 +1504,7 @@ def social_repercussion_for_report(db: Session, project_id: int) -> dict:
                     else "monitoramento social"
                 ),
                 "collector": "Apify" if post.actor_id else None,
+                "published_at_source": date_source,
             }
         )
 
