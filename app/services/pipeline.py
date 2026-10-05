@@ -406,14 +406,16 @@ def run_full_methodology(
         )
     else:
         opinion_status = str(public_opinion.get("status") or "")
-        if opinion_status in {"DISABLED", "NO_SURVEYS", "DISCOVERED_ONLY"}:
+        if opinion_status == "DISABLED":
+            stage("public_opinion", "SKIPPED", "Camada de opinião pública desativada na configuração")
+        elif opinion_status in {"NO_SURVEYS", "DISCOVERED_ONLY"}:
             detail = (
-                f"{public_opinion.get('candidates', 0)} fonte(s) candidata(s); "
+                f"Busca executada: {public_opinion.get('candidates', 0)} fonte(s) candidata(s); "
                 f"{public_opinion.get('count', 0)} pesquisa(s) estruturada(s)"
             )
             if opinion_status == "DISCOVERED_ONLY":
                 detail += "; LLM indisponível para estruturar a metodologia"
-            stage("public_opinion", "SKIPPED", detail)
+            stage("public_opinion", "DONE", detail)
         else:
             stage(
                 "public_opinion",
