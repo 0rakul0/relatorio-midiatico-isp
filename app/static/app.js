@@ -541,7 +541,7 @@ function render(result){
     ${discourse.sample_limitations?`<p class="note"><strong>Limitações da leitura social:</strong> ${esc(discourse.sample_limitations)}</p>`:''}
   `: '';
 
-  const socialSection=socialComments? `
+  const socialSection=(socialComments||Number(socialPerception.posts||0))? `
     <h2>Percepção observada nas redes sociais</h2>
     <p class="related-intro">${esc(socialPerception.summary||'Comentários públicos coletados e analisados como camada complementar.')}</p>
     <div class="table-wrap"><table><tbody>
