@@ -821,6 +821,9 @@ app/
 │
 ├── facts/
 │   ├── normalization.py         # identidade, datas e normalização factual
+│   ├── selection.py             # seleção de fontes que alimentam fatos
+│   ├── resolution.py            # conciliação de assertions e conflitos
+│   ├── followups.py             # consultas nominais de corroboradores
 │   ├── operations.py            # tabela-mestra e inventário de operações
 │   └── reporting.py             # projeções auditáveis e filtros do relatório
 │
@@ -843,6 +846,11 @@ app/
 │
 ├── metrics/
 │   └── corpus.py                # deduplicação, normalização e buckets do corpus
+│
+├── corpus/
+│   ├── similarity.py            # similaridade entre projetos/documentos
+│   ├── chat_text.py             # normalização do diálogo
+│   └── chat_retrieval.py        # ranking e serialização do contexto
 │
 ├── reports/
 │   └── pdf/
