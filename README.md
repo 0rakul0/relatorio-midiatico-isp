@@ -784,7 +784,7 @@ pytest
 
 ## 8. Estrutura resumida do software
 
-A organização segue uma regra simples: `utils/` contém apenas helpers transversais; regras específicas permanecem em pacotes de domínio como `social/` e `reports/pdf/`. Arquivos históricos como `pdf_report.py` e `services/social_repercussion.py` continuam como fachadas compatíveis, para não quebrar imports existentes enquanto a implementação é distribuída em módulos menores.
+A organização segue uma regra simples: `utils/` contém apenas helpers transversais; regras específicas permanecem em pacotes de domínio como `facts/`, `search/`, `social/` e `reports/pdf/`. A camada HTTP também foi dividida em routers sob `api/`. Arquivos históricos como `fact_layer.py`, `pdf_report.py`, `services/search_planning.py` e `services/social_repercussion.py` continuam como fachadas compatíveis, para não quebrar imports existentes enquanto a implementação é distribuída em módulos menores.
 
 ```text
 app/
@@ -804,6 +804,14 @@ app/
 ├── utils/
 │   └── rendering.py             # helpers realmente transversais
 │
+├── facts/
+│   ├── normalization.py         # identidade, datas e normalização factual
+│   └── operations.py            # tabela-mestra e inventário de operações
+│
+├── search/
+│   ├── guards.py                # âncoras, similaridade e redundância
+│   └── inventory.py             # varredura mensal factual/oficial
+│
 ├── social/
 │   ├── comments.py              # normalização dos comentários
 │   ├── dates.py                 # datas DDG/Apify/X/TikTok
@@ -816,6 +824,12 @@ app/
 │       ├── helpers.py           # labels e links
 │       ├── table.py             # tabelas ReportLab
 │       └── word_cloud.py        # nuvem de palavras
+│
+├── api/
+│   ├── deps.py                  # autorização/escopo comum das rotas
+│   ├── costs.py                 # custos de LLM
+│   ├── chat.py                  # chat sobre corpus
+│   └── reports.py               # histórico/cache/refinamento
 │
 ├── orchestration/
 │   ├── executor.py
