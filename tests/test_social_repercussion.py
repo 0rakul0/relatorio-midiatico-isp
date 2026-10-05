@@ -754,3 +754,162 @@ def test_social_discovery_persists_relative_duckduckgo_date(monkeypatch):
         if isinstance(entry, dict)
     )
     db.close()
+
+
+
+def test_social_sample_balances_platforms_and_posts():
+    from datetime import datetime
+
+    comments = []
+    next_id = 1
+    # Um post do Facebook muito volumoso não deve dominar os demais.
+    for idx in range(12):
+        comments.append(SimpleNamespace(
+            id=next_id,
+            platform="facebook",
+            social_post_id=1,
+            like_count=100 - idx,
+            reply_count=idx % 3,
+            published_at=datetime(2026, 10, 1, 12, idx),
+        ))
+        next_id += 1
+    for post_id in (2, 3):
+        comments.append(SimpleNamespace(
+            id=next_id,
+            platform="facebook",
+            social_post_id=post_id,
+            like_count=1,
+            reply_count=0,
+            published_at=datetime(2026, 10, 2, 12, post_id),
+        ))
+        next_id += 1
+    for post_id in (10, 11):
+        comments.append(SimpleNamespace(
+            id=next_id,
+            platform="instagram",
+            social_post_id=post_id,
+            like_count=2,
+            reply_count=1,
+            published_at=datetime(2026, 10, 3, 12, post_id - 10),
+        ))
+        next_id += 1
+
+    sample = social._balanced_sample(comments, 8)
+
+    assert len(sample) == 8
+    assert {row.platform for row in sample} == {"facebook", "instagram"}
+    assert {row.social_post_id for row in sample if row.platform == "facebook"} >= {1, 2, 3}
+    assert {row.social_post_id for row in sample if row.platform == "instagram"} == {10, 11}
+
+
+def test_social_sample_mixes_high_and_low_engagement_within_post():
+    from datetime import datetime
+
+    comments = [
+        SimpleNamespace(
+            id=1, platform="x", social_post_id=99,
+            like_count=100, reply_count=1,
+            published_at=datetime(2026, 10, 1, 10, 0),
+        ),
+        SimpleNamespace(
+            id=2, platform="x", social_post_id=99,
+            like_count=5, reply_count=30,
+            published_at=datetime(2026, 10, 2, 10, 0),
+        ),
+        SimpleNamespace(
+            id=3, platform="x", social_post_id=99,
+            like_count=0, reply_count=0,
+            published_at=datetime(2026, 10, 3, 10, 0),
+        ),
+        SimpleNamespace(
+            id=4, platform="x", social_post_id=99,
+            like_count=10, reply_count=2,
+            published_at=datetime(2026, 10, 5, 10, 0),
+        ),
+    ]
+
+    ordered = social._mixed_post_comment_order(comments)
+
+    first_ids = {row.id for row in ordered[:4]}
+    assert first_ids == {1, 2, 3, 4}
+
+
+def test_discourse_analysis_uses_all_classified_comments(monkeypatch):
+    db = _session()
+    project = Project(
+        topic="tema social amplo",
+        launch_date=date(2026, 1, 1),
+        collection_start=date(2026, 1, 1),
+        collection_end=date(2026, 10, 5),
+        has_custom_date_window=True,
+        project_type="GENERAL_TOPIC",
+        topic_profile={},
+        execution_options={},
+        execution_plan={},
+    )
+    db.add(project)
+    db.flush()
+    post = SocialPost(
+        project_id=project.id,
+        platform="x",
+        url="https://x.com/exemplo/status/120",
+        post_text="debate",
+    )
+    db.add(post)
+    db.flush()
+    for idx in range(120):
+        db.add(SocialComment(
+            project_id=project.id,
+            social_post_id=post.id,
+            platform="x",
+            external_id=f"all-{idx}",
+            text=f"comentário {idx}",
+            like_count=idx,
+            reply_count=idx % 5,
+            source_url=post.url,
+        ))
+    db.commit()
+
+    discourse_sizes = []
+    class FakeAgent:
+        def run(self, **kwargs):
+            if kwargs["task"] == "social_comment_analysis":
+                return {
+                    "assessments": [
+                        {
+                            "index": row["index"],
+                            "sentiment": "NEUTRO",
+                            "emotion": "NAO_IDENTIFICAVEL",
+                            "position": "OUTRA",
+                            "themes": [],
+                        }
+                        for row in kwargs["payload"]["comments"]
+                    ]
+                }
+            discourse_sizes.append(len(kwargs["payload"]["comments"]))
+            return {
+                "overall_reading": "Entre os comentários analisados, há diversidade de posições sem generalização populacional.",
+                "dominant_narratives": [],
+                "recurring_arguments": [],
+                "tensions_and_contradictions": [],
+                "interaction_patterns": [],
+                "polarization_signals": "A amostra não sustenta inferências além dos comentários observados.",
+                "sample_limitations": "Comentários públicos monitorados não representam a população.",
+            }
+
+    monkeypatch.setattr(social, "llm_is_configured", lambda: True)
+    monkeypatch.setattr(social, "get_report_agent", lambda: FakeAgent())
+    monkeypatch.setattr(
+        social,
+        "get_settings",
+        lambda: SimpleNamespace(
+            social_analysis_max_comments=120,
+            social_analysis_batch_size=30,
+        ),
+    )
+
+    report = social.analyze_social_comments(db, project)
+
+    assert report["analyzed_comments"] == 120
+    assert discourse_sizes == [120]
+    db.close()
