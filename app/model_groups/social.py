@@ -33,6 +33,7 @@ class SocialPost(Base):
     comment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     share_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     view_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    view_count_source: Mapped[str | None] = mapped_column(String(120), nullable=True)
     actor_id: Mapped[str | None] = mapped_column(String(250), nullable=True)
     collected_at: Mapped[datetime] = mapped_column(
         DateTime,
