@@ -361,3 +361,82 @@ def test_social_report_exposes_post_inventory_with_comment_counts():
     assert row["discovery_source"] == "duckduckgo_social"
     assert row["collector"] == "Apify"
     db.close()
+
+
+
+def test_social_analysis_generates_discursive_reading(monkeypatch):
+    db = _session()
+    project = Project(
+        topic="polarização política",
+        launch_date=date(2026, 1, 1),
+        collection_start=date(2026, 1, 1),
+        collection_end=date(2026, 10, 5),
+        has_custom_date_window=True,
+        project_type="GENERAL_TOPIC",
+        topic_profile={},
+        execution_options={},
+        execution_plan={},
+    )
+    db.add(project)
+    db.flush()
+    post = SocialPost(
+        project_id=project.id,
+        platform="x",
+        url="https://x.com/exemplo/status/999",
+        post_text="debate",
+    )
+    db.add(post)
+    db.flush()
+    db.add_all([
+        SocialComment(
+            project_id=project.id, social_post_id=post.id, platform="x",
+            external_id="d1", text="Só sabem atacar o outro lado", source_url=post.url,
+        ),
+        SocialComment(
+            project_id=project.id, social_post_id=post.id, platform="x",
+            external_id="d2", text="Estou cansado dessa briga política", source_url=post.url,
+        ),
+    ])
+    db.commit()
+
+    class FakeAgent:
+        calls = 0
+        def run(self, **kwargs):
+            self.calls += 1
+            if kwargs["task"] == "social_comment_analysis":
+                return {
+                    "assessments": [
+                        {"index": 0, "sentiment": "NEGATIVO", "emotion": "INDIGNACAO", "position": "CRITICA", "themes": ["confronto"]},
+                        {"index": 1, "sentiment": "NEGATIVO", "emotion": "DESCONFIANCA", "position": "CRITICA", "themes": ["fadiga"]},
+                    ]
+                }
+            assert kwargs["task"] == "social_discourse_analysis"
+            return {
+                "overall_reading": "Entre os comentários analisados, há rejeição ao confronto e sinais de fadiga com a disputa.",
+                "dominant_narratives": [{"title": "Fadiga", "analysis": "Parte da amostra critica a continuidade do conflito político."}],
+                "recurring_arguments": [],
+                "tensions_and_contradictions": [],
+                "interaction_patterns": [{"title": "Confronto", "analysis": "O outro campo aparece como alvo recorrente de crítica."}],
+                "polarization_signals": "Há sinais de polarização afetiva na forma de rejeição ao campo adversário, sem inferência populacional.",
+                "sample_limitations": "A amostra é composta apenas por comentários públicos recuperados dos posts monitorados.",
+            }
+
+    fake = FakeAgent()
+    monkeypatch.setattr(social, "llm_is_configured", lambda: True)
+    monkeypatch.setattr(social, "get_report_agent", lambda: fake)
+    monkeypatch.setattr(
+        social,
+        "get_settings",
+        lambda: SimpleNamespace(
+            social_analysis_max_comments=120,
+            social_analysis_batch_size=30,
+        ),
+    )
+
+    report = social.analyze_social_comments(db, project)
+
+    assert report["analyzed_comments"] == 2
+    assert "rejeição ao confronto" in report["summary"]
+    assert report["discourse_analysis"]["dominant_narratives"][0]["title"] == "Fadiga"
+    assert fake.calls == 2
+    db.close()
