@@ -27,8 +27,8 @@ from app.services.execution_profile import (
 from app.services.project_profile import project_payload
 from app.search.inventory import (
     PT_MONTHS as _PT_MONTHS,
-    annual_event_inventory_queries as _annual_event_inventory_queries,
-    official_operation_inventory_queries as _official_operation_inventory_queries,
+    annual_event_inventory_queries,
+    official_operation_inventory_queries,
 )
 
 from app.search.guards import (
@@ -40,6 +40,14 @@ from app.search.guards import (
 )
 
 _INITIAL_PURPOSES = {"MEDIA_REPERCUSSION", "FACT_DISCOVERY", "OFFICIAL_FACT"}
+
+
+def _annual_event_inventory_queries(project: Project) -> list[tuple[str, str]]:
+    return annual_event_inventory_queries(project, settings=get_settings())
+
+
+def _official_operation_inventory_queries(project: Project) -> list[tuple[str, str, str]]:
+    return official_operation_inventory_queries(project, settings=get_settings())
 def _add_query(
     db: Session,
     project: Project,
