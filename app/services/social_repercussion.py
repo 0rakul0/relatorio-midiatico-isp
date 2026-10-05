@@ -39,6 +39,81 @@ METHODOLOGY_NOTE = (
 )
 
 
+
+def _parse_reference_datetime(value: object) -> datetime:
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value or "").strip()
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = datetime.now(timezone.utc)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _relative_duckduckgo_datetime(
+    value: object,
+    *,
+    retrieved_at: object,
+) -> datetime | None:
+    """Resolve datas relativas do DDG usando o instante real da coleta."""
+    text = " ".join(str(value or "").strip().lower().split())
+    if not text:
+        return None
+    reference = _parse_reference_datetime(retrieved_at)
+
+    fixed = {
+        "today": timedelta(0),
+        "hoje": timedelta(0),
+        "yesterday": timedelta(days=1),
+        "ontem": timedelta(days=1),
+    }
+    if text in fixed:
+        return (reference - fixed[text]).replace(tzinfo=None)
+
+    patterns = (
+        (r"^(\d+)\s*(?:minute|minutes|min|mins)\s+ago$", "minutes"),
+        (r"^(?:há\s+)?(\d+)\s*(?:minuto|minutos|min)\s*(?:atrás)?$", "minutes"),
+        (r"^(\d+)\s*(?:hour|hours|hr|hrs)\s+ago$", "hours"),
+        (r"^(?:há\s+)?(\d+)\s*(?:hora|horas|h)\s*(?:atrás)?$", "hours"),
+        (r"^(\d+)\s*(?:day|days)\s+ago$", "days"),
+        (r"^(?:há\s+)?(\d+)\s*(?:dia|dias)\s*(?:atrás)?$", "days"),
+        (r"^(\d+)\s*(?:week|weeks)\s+ago$", "weeks"),
+        (r"^(?:há\s+)?(\d+)\s*(?:semana|semanas)\s*(?:atrás)?$", "weeks"),
+    )
+    for pattern, unit in patterns:
+        match = re.match(pattern, text)
+        if not match:
+            continue
+        amount = int(match.group(1))
+        delta = timedelta(**{unit: amount})
+        return (reference - delta).replace(tzinfo=None)
+    return None
+
+
+def _duckduckgo_result_date(row: dict) -> tuple[date | None, str | None, str | None]:
+    """Retorna data, proveniência e valor bruto preservando auditabilidade."""
+    raw = row.get("published_at_raw")
+    if raw in (None, ""):
+        raw = row.get("published_at")
+    raw_text = str(raw).strip() if raw not in (None, "") else None
+
+    explicit = result_publication_date(raw)
+    if explicit is not None:
+        return explicit, "duckduckgo_metadata", raw_text
+
+    relative = _relative_duckduckgo_datetime(
+        raw,
+        retrieved_at=row.get("retrieved_at"),
+    )
+    if relative is not None:
+        return relative.date(), "duckduckgo_relative_date", raw_text
+    return None, None, raw_text
+
+
 def _platform_for_url(value: str | None) -> str | None:
     raw = str(value or "").strip()
     if not raw:
@@ -364,7 +439,7 @@ def _discover_and_persist_social_posts(
             domain = urlparse(url).netloc.lower().split(":", 1)[0]
             title = str(row.get("title") or "Post social").strip() or "Post social"
             snippet = str(row.get("snippet") or "").strip() or None
-            published_at = result_publication_date(row.get("published_at"))
+            published_at, published_at_source, published_at_raw = _duckduckgo_result_date(row)
             query = str(row.get("discovery_query") or "").strip() or None
 
             item = existing.get(canonical)
@@ -387,7 +462,10 @@ def _discover_and_persist_social_posts(
                         "query": query,
                         "platform": platform,
                         "url": url,
-                        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                        "published_at": published_at.isoformat() if published_at else None,
+                        "published_at_raw": published_at_raw,
+                        "date_source": published_at_source,
+                        "retrieved_at": row.get("retrieved_at") or datetime.now(timezone.utc).isoformat(),
                     }],
                     discovery_purposes=["SOCIAL_DISCOVERY"],
                     status="PENDING",
@@ -411,7 +489,10 @@ def _discover_and_persist_social_posts(
                         "query": query,
                         "platform": platform,
                         "url": url,
-                        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                        "published_at": published_at.isoformat() if published_at else None,
+                        "published_at_raw": published_at_raw,
+                        "date_source": published_at_source,
+                        "retrieved_at": row.get("retrieved_at") or datetime.now(timezone.utc).isoformat(),
                     })
                     item.source_provenance = provenance
                 purposes = list(item.discovery_purposes or [])
@@ -436,11 +517,7 @@ def _discover_and_persist_social_posts(
                 canonical_url=canonical,
                 domain=domain,
                 published_at=published_at,
-                published_at_raw=(
-                    str(row.get("published_at"))
-                    if row.get("published_at") not in (None, "")
-                    else None
-                ),
+                published_at_raw=published_at_raw,
                 snippet=snippet,
                 content=snippet,
                 source_name=domain,
@@ -450,6 +527,9 @@ def _discover_and_persist_social_posts(
                     "provider": "duckduckgo_social",
                     "platform": platform,
                     "query": query,
+                    "published_at_raw": published_at_raw,
+                    "published_at_source": published_at_source,
+                    "retrieved_at": row.get("retrieved_at"),
                 },
                 retrieved_at=datetime.now(timezone.utc),
             ))
