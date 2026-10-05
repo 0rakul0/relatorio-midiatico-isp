@@ -31,104 +31,15 @@ from app.search.inventory import (
     official_operation_inventory_queries as _official_operation_inventory_queries,
 )
 
+from app.search.guards import (
+    is_redundant as _is_redundant,
+    media_query_is_acceptable as _media_query_is_acceptable,
+    query_is_acceptable as _query_is_acceptable,
+    query_tokens as _query_tokens,
+    semantic_similarity as _semantic_similarity,
+)
 
 _INITIAL_PURPOSES = {"MEDIA_REPERCUSSION", "FACT_DISCOVERY", "OFFICIAL_FACT"}
-_STOPWORDS = {
-    "a", "as", "o", "os", "de", "da", "das", "do", "dos", "e", "em",
-    "no", "na", "nos", "nas", "para", "por", "com", "um", "uma",
-}
-
-
-# Vocabulário jornalístico para uma segunda tentativa quando a primeira rodada
-# termina com corpus midiático zero. É um fallback determinístico, conservador
-# e auditável; o agente pode propor outros ângulos antes dele.
-_ZERO_RECOVERY_EXPANSIONS: dict[str, list[str]] = {
-    "habitacional": ["imoveis", "construcao", "mercado imobiliario", "moradia"],
-    "habitacao": ["imoveis", "construcao", "mercado imobiliario", "moradia"],
-    "moradia": ["imoveis", "construcao", "mercado imobiliario", "habitacao"],
-    "imobiliario": ["imoveis", "construcao", "mercado imobiliario"],
-    "imobiliaria": ["imoveis", "construcao", "mercado imobiliario"],
-    "milicia": ["milicia", "milicianos"],
-    "miliciano": ["milicia", "milicianos"],
-}
-
-
-def _existing_queries(db: Session, project_id: int) -> set[str]:
-    return set(
-        db.scalars(
-            select(SearchQuery.query).where(SearchQuery.project_id == project_id)
-        ).all()
-    )
-
-
-def _query_tokens(query: str) -> set[str]:
-    # site: constraints are deterministic coverage hints and should not make two
-    # otherwise equal semantic queries look different.
-    text = re.sub(r"(?:^|\s)site:[^\s]+", " ", query or "")
-    text = normalized_text(text)
-    return {
-        token
-        for token in re.findall(r"[a-z0-9]+", text)
-        if token not in _STOPWORDS and len(token) > 1
-    }
-
-
-def _semantic_similarity(left: str, right: str) -> float:
-    a = _query_tokens(left)
-    b = _query_tokens(right)
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
-
-
-def _is_redundant(candidate: str, selected: list[str], threshold: float = 0.84) -> bool:
-    normalized = " ".join(normalized_text(candidate).split())
-    for previous in selected:
-        if normalized == " ".join(normalized_text(previous).split()):
-            return True
-        if _semantic_similarity(candidate, previous) >= threshold:
-            return True
-    return False
-
-
-def _media_profile_tokens(project: Project) -> set[str]:
-    profile = project.topic_profile or {}
-    values = [project.topic]
-    for key in (
-        "product_name", "product_anchor", "event_anchor",
-        "product_search_variants", "event_search_variants", "subject_terms",
-        "actors", "actions", "locations", "organizations", "search_synonyms",
-    ):
-        value = profile.get(key)
-        if isinstance(value, list):
-            values.extend(str(item) for item in value)
-        elif value:
-            values.append(str(value))
-    tokens: set[str] = set()
-    for value in values:
-        tokens.update(_query_tokens(value))
-    return tokens
-
-
-def _media_query_is_acceptable(project: Project, query: str) -> bool:
-    if query_preserves_project_anchor(project, query, purpose="MEDIA_REPERCUSSION"):
-        return True
-    query_tokens = _query_tokens(query)
-    profile_tokens = _media_profile_tokens(project)
-    if not query_tokens or not profile_tokens:
-        return False
-    overlap = query_tokens.intersection(profile_tokens)
-    return len(overlap) >= 2 or (
-        len(overlap) == 1 and len(query_tokens) <= 4 and len(profile_tokens) <= 6
-    )
-
-
-def _query_is_acceptable(project: Project, query: str, *, purpose: str) -> bool:
-    if purpose == "MEDIA_REPERCUSSION":
-        return _media_query_is_acceptable(project, query)
-    return query_preserves_project_anchor(project, query, purpose=purpose)
-
-
 def _add_query(
     db: Session,
     project: Project,
