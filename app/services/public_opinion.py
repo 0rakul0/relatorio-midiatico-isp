@@ -13,10 +13,9 @@ from app.llm import llm_is_configured
 from app.models import Project, PublicOpinionSurvey
 from app.schemas import PublicOpinionSurveyExtractionResponse
 from app.services.collection.common import result_publication_date
-from app.tools.providers.duckduckgo import (
-    DuckDuckGoUnavailable,
-    fetch_url_text,
-    search_text as duckduckgo_text,
+from app.tools.public_opinion import (
+    discover_public_opinion_sources,
+    hydrate_public_opinion_source,
 )
 
 
@@ -146,27 +145,15 @@ def collect_public_opinion(db: Session, project: Project) -> dict:
         }
 
     queries = _queries(project)
-    candidates: dict[str, dict] = {}
-    for query in queries:
-        try:
-            rows = duckduckgo_text(
-                query,
-                max_results=int(settings.public_opinion_results_per_query),
-                region=settings.duckduckgo_region,
-                safesearch=settings.duckduckgo_safesearch,
-                retries=settings.duckduckgo_max_retries,
-                retry_base_seconds=settings.duckduckgo_retry_base_seconds,
-            )
-        except DuckDuckGoUnavailable:
-            continue
-        for row in rows:
-            url = _clean(row.get("url"))
-            if not url or url in candidates:
-                continue
-            candidates[url] = {
-                **dict(row),
-                "query": query,
-            }
+    discovered = discover_public_opinion_sources(
+        queries=queries,
+        results_per_query=int(settings.public_opinion_results_per_query),
+    )
+    candidates = {
+        str(row.get("url") or "").strip(): row
+        for row in discovered
+        if str(row.get("url") or "").strip()
+    }
 
     if not candidates:
         return {
@@ -197,10 +184,10 @@ def collect_public_opinion(db: Session, project: Project) -> dict:
     persisted = 0
     for row in selected:
         url = str(row.get("url") or "").strip()
-        content = fetch_url_text(
+        content = hydrate_public_opinion_source(
             url,
             max_chars=int(settings.public_opinion_fetch_max_chars),
-            timeout=float(settings.public_opinion_fetch_timeout_seconds),
+            timeout_seconds=float(settings.public_opinion_fetch_timeout_seconds),
         )
         text = content or _clean(row.get("snippet")) or ""
         if len(text) < 80:
