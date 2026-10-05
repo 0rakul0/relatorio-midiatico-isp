@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.database import SessionLocal
 from app.billing import plan_allows
 from app.fact_layer import extract_project_facts, plan_nominal_followups, resolve_project_facts
 from app.models import Project
@@ -147,9 +149,54 @@ def run_full_methodology(
         for optional_key in ("nominal_plan", "nominal_collection", "facts_pass_2", "fact_resolution_2"):
             stage(optional_key, "SKIPPED", nominal_reason)
 
-    # 3. Collection ----------------------------------------------------
+    # 3. Coleta paralela: corpus midiatico + literatura cientifica -----
+    # Cada ramo usa uma SessionLocal propria. SQLAlchemy Session nao e thread-safe,
+    # e manter as sessoes isoladas evita que commits/rollbacks de uma fonte
+    # contaminem a outra.
     collected = youtube_collected = 0
     web_stats: dict = {}
+    academic_research = {
+        "searched": False,
+        "queries": [],
+        "summary": None,
+        "candidates_returned": 0,
+        "selected": 0,
+        "persisted": 0,
+        "papers": [],
+    }
+
+    def collect_media_branch() -> dict:
+        branch_db = SessionLocal()
+        try:
+            branch_project = branch_db.get(Project, project.id)
+            if not branch_project:
+                raise RuntimeError("Projeto nao encontrado durante a coleta midiatica")
+            return collect_media_sources(
+                branch_db,
+                branch_project,
+                enable_youtube=True,
+                cancel_check=check,
+                web_progress=detail_for("collection"),
+                youtube_progress=detail_for("youtube"),
+            )
+        finally:
+            branch_db.close()
+
+    def collect_academic_branch() -> dict:
+        branch_db = SessionLocal()
+        try:
+            branch_project = branch_db.get(Project, project.id)
+            if not branch_project:
+                raise RuntimeError("Projeto nao encontrado durante a busca academica")
+            return research_academic_literature(
+                branch_db,
+                branch_project,
+                cancel_check=check,
+                progress_detail=detail_for("academic_research"),
+            )
+        finally:
+            branch_db.close()
+
     check()
     stage(
         "collection",
@@ -161,51 +208,92 @@ def run_full_methodology(
         "RUNNING",
         "Classificando URLs do YouTube encontradas na descoberta principal do DuckDuckGo",
     )
-
-    collection_sources = collect_media_sources(
-        db,
-        project,
-        enable_youtube=True,
-        cancel_check=check,
-        web_progress=detail_for("collection"),
-        youtube_progress=detail_for("youtube"),
-    )
-    web = collection_sources["web"]
-    collected = int(web["collected"])
-    web_stats = web.get("stats") or {}
-    raw_hits = int(web_stats.get("raw_hits", 0))
-    flagged_hits = int(web_stats.get("flagged_hits", 0))
-    over_budget = int(web_stats.get("over_budget", 0))
-    budget_cap = int(web_stats.get("new_item_budget", 0) or settings.max_new_media_items)
-
-    if web["status"] in {"COMPLETED", "PARTIAL"}:
-        provider_label = str(web.get("provider") or "duckduckgo")
-        budget_note = (
-            f" {over_budget} hit(s) fora do teto de {budget_cap} item(ns) novo(s)"
-            " (preservados p/ auditoria, sem custo LLM)."
-            if over_budget
-            else f" Teto de itens novos: {budget_cap}."
-        )
+    if flags["enable_academic_research"]:
         stage(
-            "collection",
-            "DONE",
-            f"{raw_hits} hit(s) bruto(s) preservado(s); {collected} URL(s) unica(s) nova(s); "
-            f"{flagged_hits} hit(s) sinalizado(s). Provedores: {provider_label}." + budget_note + " "
-            "O corpo completo das paginas sera obtido somente na validacao.",
+            "academic_research",
+            "RUNNING",
+            "Buscando literatura cientifica em paralelo com a coleta midiatica, sem mistura-la ao corpus de noticias",
         )
-    else:
-        stage("collection", "FAILED", f"Coleta web indisponivel: {str(web.get('error') or '')[:180]}")
 
-    youtube = collection_sources["youtube"]
-    youtube_collected = int(youtube["collected"])
-    project.youtube_collection_status = str(youtube["status"])
-    project.youtube_collection_error = youtube.get("error")
-    stage(
-        "youtube",
-        "DONE",
-        f"{youtube_collected} URL(s) do YouTube roteada(s) da descoberta DuckDuckGo",
-    )
-    db.commit()
+    academic_error: Exception | None = None
+    workers = 2 if flags["enable_academic_research"] else 1
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="report-sources") as pool:
+        media_future = pool.submit(collect_media_branch)
+        academic_future = (
+            pool.submit(collect_academic_branch)
+            if flags["enable_academic_research"]
+            else None
+        )
+
+        collection_sources = media_future.result()
+        web = collection_sources["web"]
+        collected = int(web["collected"])
+        web_stats = web.get("stats") or {}
+        raw_hits = int(web_stats.get("raw_hits", 0))
+        flagged_hits = int(web_stats.get("flagged_hits", 0))
+        over_budget = int(web_stats.get("over_budget", 0))
+        budget_cap = int(web_stats.get("new_item_budget", 0) or settings.max_new_media_items)
+
+        if web["status"] in {"COMPLETED", "PARTIAL"}:
+            provider_label = str(web.get("provider") or "duckduckgo")
+            budget_note = (
+                f" {over_budget} hit(s) fora do teto de {budget_cap} item(ns) novo(s)"
+                " (preservados p/ auditoria, sem custo LLM)."
+                if over_budget
+                else f" Teto de itens novos: {budget_cap}."
+            )
+            stage(
+                "collection",
+                "DONE",
+                f"{raw_hits} hit(s) bruto(s) preservado(s); {collected} URL(s) unica(s) nova(s); "
+                f"{flagged_hits} hit(s) sinalizado(s). Provedores: {provider_label}." + budget_note + " "
+                "O corpo completo das paginas sera obtido somente na validacao.",
+            )
+        else:
+            stage("collection", "FAILED", f"Coleta web indisponivel: {str(web.get('error') or '')[:180]}")
+
+        youtube = collection_sources["youtube"]
+        youtube_collected = int(youtube["collected"])
+        project.youtube_collection_status = str(youtube["status"])
+        project.youtube_collection_error = youtube.get("error")
+        stage(
+            "youtube",
+            "DONE",
+            f"{youtube_collected} URL(s) do YouTube roteada(s) da descoberta DuckDuckGo",
+        )
+        db.commit()
+
+        if academic_future is not None:
+            try:
+                academic_research = academic_future.result()
+            except RuntimeError as exc:
+                from app.orchestration.state import RunCancelled
+                if isinstance(exc, RunCancelled):
+                    raise
+                academic_error = exc
+            except SQLAlchemyError as exc:
+                academic_error = exc
+
+    if flags["enable_academic_research"]:
+        if academic_error is not None:
+            stage(
+                "academic_research",
+                "SKIPPED",
+                f"Literatura cientifica indisponivel: {str(academic_error)[:180]}",
+            )
+        elif not academic_research.get("searched") and not academic_research.get("papers"):
+            stage(
+                "academic_research",
+                "SKIPPED",
+                academic_research.get("summary") or "O agente concluiu que a pauta nao exige contexto academico",
+            )
+        else:
+            stage(
+                "academic_research",
+                "DONE",
+                f"{academic_research.get('candidates_returned', 0)} candidato(s) academico(s); "
+                f"{academic_research.get('persisted', 0)} artigo(s) relevante(s) preservado(s)",
+            )
 
     # 3b. Repercussao social: comentarios permanecem fora do corpus de noticias.
     social_repercussion = {
@@ -262,72 +350,6 @@ def run_full_methodology(
                 f"{social_repercussion.get('comments', 0)} comentario(s); "
                 f"{social_repercussion.get('analyzed_comments', 0)} analisado(s)",
             )
-
-    # Literatura cientifica: contexto separado da metrica de repercussao.
-    academic_research = {
-        "searched": False,
-        "queries": [],
-        "summary": None,
-        "candidates_returned": 0,
-        "selected": 0,
-        "persisted": 0,
-        "papers": [],
-    }
-    check()
-    if not flags["enable_academic_research"]:
-        stage(
-            "academic_research",
-            "SKIPPED",
-            (processes.get("academic_research") or {}).get("reason") or "Nao necessaria para esta pauta",
-        )
-    else:
-        stage(
-            "academic_research",
-            "RUNNING",
-            "Buscando artigos cientificos relacionados sem mistura-los ao corpus midiatico",
-        )
-        try:
-            academic_research = research_academic_literature(
-                db,
-                project,
-                cancel_check=check,
-                progress_detail=detail_for("academic_research"),
-            )
-        except RuntimeError as exc:
-            from app.orchestration.state import RunCancelled
-
-            if isinstance(exc, RunCancelled):
-                raise
-            stage(
-                "academic_research",
-                "SKIPPED",
-                f"Literatura cientifica indisponivel: {str(exc)[:180]}",
-            )
-        except SQLAlchemyError as exc:
-            # Literatura cientifica e contexto complementar. Uma falha de
-            # persistencia nesta camada nao deve invalidar todo o relatorio.
-            # O rollback limpa a Session apos IntegrityError/DBAPIError e as
-            # etapas seguintes podem continuar usando o mesmo projeto.
-            db.rollback()
-            stage(
-                "academic_research",
-                "SKIPPED",
-                f"Literatura cientifica nao persistida: {str(exc)[:180]}",
-            )
-        else:
-            if not academic_research.get("searched") and not academic_research.get("papers"):
-                stage(
-                    "academic_research",
-                    "SKIPPED",
-                    academic_research.get("summary") or "O agente concluiu que a pauta nao exige contexto academico",
-                )
-            else:
-                stage(
-                    "academic_research",
-                    "DONE",
-                    f"{academic_research.get('candidates_returned', 0)} candidato(s) do arXiv; "
-                    f"{academic_research.get('persisted', 0)} artigo(s) relevante(s) preservado(s)",
-                )
 
     # 4. News validation ------------------------------------------------
     validation = {
