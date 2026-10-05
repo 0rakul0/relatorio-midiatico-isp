@@ -18,6 +18,12 @@ from app.reports.pdf.operations import add_operations_section
 from app.reports.pdf.facts import add_fact_section
 from app.reports.pdf.academic import add_academic_section
 from app.reports.pdf.annexes import add_audit_annexes
+from app.reports.pdf.layout import (
+    LeftAccentParagraph,
+    create_document,
+    page_number,
+    pdf_styles,
+)
 from app.utils.rendering import (
     has_content as _has_content,
     has_meaningful_fields as _has_meaningful_fields,
@@ -28,11 +34,9 @@ from app.utils.rendering import (
 def build_pdf(data: dict) -> bytes:
     """Cria o PDF a partir do relatório persistido, sem chamar LLM novamente."""
     from reportlab.lib import colors
-    from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import cm
-    from reportlab.platypus import Flowable, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.platypus import KeepTogether, Paragraph, Spacer, Table, TableStyle
 
     report = data["report"]
     project = data["project"]
@@ -88,138 +92,17 @@ def build_pdf(data: dict) -> bytes:
     execution_flags = project.get("execution_flags") or {}
     fact_layer_enabled = bool(execution_flags.get("enable_fact_layer"))
 
-    styles = getSampleStyleSheet()
-    title = ParagraphStyle(
-        "ReportTitle",
-        parent=styles["Title"],
-        fontName="Helvetica-Bold",
-        fontSize=19,
-        leading=23,
-        textColor=colors.HexColor("#102b46"),
-        spaceAfter=8,
-    )
-    subtitle = ParagraphStyle(
-        "Subtitle",
-        parent=styles["Normal"],
-        fontSize=10,
-        leading=14,
-        textColor=colors.HexColor("#516579"),
-        spaceAfter=14,
-    )
-    heading = ParagraphStyle(
-        "Section",
-        parent=styles["Heading2"],
-        fontName="Helvetica-Bold",
-        fontSize=13,
-        leading=16,
-        textColor=colors.HexColor("#102b46"),
-        spaceBefore=15,
-        spaceAfter=7,
-        # Evita título órfão no rodapé. O título acompanha o próximo
-        # flowable, mas o conteúdo seguinte continua livre para quebrar
-        # naturalmente entre páginas quando for longo.
-        keepWithNext=True,
-    )
-    body = ParagraphStyle(
-        "Body",
-        parent=styles["BodyText"],
-        fontSize=9.2,
-        leading=13,
-        spaceAfter=8,
-        alignment=TA_JUSTIFY,
-    )
-    # Metadados, notas curtas e tabelas continuam alinhados à esquerda para
-    # evitar espaçamento excessivo em colunas estreitas.
-    small = ParagraphStyle(
-        "Small",
-        parent=body,
-        fontSize=7.2,
-        leading=9,
-        alignment=TA_LEFT,
-    )
-    cloud_note_style = ParagraphStyle(
-        "WordCloudNote",
-        parent=small,
-        alignment=1,
-        textColor=colors.HexColor("#66788a"),
-        spaceBefore=2,
-    )
-
-    class LeftAccentParagraph(Flowable):
-        """Parágrafo quebrável com barra vertical azul à esquerda."""
-
-        def __init__(
-            self,
-            text: str,
-            paragraph_style,
-            *,
-            bar_color: str = "#0879bd",
-            bar_width: float = 2.2,
-            gap: float = 9.0,
-        ):
-            super().__init__()
-            self.text = text
-            self.paragraph_style = paragraph_style
-            self.bar_color = bar_color
-            self.bar_width = bar_width
-            self.gap = gap
-            self.paragraph = Paragraph(text, paragraph_style)
-            self._content_width = 0.0
-
-        def wrap(self, avail_width, avail_height):
-            self._content_width = max(1.0, avail_width - self.bar_width - self.gap)
-            _, height = self.paragraph.wrap(self._content_width, avail_height)
-            self.width = avail_width
-            self.height = height
-            return avail_width, height
-
-        def split(self, avail_width, avail_height):
-            content_width = max(1.0, avail_width - self.bar_width - self.gap)
-            parts = self.paragraph.split(content_width, avail_height)
-            if len(parts) <= 1:
-                return []
-
-            flowables = []
-            for part in parts:
-                block = LeftAccentParagraph(
-                    "",
-                    self.paragraph_style,
-                    bar_color=self.bar_color,
-                    bar_width=self.bar_width,
-                    gap=self.gap,
-                )
-                block.paragraph = part
-                flowables.append(block)
-            return flowables
-
-        def draw(self):
-            canvas = self.canv
-            canvas.saveState()
-            canvas.setStrokeColor(colors.HexColor(self.bar_color))
-            canvas.setLineWidth(self.bar_width)
-            x = self.bar_width / 2.0
-            canvas.line(x, 0, x, self.height)
-            canvas.restoreState()
-            self.paragraph.drawOn(canvas, self.bar_width + self.gap, 0)
+    style_map = pdf_styles()
+    title = style_map["title"]
+    subtitle = style_map["subtitle"]
+    heading = style_map["heading"]
+    body = style_map["body"]
+    small = style_map["small"]
+    cloud_note_style = style_map["cloud_note"]
 
     buffer = BytesIO()
 
-    def page_number(canvas, doc):
-        canvas.saveState()
-        canvas.setFont("Helvetica", 7)
-        canvas.setFillColor(colors.HexColor("#66788a"))
-        canvas.drawString(2 * cm, 1.15 * cm, "Relatório de Repercussão Midiática - corpus auditável")
-        canvas.drawRightString(A4[0] - 2 * cm, 1.15 * cm, f"Página {doc.page}")
-        canvas.restoreState()
-
-    document = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        rightMargin=1.7 * cm,
-        leftMargin=1.7 * cm,
-        topMargin=1.6 * cm,
-        bottomMargin=1.8 * cm,
-    )
+    document = create_document(buffer)
 
     story = [
         Paragraph("RELATÓRIO DE REPERCUSSÃO MIDIÁTICA", small),
