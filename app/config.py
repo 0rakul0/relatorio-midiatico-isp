@@ -87,13 +87,15 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # Search strategy
     # ------------------------------------------------------------------
-    # The planner optimizes one primary query and may add only a very small
-    # number of materially different complementary queries.
-    max_complementary_queries: int = Field(default=2, ge=0, le=4)
+    # Temas gerais precisam de cobertura conceitual suficiente para não ficar
+    # presos à redação literal da pauta. O planejador ainda deve evitar
+    # paráfrases equivalentes, mas pode usar até quatro ângulos distintos.
+    max_complementary_queries: int = Field(default=4, ge=0, le=4)
 
-    # Media plan = 1 primary + up to 2 complementary + priority portals.
-    # This is a safety ceiling, not a target that the planner should fill.
-    max_media_queries: int = Field(default=12, ge=1, le=30)
+    # Media plan = 1 primary + até 4 complementares + portais prioritários.
+    # O teto de 24 comporta a lista nacional ampliada sem cortar silenciosamente
+    # os últimos veículos do plano. Continua sendo um limite de segurança.
+    max_media_queries: int = Field(default=24, ge=1, le=30)
     max_fact_queries: int = Field(default=1, ge=0, le=5)
     # Para pautas anuais de operações/eventos recorrentes, uma única consulta
     # factual tem baixo recall. O modo inventário distribui a descoberta pelos
