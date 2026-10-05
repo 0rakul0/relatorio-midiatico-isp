@@ -26,6 +26,7 @@ $('#auth-logout').onclick=doLogout;
 bootstrapAuth().then(session=>{if(session){renderAuth();}else{window.location.href='/login';}}).catch(()=>window.location.href='/login');
 const table=(headers,rows)=>`<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(cell=>{const s=String(cell??'');return `<td>${s.startsWith(RAW_HTML)?s.slice(RAW_HTML.length):esc(s)}</td>`}).join('')}</tr>`).join('')}</tbody></table></div>`;
 let currentProjectId=null,currentRunId=null,pollTimer=null,researchAuditKey=null;
+let executionPreviewLastLoadedAt=0,executionPreviewLoading=false;
 
 const BRAZIL_STATES_GEOJSON='https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson';
 let selectedGeographicScopes=new Set();
@@ -732,6 +733,143 @@ async function maybeLoadResearchAudit(run,stages){
   }
 }
 
+
+function previewStatusPill(status,label){
+  return `<span class="audit-live-status ${esc(stageClass(status||'PENDING'))}">${esc(label||stageLabel(status||'PENDING'))}</span>`;
+}
+
+function previewMetric(label,value,detail=''){
+  return `<div class="audit-preview-metric"><span>${esc(label)}</span><strong>${esc(value)}</strong>${detail?`<small>${esc(detail)}</small>`:''}</div>`;
+}
+
+function renderExecutionPreview(data,stages){
+  const stageMap=new Map((stages||[]).map(stage=>[stage.key,stage]));
+  const collectionStage=stageMap.get('collection');
+  const socialStage=stageMap.get('social_repercussion');
+  const validationStage=stageMap.get('validation');
+  const factStages=['facts_pass_1','fact_resolution_1','facts_pass_2','fact_resolution_2']
+    .map(key=>stageMap.get(key)).filter(Boolean);
+  const classificationStage=stageMap.get('classification');
+
+  const collection=data.collection||{};
+  const queryInfo=collection.queries||{};
+  const domains=collection.domains||[];
+  const recent=collection.recent_items||[];
+  const domainRows=domains.length
+    ? domains.map(row=>`<div class="audit-domain-row"><span>${esc(row.domain)}</span><strong>${esc(row.items)}</strong></div>`).join('')
+    : '<span class="audit-empty">Nenhum domínio localizado até agora.</span>';
+  const itemRows=recent.length
+    ? recent.map(item=>`
+        <div class="audit-found-item">
+          <div class="audit-found-item-main">
+            <a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.title||'Sem título')}</a>
+            <span>${esc(item.domain||'domínio não identificado')}${item.published_at?` · ${esc(item.published_at)}`:''}</span>
+          </div>
+          <span class="audit-item-state ${esc(String(item.status||'PENDING').toLowerCase())}">${esc(item.status||'PENDING')}</span>
+        </div>
+      `).join('')
+    : '<div class="audit-waiting">As matérias aparecerão aqui conforme o coletor encontrar links.</div>';
+
+  $('#collection-preview-content').innerHTML=`
+    <div class="audit-preview-head">
+      ${previewStatusPill(collectionStage?.status||'PENDING')}
+      <span>Atualização durante a execução</span>
+    </div>
+    <div class="audit-preview-metrics">
+      ${previewMetric('Itens encontrados',collection.items_found||0,`${collection.new_items||0} novos · ${collection.reused_items||0} reaproveitados`)}
+      ${previewMetric('Sites vistos',domains.length,'domínios únicos na prévia')}
+      ${previewMetric('Consultas',`${queryInfo.executed||0}/${queryInfo.total||0}`,`${queryInfo.returned||0} retornos · ${queryInfo.accepted||0} aceitos tecnicamente`)}
+      ${previewMetric('Redes / YouTube',`${data.social?.social_items||0} / ${data.social?.youtube_items||0}`)}
+    </div>
+    <div class="audit-preview-columns">
+      <div>
+        <span class="audit-subtitle">Sites encontrados com o tema</span>
+        <div class="audit-domain-list">${domainRows}</div>
+      </div>
+      <div>
+        <span class="audit-subtitle">Prévia do que foi localizado</span>
+        <div class="audit-found-list">${itemRows}</div>
+      </div>
+    </div>
+  `;
+
+  $('#social-preview-content').innerHTML=`
+    <div class="audit-preview-head">
+      ${previewStatusPill(socialStage?.status||'PENDING')}
+      <span>Itens de redes são separados da imprensa tradicional.</span>
+    </div>
+    <div class="audit-preview-metrics compact">
+      ${previewMetric('Redes sociais',data.social?.social_items||0)}
+      ${previewMetric('YouTube',data.social?.youtube_items||0)}
+      ${previewMetric('Literatura acadêmica',data.academic?.papers||0)}
+    </div>
+  `;
+
+  const validation=data.validation||{};
+  const validationCounts=Object.entries(validation.status_counts||{});
+  $('#validation-preview-content').innerHTML=`
+    <div class="audit-preview-head">
+      ${previewStatusPill(validationStage?.status||'PENDING')}
+      <span>A prévia muda conforme cada item é validado.</span>
+    </div>
+    <div class="audit-preview-metrics compact">
+      ${previewMetric('Validados',validation.valid||0)}
+      ${previewMetric('Pendentes',validation.pending||0)}
+      ${previewMetric('Descartados',validation.discarded||0)}
+    </div>
+    ${validationCounts.length?`<div class="audit-subsection"><span class="audit-subtitle">Estados dos itens</span>${auditChips(validationCounts.map(([status,count])=>`${status}: ${count}`))}</div>`:''}
+  `;
+
+  const factStatus=factStages.find(stage=>stage.status==='RUNNING')?.status
+    || (factStages.length&&factStages.every(stage=>['DONE','SKIPPED'].includes(stage.status))?'DONE':'PENDING');
+  const factData=data.facts||{};
+  $('#facts-preview-content').innerHTML=`
+    <div class="audit-preview-head">
+      ${previewStatusPill(factStatus)}
+      <span>Eventos estruturados e situação da consolidação.</span>
+    </div>
+    <div class="audit-preview-metrics compact">
+      ${previewMetric('Eventos factuais',factData.events||0)}
+    </div>
+    ${Object.keys(factData.statuses||{}).length?`<div class="audit-subsection"><span class="audit-subtitle">Situação dos fatos</span>${auditChips(Object.entries(factData.statuses).map(([status,count])=>`${status}: ${count}`))}</div>`:''}
+  `;
+
+  const classification=data.classification||{};
+  const themes=classification.themes||[];
+  $('#analysis-preview-content').innerHTML=`
+    <div class="audit-preview-head">
+      ${previewStatusPill(classificationStage?.status||'PENDING')}
+      <span>Temas consolidados a partir dos itens já classificados.</span>
+    </div>
+    <div class="audit-preview-metrics compact">
+      ${previewMetric('Itens classificados',classification.classified_items||0)}
+      ${previewMetric('Temas identificados',themes.length)}
+    </div>
+    ${themes.length?`<div class="audit-subsection"><span class="audit-subtitle">Temas em formação</span>${auditChips(themes.map(row=>`${row.theme}: ${row.items}`))}</div>`:'<div class="audit-waiting">Os temas aparecerão aqui quando a classificação começar.</div>'}
+  `;
+}
+
+async function maybeLoadExecutionPreview(run,stages){
+  const collection=stages.find(stage=>stage.key==='collection');
+  if(!run?.project_id||!collection||collection.status==='PENDING')return;
+  const now=Date.now();
+  if(executionPreviewLoading||now-executionPreviewLastLoadedAt<2200)return;
+  executionPreviewLoading=true;
+  try{
+    const data=await api(`/projects/${run.project_id}/execution-preview?_=${now}`);
+    executionPreviewLastLoadedAt=Date.now();
+    renderExecutionPreview(data,stages);
+    if(collection.status==='RUNNING'){
+      const card=$('#collection-preview-card');
+      if(card)card.open=true;
+    }
+  }catch(_error){
+    // A prévia é informativa; uma falha nela não interrompe o relatório.
+  }finally{
+    executionPreviewLoading=false;
+  }
+}
+
 const STAGE_GROUPS = [
   { number: 1, label: 'Perfil do tema', keys: ['profile'] },
   { number: 2, label: 'Planejamento do relatório', keys: ['search_plan'] },
@@ -836,6 +974,7 @@ function renderRun(run){
 
   const rawStages = run.stages || [];
   maybeLoadResearchAudit(run,rawStages);
+  maybeLoadExecutionPreview(run,rawStages);
   const allGroups = buildGroupedStages(rawStages);
   const planningFinished = rawStages.find(stage => stage.key === 'search_plan')?.status === 'DONE';
   const groups = (planningFinished
@@ -980,7 +1119,7 @@ async function pollRun(){
 
 async function loadHistory(){try{const rows=await api('/reports/history');const box=$('#history-list');if(!rows.length){box.innerHTML='<span class="note">Nenhum relatório salvo.</span>';return}box.innerHTML='';rows.forEach(row=>{const wrap=document.createElement('div');wrap.className='history-entry';const open=document.createElement('button');open.className='history-item';open.innerHTML=`<strong>${esc(row.topic)}</strong><span>${esc(row.generated_at||'')} · QA ${esc(row.qa_status||'PENDING')}</span>`;open.onclick=async()=>{const d=await api(`/reports/history/${row.id}`);currentProjectId=row.id;render(d.report)};const actions=document.createElement('div');actions.className='history-actions';const refine=document.createElement('button');refine.className='history-refine';refine.textContent=row.qa_status==='APPROVED'?'✓':'Refinar';refine.title=row.qa_status==='APPROVED'?'QA já aprovado':'Refinar a pesquisa a partir dos achados CRITICAL/HIGH do QA';refine.disabled=row.qa_status==='APPROVED';refine.onclick=async()=>{if(!confirm('Refinar este relatório usando os achados bloqueadores do QA? Novas buscas e chamadas de LLM podem gerar custo.'))return;try{currentProjectId=row.id;refine.disabled=true;let response;try{response=await api(`/reports/history/${row.id}/refine`,{method:'POST'})}catch(primaryError){if(primaryError.status!==404)throw primaryError;try{response=await api(`/projects/${row.id}/refine-qa-async`,{method:'POST'})}catch(legacyError){if(legacyError.status!==404)throw legacyError;let health={};try{health=await api(`/health?_=${Date.now()}`)}catch(_healthError){}throw new Error(`A API carregada não registrou as rotas de refinamento. Backend: ${health.version||'versão desconhecida'}. Arquivo esperado: app.main. Reinicie o processo que realmente ocupa a porta 8000.`)}}currentRunId=response.run.run_id;renderRun(response.run);$('#run-tracker').classList.remove('hidden');$('#progress').classList.remove('hidden');$('#progress').textContent='Refinando a pesquisa a partir dos achados do QA.';pollFailures=0;pollDelay=1000;schedulePoll(1000);await pollRun()}catch(e){alert(e.message);refine.disabled=false}};const del=document.createElement('button');del.className='danger history-delete';del.textContent='×';del.onclick=async()=>{if(!confirm('Excluir esta versão e seus dados associados?'))return;await api(`/reports/history/${row.id}`,{method:'DELETE'});loadHistory()};actions.append(refine,del);wrap.append(open,actions);box.appendChild(wrap)})}catch(e){$('#history-list').textContent=e.message}}
 
-$('#report-form').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#submit'),progress=$('#progress');btn.disabled=true;progress.classList.remove('hidden');$('#run-tracker').classList.add('hidden');$('#research-audit').classList.add('hidden');researchAuditKey=null;try{
+$('#report-form').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#submit'),progress=$('#progress');btn.disabled=true;progress.classList.remove('hidden');$('#run-tracker').classList.add('hidden');$('#research-audit').classList.add('hidden');researchAuditKey=null;executionPreviewLastLoadedAt=0;executionPreviewLoading=false;try{
   progress.textContent='Preparando projeto…';
   const payload={topic:$('#topic').value.trim(),execution_profile:$('#execution-profile').value||'AUTO'};
   if(selectedGeography().length)payload.geographic_scopes=selectedGeography();
