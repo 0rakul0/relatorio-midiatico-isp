@@ -967,7 +967,12 @@ const STAGE_GROUPS = [
     keys: ['collection', 'youtube', 'academic_research'],
     vertical: true
   },
-  { number: 4, label: 'Percepção nas redes sociais', keys: ['social_repercussion'] },
+  {
+    number: 4,
+    label: 'Percepção pública',
+    keys: ['social_repercussion', 'public_opinion'],
+    vertical: true
+  },
   { number: 5, label: 'Validação das notícias', keys: ['validation'] },
   { number: 6, label: 'Extração factual', keys: ['facts_pass_1'] },
   { number: 7, label: 'Consolidação factual', keys: ['fact_resolution_1'] },
