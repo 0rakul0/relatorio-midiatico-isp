@@ -315,6 +315,7 @@ def build_pdf(data: dict) -> bytes:
         )
     ]
     social_repercussion = data.get("social_repercussion") or {}
+    social_post_inventory = list(social_repercussion.get("post_inventory") or [])
     word_cloud = data.get("word_cloud") or {}
     by_origin = _split_by_origin(corpus)
     social_items = by_origin.get("redes_sociais", [])
@@ -637,12 +638,18 @@ def build_pdf(data: dict) -> bytes:
                 if duplicate_total
                 else ""
             )
+            social_monitoring_note = (
+                f" Separadamente, {len(social_post_inventory)} post(s) social(is) foram monitorado(s) "
+                "como base da camada de comentários; eles não são somados ao corpus jornalístico validado."
+                if social_post_inventory
+                else ""
+            )
             story.append(
                 Paragraph(
                     f"{len(corpus)} item(ns) único(s) validado(s) como materialmente relacionados ao tema: "
-                    f"{len(social_items)} em mídias sociais, {len(youtube_items)} no YouTube e "
+                    f"{len(social_items)} em mídias sociais no corpus validado, {len(youtube_items)} no YouTube e "
                     f"{len(portal_items)} em portais de notícias."
-                    f"{duplicate_note} O detalhamento item a item está nos anexos.",
+                    f"{duplicate_note}{social_monitoring_note} O detalhamento auditável está nos anexos.",
                     small,
                 )
             )
@@ -1217,8 +1224,15 @@ def build_pdf(data: dict) -> bytes:
         annex_sections.append(("Nota Metodológica", methodological_note, "methodology"))
     if fact_layer_enabled and fact_evidence:
         annex_sections.append(("Evidências Factuais", fact_evidence, "facts"))
+    if social_post_inventory:
+        annex_sections.append(
+            ("Mídias Sociais Monitoradas", social_post_inventory, "social_posts")
+        )
+    elif social_items:
+        # Fallback para snapshots antigos que tinham item social VALID, mas não
+        # possuíam ainda a camada SocialPost.
+        annex_sections.append(("Mídias Sociais", social_items, "corpus"))
     for annex_name, rows in (
-        ("Mídias Sociais", social_items),
         ("YouTube", youtube_items),
         ("Portais de Notícias", portal_items),
     ):
@@ -1237,6 +1251,36 @@ def build_pdf(data: dict) -> bytes:
                 Paragraph(
                     escape(_text(content)).replace("\n", "<br/>"),
                     body,
+                )
+            )
+            continue
+
+        if annex_type == "social_posts":
+            story.append(
+                Paragraph(
+                    "Posts públicos usados como âncoras da camada social. Estes itens são auditáveis "
+                    "separadamente e não são somados ao corpus jornalístico validado.",
+                    small,
+                )
+            )
+            story.append(
+                _table(
+                    [["#", "Plataforma", "Data", "Post / referência", "Comentários", "Descoberta", "Link"]]
+                    + [
+                        [
+                            index + 1,
+                            item.get("platform") or "N/D",
+                            item.get("published_at") or "N/D",
+                            item.get("title") or "Post social",
+                            int(item.get("comments_collected") or 0),
+                            item.get("discovery_source") or "monitoramento social",
+                            _pdf_link(item.get("url")),
+                        ]
+                        for index, item in enumerate(content)
+                    ],
+                    [0.7 * cm, 1.8 * cm, 1.8 * cm, 6.1 * cm, 1.5 * cm, 2.4 * cm, 2.3 * cm],
+                    small,
+                    nowrap_columns={0},
                 )
             )
             continue
