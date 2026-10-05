@@ -1,30 +1,23 @@
 from __future__ import annotations
 
-import re
-import unicodedata
-from calendar import monthrange
 from datetime import date
 
 from app.agent import get_report_agent
 from app.llm import llm_is_configured
 from app.schemas import TopicProfileResponse
-from app.year_utils import find_years, strip_year
+from app.year_utils import strip_year
+from app.topics.temporal import (
+    normalized_terms,
+    normalized_text,
+    requested_month_window,
+    requested_year_window,
+)
+from app.topics.locations import (
+    canonicalize_known_locations,
+    clean_phrase as _clean_phrase,
+    location_topic_variants,
+)
 
-
-MONTHS_PT = {
-    "janeiro": 1,
-    "fevereiro": 2,
-    "marco": 3,
-    "abril": 4,
-    "maio": 5,
-    "junho": 6,
-    "julho": 7,
-    "agosto": 8,
-    "setembro": 9,
-    "outubro": 10,
-    "novembro": 11,
-    "dezembro": 12,
-}
 
 GENERIC_PRODUCT_TERMS = {
     "dossie",
@@ -43,69 +36,6 @@ GENERIC_PRODUCT_TERMS = {
     "rio",
     "janeiro",
 }
-
-
-# Aliases geograficos conhecidos que precisam ser normalizados antes da busca.
-# A lista e propositalmente conservadora: so entram variantes inequívocas. A LLM
-# continua responsavel por reconhecer outros locais, mas estes aliases garantem
-# um fallback deterministico quando a grafia do usuario estiver incorreta.
-KNOWN_LOCATION_ALIASES = {
-    "mazuema": "Muzema",
-    "muzema": "Muzema",
-}
-
-
-def normalized_text(text: str) -> str:
-    return "".join(
-        char
-        for char in unicodedata.normalize("NFD", (text or "").lower())
-        if not unicodedata.combining(char)
-    )
-
-
-def normalized_terms(text: str) -> set[str]:
-    return {
-        token.rstrip("s")
-        for token in re.findall(r"[a-z0-9]+", normalized_text(text))
-        if len(token) >= 3 and not token.isdigit()
-    }
-
-
-def requested_month_window(topic: str) -> tuple[date, date] | None:
-    normalized = normalized_text(topic)
-    pattern = re.compile(r"\b(" + "|".join(MONTHS_PT) + r")\s+(?:de\s+)?(20\d{2})(?!\d)")
-    matches: list[tuple[int, int]] = []
-    for match in pattern.finditer(normalized):
-        month_name, year_text = match.groups()
-        # Desambiguação necessária para consultas como
-        # "... no Rio de Janeiro 2026": nesse caso "Janeiro 2026" é parte
-        # do topônimo e não uma referência ao mês de janeiro.
-        prefix = normalized[max(0, match.start() - 24): match.start()]
-        if month_name == "janeiro" and re.search(r"\brio\s+de\s+$", prefix):
-            continue
-        matches.append((MONTHS_PT[month_name], int(year_text)))
-
-    unique = set(matches)
-    if len(unique) != 1:
-        return None
-    month, year = unique.pop()
-    last_day = monthrange(year, month)[1]
-    return date(year, month, 1), date(year, month, last_day)
-
-
-def requested_year_window(topic: str) -> tuple[date, date] | None:
-    """Extrai um único ano explícito como janela anual completa.
-
-    A função é propositalmente simples; o chamador decide se o tipo de pauta
-    pode usar o ano como recorte. Assim, "Dossiê Mulher 2026" não vira
-    automaticamente uma janela anual só porque contém um ano.
-    """
-    normalized = normalized_text(topic)
-    years = {int(year) for year in find_years(normalized)}
-    if len(years) != 1:
-        return None
-    year = years.pop()
-    return date(year, 1, 1), date(year, 12, 31)
 
 
 def _heuristic_project_type(topic: str) -> str:
