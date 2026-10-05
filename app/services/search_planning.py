@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from sqlalchemy import delete, select
@@ -37,6 +36,11 @@ from app.search.guards import (
     query_tokens as _query_tokens,
     semantic_similarity as _semantic_similarity,
 )
+from app.search.gap_fill import (
+    gap_fallback_angles as _gap_fallback_angles,
+    has_site_operator as _has_site_operator,
+    zero_corpus_fallback_angles as _zero_corpus_fallback_angles,
+)
 
 _INITIAL_PURPOSES = {"MEDIA_REPERCUSSION", "FACT_DISCOVERY", "OFFICIAL_FACT"}
 
@@ -47,6 +51,8 @@ def _annual_event_inventory_queries(project: Project) -> list[tuple[str, str]]:
 
 def _official_operation_inventory_queries(project: Project) -> list[tuple[str, str, str]]:
     return official_operation_inventory_queries(project, settings=get_settings())
+
+
 def _add_query(
     db: Session,
     project: Project,
@@ -672,145 +678,6 @@ def detect_coverage_gaps(db: Session, project: Project) -> dict[str, Any]:
         # individualizadas (por exemplo, provedor retornou zero globalmente).
         "needs_fill": bool(uncovered) or zero_corpus,
     }
-
-
-def _has_site_operator(query: str) -> bool:
-    return bool(re.search(r"(?:^|\s)site:[^\s]+", query or "", flags=re.IGNORECASE))
-
-
-def _gap_fallback_angles(
-    project: Project, executed: list[str], cap: int
-) -> list[tuple[str, str]]:
-    """Ângulos abertos ainda não executados, minerados das listas do perfil.
-
-    O round 1 já consumiu a estratégia compacta do scout; aqui varremos as
-    variantes restantes (descoberta factual, assunto, sinônimos, âncoras)
-    em busca de formulações semanticamente novas para a web como um todo.
-    """
-    profile = project.topic_profile or {}
-    pools: list[str] = []
-    for key in (
-        "event_search_variants",
-        "fact_discovery_variants",
-        "product_search_variants",
-        "subject_terms",
-        "search_synonyms",
-        "event_anchor",
-        "product_anchor",
-    ):
-        value = profile.get(key)
-        if isinstance(value, list):
-            pools.extend(str(item) for item in value if str(item).strip())
-        elif value:
-            pools.append(str(value))
-    pools.append(project.topic)
-
-    seen: set[str] = set()
-    phrases: list[str] = []
-    for phrase in pools:
-        compact = " ".join(str(phrase).split()).strip()
-        key = normalized_text(compact)
-        if compact and key not in seen:
-            seen.add(key)
-            phrases.append(compact)
-
-    selected = list(executed)
-    output: list[tuple[str, str]] = []
-    for phrase in phrases:
-        if len(output) >= max(0, cap):
-            break
-        if not _media_query_is_acceptable(project, phrase):
-            continue
-        if _is_redundant(phrase, selected):
-            continue
-        output.append((phrase, "Ângulo do perfil ainda não executado na web aberta."))
-        selected.append(phrase)
-    return output
-
-
-def _zero_corpus_fallback_angles(
-    project: Project,
-    executed: list[str],
-    cap: int,
-) -> list[tuple[str, str]]:
-    """Gera consultas mais amplas quando a primeira validação terminou em zero.
-
-    Prioriza a localidade canônica do perfil e troca linguagem acadêmica/formal
-    por termos comuns de manchetes. A consulta original continua preservada nas
-    SearchQuery anteriores, portanto a expansão não apaga a trilha de auditoria.
-    """
-    if cap <= 0:
-        return []
-
-    profile = project.topic_profile or {}
-    locations = [
-        " ".join(str(value).split()).strip()
-        for value in (profile.get("locations") or [])
-        if str(value).strip()
-    ]
-    location = locations[0] if locations else ""
-    topic_norm = normalized_text(project.topic or "")
-    topic_tokens = [
-        token for token in re.findall(r"[a-z0-9]+", topic_norm)
-        if token not in _STOPWORDS and len(token) > 2
-    ]
-
-    # Termos discriminantes que não são apenas a localidade.
-    location_tokens: set[str] = set()
-    for value in locations:
-        location_tokens.update(_query_tokens(value))
-    core_tokens = [
-        token for token in topic_tokens
-        if token not in location_tokens and token not in {"producao", "perfil", "tema"}
-    ]
-
-    expansions: list[str] = []
-    for token in topic_tokens:
-        expansions.extend(_ZERO_RECOVERY_EXPANSIONS.get(token, []))
-
-    # Evita consultas de uma palavra só. Mantém uma âncora territorial quando
-    # conhecida e, em seguida, combina até dois termos discriminantes.
-    anchor = f'"{location}"' if location else ""
-    base_core = [token for token in core_tokens if token not in {"habitacional", "habitacao", "moradia", "imobiliario", "imobiliaria"}]
-    if not base_core:
-        base_core = core_tokens[:2]
-
-    candidates: list[str] = []
-    for expansion in list(dict.fromkeys(expansions)):
-        parts = [anchor, *base_core[:1], expansion]
-        query = " ".join(part for part in parts if part).strip()
-        if query:
-            candidates.append(query)
-
-    # Último fallback: local + dois conceitos centrais. É mais amplo que a
-    # consulta original, mas ainda preserva contexto suficiente para validação.
-    broad_parts = [anchor, *base_core[:2]]
-    broad = " ".join(part for part in broad_parts if part).strip()
-    if broad:
-        candidates.append(broad)
-
-    selected = list(executed)
-    output: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        key = " ".join(normalized_text(candidate).split())
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        if not _media_query_is_acceptable(project, candidate):
-            continue
-        if _is_redundant(candidate, selected):
-            continue
-        output.append(
-            (
-                candidate,
-                "Recuperação obrigatória após corpus zero: linguagem jornalística/consulta mais ampla.",
-            )
-        )
-        selected.append(candidate)
-        if len(output) >= cap:
-            break
-    return output
 
 
 def plan_gap_fill_queries(
