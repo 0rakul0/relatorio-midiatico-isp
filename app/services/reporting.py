@@ -134,6 +134,9 @@ def _writer_instructions(flags: dict) -> str:
         + "e informe a quantidade disponível; não trate um status operacional legado ou da execução corrente como ausência de conteúdo no YouTube. "
         + "Quando houver social_perception, trate-a exclusivamente como percepção observada na amostra de comentários públicos. "
         + "Nunca a descreva como opinião da população, pesquisa de opinião ou estimativa representativa do estado. "
+        + "Se social_perception.posts for maior que zero, diferencie explicitamente posts sociais monitorados do corpus jornalístico validado. "
+        + "Não descreva a existência de zero itens sociais VALID no corpus jornalístico como ausência de monitoramento social, nem recomende ampliar "
+        + "a coleta social apenas por esse motivo quando já houver posts/comentários monitorados. "
         + "Quando metrics.valid_items for zero e search_recovery.attempted=true, registre na nota metodológica que houve "
         + "uma segunda rodada de busca com consultas ampliadas; nunca escreva que não houve chamadas adicionais. "
     )
