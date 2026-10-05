@@ -13,6 +13,9 @@ from app.models import (
 )
 from app.search.guards import is_redundant
 from app.search.gap_fill import has_site_operator
+from app.metrics.corpus import deduplicate_corpus as domain_deduplicate_corpus
+from app.services.metrics import deduplicate_corpus as service_deduplicate_corpus
+from app.social.discovery import social_discovery_terms
 from app.services import search_planning
 
 
@@ -80,4 +83,40 @@ def test_models_facade_registers_domain_tables():
         "fact_events",
     }
     assert expected.issubset(set(Base.metadata.tables))
+
+def test_metrics_facade_uses_domain_deduplication():
+    rows = [
+        {
+            "title": "Notícia sobre o tema",
+            "url": "https://example.com/a?utm_source=x",
+            "canonical_url": "https://example.com/a?utm_source=x",
+            "domain": "example.com",
+            "media_origin": "PORTAL_NOTICIAS",
+        },
+        {
+            "title": "Notícia sobre o tema",
+            "url": "https://example.com/a",
+            "canonical_url": "https://example.com/a",
+            "domain": "example.com",
+            "media_origin": "PORTAL_NOTICIAS",
+        },
+    ]
+    assert service_deduplicate_corpus(rows) == domain_deduplicate_corpus(rows)
+    assert len(service_deduplicate_corpus(rows)) == 1
+
+
+def test_social_discovery_domain_keeps_compact_terms():
+    project = SimpleNamespace(
+        topic="Como está a polarização política no Brasil em 2026?",
+        topic_profile={
+            "search_synonyms": ["polarização política Brasil 2026"],
+            "actors": ["Lula", "Bolsonaro"],
+            "locations": ["Brasil"],
+        },
+        collection_end=date(2026, 10, 5),
+    )
+    terms = social_discovery_terms(project)
+    assert terms
+    assert any("Lula Bolsonaro" in term for term in terms)
+    assert all(len(term.split()) <= 8 for term in terms)
 
