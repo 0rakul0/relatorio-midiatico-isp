@@ -141,12 +141,6 @@ def _enrich_posts_from_apify_dataset(
             url=post.url,
             media_published_at=media_date,
         )
-        if published_at is None:
-            continue
-
-        if post.published_at is None:
-            post.published_at = published_at
-            updated += 1
 
         view_count, view_source = post_view_count(raw)
         if view_count is not None and (
@@ -156,6 +150,13 @@ def _enrich_posts_from_apify_dataset(
             post.view_count_source = (
                 f"apify:{view_source}" if view_source else "apify"
             )
+
+        if published_at is None:
+            continue
+
+        if post.published_at is None:
+            post.published_at = published_at
+            updated += 1
 
         _append_post_date_provenance(
             media,
