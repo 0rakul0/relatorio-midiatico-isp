@@ -10,9 +10,8 @@ from app.config import get_settings
 from app.agent import get_report_agent
 from app.llm import llm_is_configured
 from app.schemas import FactExtractionResponse
-from app.models import FactAssertion, FactEvent, MediaItem, Project, SearchQuery
+from app.models import FactAssertion, FactEvent, MediaItem, Project
 from app.source_registry import OFFICIAL_SECURITY_SOURCES
-from app.topic_profile import normalized_text
 from app.facts.normalization import (
     event_identity_key,
     extracted_value as _extracted_value,
@@ -27,7 +26,6 @@ from app.facts.operations import (
     operation_events_for_report,
     operation_inventory_summary,
     operation_mentions_for_report,
-    sync_operation_events,
 )
 from app.facts.reporting import (
     fact_assertions_for_report,
@@ -42,9 +40,13 @@ from app.facts.resolution import (
     resolve_project_facts,
 )
 from app.facts.followups import plan_nominal_followups
+from app.facts.selection import (
+    item_should_feed_fact_layer as _item_should_feed_fact_layer,
+    is_annual_police_operation_project as _is_annual_police_operation_project,
+    query_purpose_map as _query_purpose_map,
+)
 
 
-FACT_PURPOSES = {"FACT_DISCOVERY", "OFFICIAL_FACT", "NOMINAL_FOLLOWUP"}
 RESOLVABLE_FIELDS = [
     "subject_name",
     "operation_name",
@@ -375,52 +377,6 @@ def persist_extracted_event(
         item.fact_discard_reason = "A fonte é relevante, mas não permite confirmar a data do fato"
 
     return event
-
-
-def _query_purpose_map(db: Session, project_id: int) -> dict[int, str]:
-    rows = db.execute(select(SearchQuery.id, SearchQuery.purpose).where(SearchQuery.project_id == project_id)).all()
-    return {query_id: purpose for query_id, purpose in rows}
-
-
-def _is_annual_police_operation_project(project: Project) -> bool:
-    if project.project_type != "EVENT_TOPIC":
-        return False
-    if not project.event_start or not project.event_end:
-        return False
-    if (project.event_end - project.event_start).days < 180:
-        return False
-    haystack = normalized_text(
-        " ".join(
-            [
-                project.topic or "",
-                str((project.topic_profile or {}).get("event_anchor") or ""),
-            ]
-        )
-    )
-    return "operac" in haystack and "polic" in haystack
-
-
-def _item_should_feed_fact_layer(item: MediaItem, purpose_by_query: dict[int, str], project: Project) -> bool:
-    purposes = set(item.discovery_purposes or [])
-    if item.query_id and purpose_by_query.get(item.query_id):
-        purposes.add(purpose_by_query[item.query_id])
-    if purposes.intersection(FACT_PURPOSES):
-        return True
-
-    # Em inventários anuais de operações policiais, matérias jornalísticas
-    # validadas também são evidência útil para individualizar operações.
-    # Antes, apenas itens vindos de consultas FACT/OFFICIAL alimentavam a
-    # extração, o que deixava operation_events vazio mesmo quando o corpus
-    # continha várias operações claramente citadas.
-    if _is_annual_police_operation_project(project) and item.status == "VALID":
-        item_text = normalized_text(
-            " ".join([item.title or "", item.snippet or "", (item.content or "")[:2000]])
-        )
-        if "operac" in item_text and ("polic" in item_text or "bope" in item_text):
-            return True
-
-    # Em pauta factual, item manual também pode ser usado para prova factual.
-    return project.project_type == "EVENT_TOPIC" and item.search_source == "manual"
 
 
 def extract_project_facts(
