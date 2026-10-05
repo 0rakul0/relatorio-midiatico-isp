@@ -8,6 +8,7 @@ como corpus validado do relatorio.
 
 from __future__ import annotations
 
+from datetime import date
 from urllib.parse import urlparse
 
 from sqlalchemy import select

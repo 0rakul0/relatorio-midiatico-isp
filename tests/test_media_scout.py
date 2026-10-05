@@ -1,8 +1,5 @@
-from types import SimpleNamespace
-
 from app.media_scout import MediaScout
-from app.source_registry import PRIORITY_MEDIA_SOURCES, PRIORITY_YOUTUBE_CHANNELS
-from app.services import youtube_tasks_for_execution
+from app.source_registry import PRIORITY_MEDIA_SOURCES
 from app.topic_profile import heuristic_topic_profile
 
 
@@ -48,33 +45,13 @@ def test_product_topic_keeps_product_anchor():
     )
 
 
-def test_youtube_uses_one_thematic_query_plus_priority_channels():
+def test_youtube_is_routed_from_the_main_web_discovery():
     topic = "Dossie Mulher"
     profile = heuristic_topic_profile(topic)
-    tasks = MediaScout(topic, profile).youtube_tasks()
+    status = MediaScout(topic, profile).platform_status(youtube_enabled=True)
 
-    thematic = [task for task in tasks if not task.is_priority]
-    channels = [task for task in tasks if task.is_priority]
-
-    assert len(thematic) == 1
-    assert len(channels) == len(PRIORITY_YOUTUBE_CHANNELS)
-
-
-def test_youtube_execution_preserves_every_priority_channel_when_budget_is_lower(monkeypatch):
-    from app.services.collection import youtube_helpers
-
-    monkeypatch.setattr(
-        youtube_helpers,
-        "get_settings",
-        lambda: SimpleNamespace(max_youtube_tasks=1),
-    )
-    project = SimpleNamespace(
-        topic="Dossie Mulher",
-        topic_profile=heuristic_topic_profile("Dossie Mulher"),
-    )
-    tasks = youtube_tasks_for_execution(project)
-    priority_targets = [task.target for task in tasks if task.is_priority]
-    assert priority_targets == [label for label, _ in PRIORITY_YOUTUBE_CHANNELS]
+    youtube = next(entry for entry in status if entry["platform"] == "YouTube")
+    assert youtube["status"] == "roteado da descoberta DuckDuckGo"
 
 
 def test_general_scout_prefers_canonical_location_variant():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from typing import Any
 from urllib.parse import urlparse
 
 from sqlalchemy import select

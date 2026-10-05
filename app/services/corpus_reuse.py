@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import re
 from typing import Any
 
 from sqlalchemy import or_, select
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import CorpusDocument, MediaItem, Project, ProjectCorpusLink
+from app.topic_profile import normalized_text
 from app.services.relevance_learning import (
     backfill_content_hashes,
     document_content_fingerprint,
