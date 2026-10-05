@@ -8,6 +8,9 @@ from fastapi.staticfiles import StaticFiles
 from app.api.chat import router as chat_router
 from app.api.costs import router as costs_router
 from app.api.projects import router as projects_router
+from app.api.runs import router as runs_router
+from app.api.facts import router as facts_router
+from app.api.project_reports import router as project_reports_router
 from app.api.reports import router as reports_router
 from app.billing import router as billing_router
 from app.config import get_settings
@@ -56,6 +59,9 @@ app.include_router(costs_router)
 app.include_router(chat_router)
 app.include_router(reports_router)
 app.include_router(projects_router)
+app.include_router(runs_router)
+app.include_router(facts_router)
+app.include_router(project_reports_router)
 
 
 @app.get("/health")
