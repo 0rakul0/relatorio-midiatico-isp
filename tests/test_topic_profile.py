@@ -1,6 +1,6 @@
 from datetime import date
 
-from app.topic_profile import heuristic_topic_profile, requested_month_window
+from app.topic_profile import heuristic_topic_profile, requested_month_window, requested_topic_window
 
 
 def test_requested_month_window():
@@ -38,3 +38,16 @@ def test_known_location_typo_is_canonicalized_without_losing_original_variant():
     assert profile["locations"][0] == "Muzema"
     assert profile["search_synonyms"][0] == "produção habitacional milícia Muzema"
     assert topic in profile["search_synonyms"]
+
+
+def test_general_topic_with_current_year_gets_window_until_today():
+    today = date.today()
+    start, end = requested_topic_window(
+        f"como está a polarização política no Brasil em {today.year}?"
+    )
+    assert start == date(today.year, 1, 1)
+    assert end == today
+
+
+def test_institutional_product_year_does_not_become_editorial_window():
+    assert requested_topic_window("Dossiê Mulher 2026") is None
