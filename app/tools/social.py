@@ -137,7 +137,10 @@ def discover_public_posts(
     for platform, domains in _SOCIAL_DISCOVERY_DOMAINS.items():
         for term in cleaned_terms:
             for domain in domains:
-                query = f'site:{domain} "{term}"'
+                # Rede social usa linguagem curta e variável; exigir a frase
+                # exata reduz muito o recall. Mantemos site: para a plataforma,
+                # mas deixamos o termo sem aspas para recuperar variações reais.
+                query = f"site:{domain} {term}"
                 try:
                     rows = duckduckgo_text(
                         query,
