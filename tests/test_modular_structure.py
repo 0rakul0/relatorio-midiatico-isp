@@ -3,6 +3,14 @@ from types import SimpleNamespace
 
 from app.fact_layer import _operation_display_name, event_identity_key, normalize_fact_value
 from app.main import app
+from app.database import Base
+from app.models import (
+    AppUser,
+    MediaItem,
+    Project,
+    PublicOpinionSurvey,
+    SocialComment,
+)
 from app.search.guards import is_redundant
 from app.search.gap_fill import has_site_operator
 from app.services import search_planning
@@ -55,3 +63,21 @@ def test_modular_api_routes_remain_registered():
         "/projects/{project_id}/export.pdf",
     }
     assert expected.issubset(paths)
+
+def test_models_facade_registers_domain_tables():
+    assert Project.__tablename__ == "projects"
+    assert MediaItem.__tablename__ == "media_items"
+    assert SocialComment.__tablename__ == "social_comments"
+    assert PublicOpinionSurvey.__tablename__ == "public_opinion_surveys"
+    assert AppUser.__tablename__ == "app_users"
+    expected = {
+        "projects",
+        "media_items",
+        "social_comments",
+        "public_opinion_surveys",
+        "app_users",
+        "report_versions",
+        "fact_events",
+    }
+    assert expected.issubset(set(Base.metadata.tables))
+
