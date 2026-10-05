@@ -13,6 +13,7 @@ from app.services.project_profile import project_payload
 from app.services.metrics import corpus_for_project, metrics, split_corpus, split_corpus_by_origin
 from app.services.word_cloud import word_cloud_for_project
 from app.services.social_repercussion import social_repercussion_for_report
+from app.services.public_opinion import public_opinion_for_report
 from app.report_fingerprint import request_fingerprint
 
 
@@ -59,6 +60,8 @@ def hydrate_cached_report(db: Session, project: Project, generated: GeneratedRep
         )
     if "word_cloud" not in payload:
         payload["word_cloud"] = word_cloud_for_project(db, project.id)
+    if "public_opinion" not in payload:
+        payload["public_opinion"] = public_opinion_for_report(db, project.id)
     # Compatibilidade com relatórios gerados antes do inventário social:
     # preservamos o snapshot editorial e apenas acrescentamos a lista auditável
     # dos SocialPost que já existiam para a mesma execução/projeto.
