@@ -5,7 +5,6 @@ from datetime import date
 from app.agent import get_report_agent
 from app.llm import llm_is_configured
 from app.schemas import TopicProfileResponse
-from app.year_utils import strip_year
 from app.topics.temporal import (
     normalized_terms,
     normalized_text,
@@ -17,25 +16,15 @@ from app.topics.locations import (
     clean_phrase as _clean_phrase,
     location_topic_variants,
 )
-
-
-GENERIC_PRODUCT_TERMS = {
-    "dossie",
-    "relatorio",
-    "boletim",
-    "anuario",
-    "estudo",
-    "publicacao",
-    "pesquisa",
-    "documento",
-    "edicao",
-    "serie",
-    "instituto",
-    "seguranca",
-    "publica",
-    "rio",
-    "janeiro",
-}
+from app.topics.products import (
+    anchored_product_variants as _anchored_product_variants,
+    product_anchor_from_name,
+    subject_terms_from_product as _subject_terms_from_product,
+)
+from app.topics.events import (
+    event_profile_from_topic as _event_profile_from_topic,
+    is_state_intervention_death_topic as _is_state_intervention_death_topic,
+)
 
 
 def _heuristic_project_type(topic: str) -> str:
@@ -91,100 +80,6 @@ def requested_topic_window(topic: str) -> tuple[date, date] | None:
     if start.year == today.year:
         end = min(end, today)
     return start, end
-
-
-def product_anchor_from_name(product_name: str | None) -> str | None:
-    """Deriva uma ancora nominal estavel sem transformar o produto em tokens soltos.
-
-    Ex.: ``Dossie Mulher 2026`` -> ``Dossie Mulher``.
-    """
-    name = _clean_phrase(product_name)
-    if not name:
-        return None
-    no_year = strip_year(name)
-    return no_year or name
-
-
-def _anchored_product_variants(product_name: str, product_anchor: str | None) -> list[str]:
-    variants = [product_name]
-    if product_anchor and normalized_text(product_anchor) != normalized_text(product_name):
-        variants.append(product_anchor)
-    return list(dict.fromkeys(_clean_phrase(value) for value in variants if _clean_phrase(value)))
-
-
-def _subject_terms_from_product(product_name: str) -> list[str]:
-    terms = sorted(normalized_terms(product_name))
-    return [term for term in terms if term not in GENERIC_PRODUCT_TERMS]
-
-
-STATE_INTERVENTION_EVENT_VARIANTS = [
-    "morte por intervenção de agente do Estado",
-    "mortes por intervenção de agentes do Estado",
-    "morte decorrente de intervenção policial",
-    "mortes decorrentes de intervenção policial",
-]
-
-STATE_INTERVENTION_FACT_VARIANTS = [
-    *STATE_INTERVENTION_EVENT_VARIANTS,
-    "morto em intervenção policial",
-    "morto durante intervenção policial",
-    "morreu após intervenção policial",
-    "morto durante ação policial",
-    "morte em ação policial",
-]
-
-
-def _is_state_intervention_death_topic(topic: str) -> bool:
-    text = " ".join(normalized_text(topic).split())
-    death_hit = any(term in text for term in ("morte", "mortes", "morto", "morta", "letalidade"))
-    intervention_hit = any(
-        term in text
-        for term in (
-            "intervencao de agente do estado",
-            "intervencao de agentes do estado",
-            "intervencao policial",
-            "acao policial",
-            "letalidade policial",
-        )
-    )
-    return death_hit and intervention_hit
-
-
-def _event_profile_from_topic(topic: str) -> dict:
-    """Cria âncoras determinísticas para eventos conhecidos.
-
-    O objetivo é impedir que o planejador reduza uma categoria factual específica
-    a buscas genéricas como "morte Rio" ou "polícia 2026".
-    """
-    if _is_state_intervention_death_topic(topic):
-        return {
-            "event_type": "DEATH_BY_STATE_INTERVENTION",
-            "event_anchor": "morte por intervenção de agente do Estado",
-            "event_search_variants": list(STATE_INTERVENTION_EVENT_VARIANTS),
-            "fact_discovery_variants": list(STATE_INTERVENTION_FACT_VARIANTS),
-            "actors": [
-                "agente do Estado",
-                "policial",
-                "policial militar",
-                "policial civil",
-            ],
-            "actions": [
-                "morte por intervenção de agente do Estado",
-                "morte decorrente de intervenção policial",
-                "morto durante intervenção policial",
-                "morreu após intervenção policial",
-            ],
-            "organizations": ["ISP", "PMERJ", "Polícia Civil RJ"],
-        }
-    return {
-        "event_type": "OTHER",
-        "event_anchor": None,
-        "event_search_variants": [],
-        "fact_discovery_variants": [],
-        "actors": [],
-        "actions": [],
-        "organizations": [],
-    }
 
 
 def heuristic_topic_profile(topic: str) -> dict:
