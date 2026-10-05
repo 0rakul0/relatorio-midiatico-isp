@@ -49,7 +49,7 @@ def add_social_section(
     social_analyzed = int(social_repercussion.get("analyzed_comments") or 0)
     social_views = int(social_repercussion.get("view_count_total") or 0)
     social_view_posts = int(social_repercussion.get("view_count_known_posts") or 0)
-    if not social_comments:
+    if not social_comments and not int(social_repercussion.get("posts") or 0):
         return
 
     story.append(Paragraph("Percepção observada nas redes sociais", heading))
