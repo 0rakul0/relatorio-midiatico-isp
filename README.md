@@ -790,6 +790,8 @@ O `app/main.py` passou a funcionar essencialmente como **composition root**: ini
 
 O `app/models.py` também passou a ser uma **fachada de compatibilidade**: as classes SQLAlchemy reais ficam em `app/model_groups/`, mas o restante do código pode continuar importando `Project`, `MediaItem`, `SocialComment` e demais entidades por `app.models`. A mesma estratégia é usada em `services/pipeline.py`, que agora delega blocos compostos para `app/pipeline/`.
 
+O `app/schemas.py` segue a mesma estratégia: continua sendo o ponto de importação público, mas os contratos Pydantic ficam em `app/schema_groups/`. O registry de prompts em `app/prompts/report_agent.py` também virou uma fachada que agrega prompts separados por domínio.
+
 A decomposição também alcançou `services/metrics.py`, `services/search_planning.py` e `services/social_repercussion.py`: deduplicação de corpus, planejamento de gap-fill e descoberta social passaram para pacotes de domínio, mantendo os serviços como fachadas/orquestradores menores.
 
 ```text
@@ -797,7 +799,7 @@ app/
 ├── main.py
 ├── agent.py                     # orquestra o ReportAgent
 ├── models.py                    # fachada compatível dos modelos SQLAlchemy
-├── schemas.py
+├── schemas.py                   # fachada compatível dos schemas Pydantic
 ├── config.py
 ├── topic_profile.py
 ├── fact_layer.py
@@ -805,10 +807,26 @@ app/
 ├── pdf_report.py                # fachada/orquestração editorial do PDF
 │
 ├── prompts/
-│   └── report_agent.py          # BASE_PROMPT e prompts por tarefa
+│   ├── report_agent.py          # BASE_PROMPT + registry compatível
+│   ├── topic.py                 # perfil, busca e planejamento
+│   ├── social.py                # opinião pública e comentários
+│   ├── facts.py                 # extração, relevância e classificação
+│   ├── research.py              # artigos e pesquisa acadêmica
+│   └── reporting.py             # redação, revisão, QA e chat
 │
 ├── utils/
 │   └── rendering.py             # helpers realmente transversais
+│
+├── schema_groups/
+│   ├── base.py                  # contrato LLM estrito
+│   ├── api.py                   # payloads da API
+│   ├── search.py                # tools e contratos de busca
+│   ├── social.py                # comentários e opinião pública
+│   ├── research.py              # artigos e literatura
+│   ├── planning.py              # perfil, planos e gap-fill
+│   ├── facts.py                 # extração e classificação factual
+│   ├── reporting.py             # relatório e QA
+│   └── chat.py                  # contratos do chat
 │
 ├── model_groups/
 │   ├── core.py                  # projetos, fatos oficiais e literatura
@@ -829,7 +847,9 @@ app/
 │
 ├── topics/
 │   ├── temporal.py              # normalização textual e janelas temporais
-│   └── locations.py             # aliases e variantes geográficas
+│   ├── locations.py             # aliases e variantes geográficas
+│   ├── products.py              # âncoras e variantes de produtos
+│   └── events.py                # famílias factuais conhecidas
 │
 ├── search/
 │   ├── guards.py                # âncoras, similaridade e redundância
@@ -875,7 +895,9 @@ app/
 │   ├── costs.py                 # custos de LLM
 │   ├── chat.py                  # chat sobre corpus
 │   ├── reports.py               # histórico/cache/refinamento
-│   ├── projects.py              # criação e prévia metodológica
+│   ├── projects.py              # agregador compatível dos routers de projeto
+│   ├── project_create.py        # criação e recortes iniciais
+│   ├── project_preview.py       # plano e prévia auditável da execução
 │   ├── project_search.py        # perfil, planejamento e consultas
 │   ├── project_collection.py    # coleta, validação, classificação e métricas
 │   ├── runs.py                  # execução assíncrona e cancelamento
