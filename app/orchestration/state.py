@@ -27,6 +27,7 @@ RUN_STAGES = [
     ("youtube", "Coleta no YouTube"),
     ("academic_research", "Literatura científica"),
     ("social_repercussion", "Percepção nas redes sociais"),
+    ("public_opinion", "Opinião pública"),
     ("validation", "Validação das notícias"),
     ("facts_pass_1", "Extração factual"),
     ("fact_resolution_1", "Consolidação factual"),
