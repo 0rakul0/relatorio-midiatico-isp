@@ -535,3 +535,123 @@ def test_social_discovery_runs_broader_second_round_when_first_is_empty(monkeypa
     assert stats["eligible_posts"] == 1
     assert stats["platforms"]["x"]["returned"] == 1
     db.close()
+
+
+
+def test_x_post_date_can_be_derived_from_snowflake_url():
+    published_at, source = social._post_datetime_from_url(
+        "x",
+        "https://x.com/jack/status/20",
+    )
+    # ID 20 é anterior à era útil do Snowflake do X e deve ser descartado.
+    assert published_at is None
+    assert source is None
+
+
+def test_tiktok_post_date_can_be_derived_from_video_id():
+    timestamp = 1_700_000_000
+    video_id = timestamp << 32
+    published_at, source = social._post_datetime_from_url(
+        "tiktok",
+        f"https://www.tiktok.com/@usuario/video/{video_id}",
+    )
+    assert published_at is not None
+    assert published_at.year == 2023
+    assert source == "tiktok_video_id"
+
+
+def test_post_date_prefers_apify_post_metadata_over_comment_timestamp():
+    row = {
+        "postUrl": "https://www.instagram.com/p/ABC123/",
+        "timestamp": "2026-10-05T15:00:00Z",
+        "postCreatedAt": "2026-09-29T10:30:00Z",
+    }
+
+    published_at, source = social._post_datetime_from_row("instagram", row)
+
+    assert published_at is not None
+    assert published_at.date() == date(2026, 9, 29)
+    assert source == "apify_post_metadata"
+
+
+def test_social_collection_promotes_apify_post_date_to_social_post(monkeypatch):
+    db = _session()
+    project = Project(
+        topic="tema social com data",
+        launch_date=date(2026, 1, 1),
+        collection_start=date(2026, 1, 1),
+        collection_end=date(2026, 10, 5),
+        has_custom_date_window=True,
+        project_type="GENERAL_TOPIC",
+        topic_profile={},
+        execution_options={},
+        execution_plan={},
+    )
+    db.add(project)
+    db.flush()
+    item = MediaItem(
+        project_id=project.id,
+        title="Post Instagram",
+        url="https://www.instagram.com/p/DATA123/",
+        canonical_url="https://www.instagram.com/p/DATA123/",
+        domain="instagram.com",
+        status="PENDING",
+        media_origin="REDE_SOCIAL",
+        search_source="duckduckgo_social",
+    )
+    db.add(item)
+    db.commit()
+
+    monkeypatch.setattr(
+        social,
+        "get_settings",
+        lambda: SimpleNamespace(
+            apify_social_enabled=True,
+            apify_api_token="token",
+            social_discovery_enabled=False,
+            social_discovery_queries_per_platform=4,
+            social_discovery_results_per_query=8,
+            apify_instagram_comments_actor_id="apify/instagram-comment-scraper",
+            apify_facebook_comments_actor_id="apify/facebook-comments-scraper",
+            apify_tiktok_comments_actor_id="clockworks/tiktok-comments-scraper",
+            apify_x_comments_actor_id=None,
+            apify_social_max_posts_per_platform=8,
+            apify_social_comments_per_post=50,
+            apify_api_base_url="https://api.apify.com/v2",
+            apify_social_timeout_seconds=240,
+            social_analysis_max_comments=120,
+            social_analysis_batch_size=30,
+            social_reuse_max_age_days=30,
+        ),
+    )
+    monkeypatch.setattr(
+        social,
+        "collect_public_comments",
+        lambda **_kwargs: (
+            "apify/instagram-comment-scraper",
+            [{
+                "id": "c-date",
+                "text": "comentário",
+                "postUrl": item.url,
+                "timestamp": "2026-10-02T12:00:00Z",
+                "postCreatedAt": "2026-09-28T09:00:00Z",
+            }],
+        ),
+    )
+    monkeypatch.setattr(social, "llm_is_configured", lambda: False)
+
+    social.collect_social_repercussion(db, project)
+
+    post = db.scalar(select(SocialPost).where(SocialPost.project_id == project.id))
+    refreshed_item = db.get(MediaItem, item.id)
+    assert post is not None
+    assert post.published_at is not None
+    assert post.published_at.date() == date(2026, 9, 28)
+    assert refreshed_item.published_at == date(2026, 9, 28)
+    assert any(
+        entry.get("source") == "social_post_date"
+        and entry.get("date_source") == "apify_post_metadata"
+        for entry in (refreshed_item.source_provenance or [])
+        if isinstance(entry, dict)
+    )
+    db.close()
