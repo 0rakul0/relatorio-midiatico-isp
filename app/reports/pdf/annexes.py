@@ -100,7 +100,7 @@ def add_audit_annexes(
             )
             story.append(
                 table(
-                    [["#", "Plataforma", "Data", "Post / referência", "Comentários", "Descoberta", "Link"]]
+                    [["#", "Plataforma", "Data", "Post / referência", "Comentários", "Visualizações", "Descoberta", "Link"]]
                     + [
                         [
                             index + 1,
@@ -108,12 +108,13 @@ def add_audit_annexes(
                             item.get("published_at") or "N/D",
                             item.get("title") or "Post social",
                             int(item.get("comments_collected") or 0),
+                            item.get("view_count") if item.get("view_count") is not None else "N/D",
                             item.get("discovery_source") or "monitoramento social",
                             pdf_link(item.get("url")),
                         ]
                         for index, item in enumerate(content)
                     ],
-                    [0.7 * cm, 1.8 * cm, 1.8 * cm, 6.1 * cm, 1.5 * cm, 2.4 * cm, 2.3 * cm],
+                    [0.6 * cm, 1.5 * cm, 1.5 * cm, 5.0 * cm, 1.3 * cm, 1.6 * cm, 2.1 * cm, 2.0 * cm],
                     small,
                     nowrap_columns={0},
                 )
