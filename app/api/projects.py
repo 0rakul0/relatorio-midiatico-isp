@@ -4,53 +4,31 @@ from collections import Counter
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.costs import summarize_costs as _summarize_costs
 from app.api.deps import project_or_404
 from app.auth import AuthUser, get_current_user
-from app.billing import check_quota, clamp_profile, plan_for
+from app.billing import clamp_profile, plan_for
 from app.cost_tracker import cost_context
 from app.database import get_db
-from app.fact_layer import (
-    fact_assertions_for_report,
-    fact_events_for_main_report,
-    fact_events_for_report,
-)
+from app.fact_layer import fact_events_for_report
 from app.models import (
     AcademicPaper,
     Classification,
-    FactEvent,
-    GeneratedReport,
-    LLMCall,
     MediaItem,
-    OfficialFact,
     Project,
     SearchQuery,
 )
-from app.orchestration import (
-    request_cancel,
-    resume_run,
-    run_snapshot,
-    start_qa_refinement,
-    start_run,
-)
-from app.report_qa import run_report_qa
-from app.schemas import ManualMediaItemCreate, OfficialFactCreate, ProjectCreate
+from app.schemas import ManualMediaItemCreate, ProjectCreate
 from app.services import (
-    cached_report_for_project,
     canonicalize,
     classify_with_llm,
     collect_web,
     discover_project_profile,
-    draft_report_with_llm,
-    export_report_pdf,
     metrics,
     plan_queries,
     plan_queries_with_llm,
-    run_full_methodology,
     validate_and_classify,
 )
 from app.services.collection.media_origin import classify_media_origin
@@ -439,116 +417,6 @@ def discover_profile(project_id: int, db: Session = Depends(get_db), user: AuthU
         raise HTTPException(503, str(exc)) from exc
 
 
-@router.post("/projects/{project_id}/run")
-def run_project(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    project = project_or_404(db, user, project_id)
-    check_quota(db, user)
-    try:
-        with cost_context(project_id=project_id, operation="run_full_methodology"):
-            return run_full_methodology(db, project)
-    except RuntimeError as exc:
-        raise HTTPException(503, str(exc)) from exc
-
-
-@router.post("/projects/{project_id}/run-async", status_code=202)
-def run_project_async(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    project_or_404(db, user, project_id)
-    check_quota(db, user)
-    return {"run": start_run(project_id)}
-
-
-def _owned_run_or_404(db: Session, user: AuthUser, run_id: str) -> dict:
-    snapshot = run_snapshot(run_id)
-    if not snapshot:
-        raise HTTPException(404, "Execução não encontrada")
-    project_or_404(db, user, snapshot.get("project_id"))
-    return snapshot
-
-
-@router.post("/projects/{project_id}/resume-async", status_code=202)
-def resume_project_async(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    project_or_404(db, user, project_id)
-    check_quota(db, user)
-    return {"run": resume_run(project_id)}
-
-
-@router.post("/projects/{project_id}/refine-qa-async", status_code=202)
-def refine_project_qa_async(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    project = project_or_404(db, user, project_id)
-    check_quota(db, user)
-    saved = db.scalar(select(GeneratedReport).where(GeneratedReport.project_id == project.id))
-    if not saved:
-        raise HTTPException(409, "O projeto ainda não possui relatório para refinar")
-    return {"run": start_qa_refinement(project_id)}
-
-
-@router.get("/runs/{run_id}")
-def get_run_status(run_id: str, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    snapshot = _owned_run_or_404(db, user, run_id)
-    calls = db.scalars(
-        select(LLMCall).where(LLMCall.run_id == run_id).order_by(LLMCall.id.asc())
-    ).all()
-    snapshot["costs"] = _summarize_costs(calls)
-    return snapshot
-
-
-@router.post("/runs/{run_id}/cancel")
-def cancel_run(run_id: str, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    snapshot = _owned_run_or_404(db, user, run_id)
-    accepted = request_cancel(run_id)
-    return {
-        "accepted": accepted,
-        "run": run_snapshot(run_id),
-    }
-
-
-@router.post("/projects/{project_id}/official-facts", status_code=201)
-def add_official_fact(project_id: int, payload: OfficialFactCreate, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    project_or_404(db, user, project_id)
-    row = OfficialFact(project_id=project_id, **payload.model_dump())
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return {"id": row.id}
-
-
-@router.get("/projects/{project_id}/official-facts")
-def official_facts(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    project_or_404(db, user, project_id)
-    rows = db.scalars(select(OfficialFact).where(OfficialFact.project_id == project_id)).all()
-    return [
-        {
-            "id": row.id,
-            "label": row.label,
-            "value": row.value,
-            "source_reference": row.source_reference,
-            "page": row.page,
-            "evidence": row.evidence,
-            "indicator": row.indicator,
-            "geography": row.geography,
-            "period_start": row.period_start,
-            "period_end": row.period_end,
-            "unit": row.unit,
-        }
-        for row in rows
-    ]
-
-
-@router.get("/projects/{project_id}/facts")
-def facts(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    project_or_404(db, user, project_id)
-    return fact_events_for_report(db, project_id)
-
-
-@router.get("/projects/{project_id}/facts/{event_id}/evidence")
-def fact_evidence(project_id: int, event_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    project_or_404(db, user, project_id)
-    event = db.scalar(select(FactEvent).where(FactEvent.id == event_id, FactEvent.project_id == project_id))
-    if not event:
-        raise HTTPException(404, "Evento factual não encontrado")
-    return [item for item in fact_assertions_for_report(db, project_id) if item["event_id"] == event_id]
-
-
 @router.post("/projects/{project_id}/plan-searches")
 def create_plan(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
     return {"created": len(plan_queries(db, project_or_404(db, user, project_id)))}
@@ -645,80 +513,3 @@ def classify_ai(project_id: int, db: Session = Depends(get_db), user: AuthUser =
 def get_metrics(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
     project_or_404(db, user, project_id)
     return metrics(db, project_id)
-
-
-@router.get("/projects/{project_id}/report")
-def report(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    project = project_or_404(db, user, project_id)
-    data = metrics(db, project_id)
-    dominant = data["themes"][0]["theme"] if data["themes"] else "não identificado"
-    profile = project.topic_profile or {}
-    if project.has_custom_date_window:
-        period_intro = f"Na janela de {project.collection_start} a {project.collection_end}"
-    elif profile.get("observed_collection_start") and profile.get("observed_collection_end"):
-        period_intro = (
-            f"No período observado de {profile['observed_collection_start']} "
-            f"a {profile['observed_collection_end']}"
-        )
-    else:
-        period_intro = "Na amostra temática coletada"
-
-    return {
-        "title": f"Relatório de Repercussão Midiática — {project.topic}",
-        "methodological_note": (
-            "A amostra descreve fontes abertas auditáveis. Ausência de item validado não prova ausência de cobertura, "
-            "e a camada factual é separada da janela de publicação."
-        ),
-        "executive_summary": (
-            f"{period_intro}, foram localizados {data['items_found']} itens, "
-            f"dos quais {data['valid_items']} foram validados em {data['unique_vehicles']} veículos. "
-            f"O tema mais frequente foi {dominant}. A camada factual estruturou {data['facts']['events']} evento(s)."
-        ),
-        "metrics": data,
-        "facts": fact_events_for_main_report(db, project_id),
-    }
-
-
-@router.get("/projects/{project_id}/ai/report")
-def ai_report(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    try:
-        with cost_context(project_id=project_id, operation="draft_report"):
-            return draft_report_with_llm(db, project_or_404(db, user, project_id))
-    except RuntimeError as exc:
-        raise HTTPException(503, str(exc)) from exc
-
-
-@router.post("/projects/{project_id}/qa")
-def qa_report(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    project = project_or_404(db, user, project_id)
-    payload = cached_report_for_project(db, project_id)
-    if not payload:
-        raise HTTPException(404, "Relatório ainda não foi gerado")
-    with cost_context(project_id=project_id, operation="report_qa"):
-        return run_report_qa(db, project, payload)
-
-
-@router.get("/projects/{project_id}/export.pdf")
-def export_pdf(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    project = project_or_404(db, user, project_id)
-    try:
-        content = export_report_pdf(db, project, allow_draft=False)
-    except RuntimeError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    filename = "relatorio-repercussao-midiatica-" + "".join(
-        char if char.isalnum() else "-" for char in project.topic.lower()
-    ).strip("-") + ".pdf"
-    return Response(content=content, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
-
-
-@router.get("/projects/{project_id}/export-draft.pdf")
-def export_draft_pdf(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    project = project_or_404(db, user, project_id)
-    try:
-        content = export_report_pdf(db, project, allow_draft=True)
-    except RuntimeError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    filename = "RASCUNHO-relatorio-repercussao-midiatica-" + "".join(
-        char if char.isalnum() else "-" for char in project.topic.lower()
-    ).strip("-") + ".pdf"
-    return Response(content=content, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
