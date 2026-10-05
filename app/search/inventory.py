@@ -12,9 +12,13 @@ PT_MONTHS = [
 ]
 
 
-def annual_event_inventory_queries(project: Project) -> list[tuple[str, str]]:
+def annual_event_inventory_queries(
+    project: Project,
+    *,
+    settings=None,
+) -> list[tuple[str, str]]:
     """Varredura mensal para pautas anuais de operações/eventos recorrentes."""
-    settings = get_settings()
+    settings = settings or get_settings()
     if not settings.enable_annual_event_inventory:
         return []
     if project.project_type != "EVENT_TOPIC" or not project.event_start or not project.event_end:
@@ -52,9 +56,13 @@ def annual_event_inventory_queries(project: Project) -> list[tuple[str, str]]:
     return queries
 
 
-def official_operation_inventory_queries(project: Project) -> list[tuple[str, str, str]]:
+def official_operation_inventory_queries(
+    project: Project,
+    *,
+    settings=None,
+) -> list[tuple[str, str, str]]:
     """Descoberta mensal em fontes primárias para inventários anuais."""
-    settings = get_settings()
+    settings = settings or get_settings()
     if not settings.enable_official_annual_inventory:
         return []
     if not project.event_start or not project.event_end:
