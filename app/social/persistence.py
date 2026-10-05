@@ -11,6 +11,7 @@ from app.models import MediaItem, Project, SocialComment, SocialPost
 from app.social.comments import source_url as _source_url
 from app.social.dates import resolve_post_datetime as _resolve_post_datetime
 from app.social.urls import url_key as _url_key
+from app.social.engagement import post_view_count
 
 
 def _historical_post(db: Session, project_id: int, platform: str, url: str) -> SocialPost | None:
@@ -146,6 +147,13 @@ def _enrich_posts_from_apify_dataset(
         if post.published_at is None:
             post.published_at = published_at
             updated += 1
+
+        view_count, _view_source = post_view_count(raw)
+        if view_count is not None and (
+            post.view_count is None or view_count > int(post.view_count or 0)
+        ):
+            post.view_count = view_count
+
         _append_post_date_provenance(
             media,
             published_at=published_at,
@@ -179,6 +187,7 @@ def _ensure_post(
     )
     media = db.get(MediaItem, media_item_id) if media_item_id else None
     media_date = media.published_at if media is not None else None
+    media_views = media.view_count if media is not None else None
     resolved_date, date_source = _resolve_post_datetime(
         platform,
         url=url,
@@ -194,6 +203,7 @@ def _ensure_post(
             external_id="url:" + sha256(url.encode("utf-8")).hexdigest()[:40],
             post_text=post_text,
             published_at=resolved_date,
+            view_count=media_views,
             actor_id=actor_id,
         )
         db.add(post)
@@ -206,6 +216,8 @@ def _ensure_post(
             post.post_text = post_text
         if post.published_at is None and resolved_date is not None:
             post.published_at = resolved_date
+        if post.view_count is None and media_views is not None:
+            post.view_count = media_views
 
     if resolved_date is not None:
         _append_post_date_provenance(
