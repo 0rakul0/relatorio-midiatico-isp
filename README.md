@@ -812,18 +812,28 @@ app/
 │
 ├── search/
 │   ├── guards.py                # âncoras, similaridade e redundância
+│   ├── gap_fill.py              # heurísticas de recuperação complementar
 │   └── inventory.py             # varredura mensal factual/oficial
 │
 ├── social/
+│   ├── analysis.py              # classificação e leitura discursiva
 │   ├── comments.py              # normalização dos comentários
 │   ├── dates.py                 # datas DDG/Apify/X/TikTok
+│   ├── methodology.py           # nota metodológica compartilhada
+│   ├── reporting.py             # projeção auditável para o relatório
 │   ├── sampling.py              # amostragem plataforma → post → comentário
 │   └── urls.py                  # reconhecimento/canonicalização social
 │
 ├── reports/
 │   └── pdf/
+│       ├── academic.py          # literatura científica
+│       ├── annexes.py           # anexos auditáveis
 │       ├── corpus.py            # deduplicação e buckets por origem
+│       ├── facts.py             # verificação factual
 │       ├── helpers.py           # labels e links
+│       ├── operations.py        # inventário de operações
+│       ├── public_opinion.py    # pesquisas de opinião pública
+│       ├── social.py            # percepção observada nas redes
 │       ├── table.py             # tabelas ReportLab
 │       └── word_cloud.py        # nuvem de palavras
 │
@@ -832,7 +842,10 @@ app/
 │   ├── costs.py                 # custos de LLM
 │   ├── chat.py                  # chat sobre corpus
 │   ├── reports.py               # histórico/cache/refinamento
-│   └── projects.py              # criação, execução, fatos, métricas e exportações
+│   ├── projects.py              # criação, plano, coleta e métricas
+│   ├── runs.py                  # execução assíncrona e cancelamento
+│   ├── facts.py                 # fatos oficiais e evidências
+│   └── project_reports.py       # relatório, QA e exportações
 │
 ├── orchestration/
 │   ├── executor.py
