@@ -65,45 +65,6 @@ def _recent_key(item: MediaItem) -> tuple[date, int]:
     return item.published_at or date.min, item.id or 0
 
 
-def _latest_user_question(messages: list[dict]) -> str:
-    for message in reversed(messages or []):
-        if str(message.get("role") or "").lower() == "user":
-            return str(message.get("content") or "").strip()
-    return ""
-
-
-def _casual_kind(question: str) -> str | None:
-    normalized = _topic_key(question)
-    if normalized in _CASUAL_GREETINGS:
-        return "GREETING"
-    if normalized in _CASUAL_THANKS:
-        return "THANKS"
-    if normalized in _CASUAL_FAREWELLS:
-        return "FAREWELL"
-    return None
-
-
-def _retrieval_question(messages: list[dict]) -> str:
-    """Usa contexto conversacional só quando a pergunta atual é curta demais."""
-    user_messages = [
-        str(message.get("content") or "").strip()
-        for message in (messages or [])
-        if str(message.get("role") or "").lower() == "user"
-        and str(message.get("content") or "").strip()
-    ]
-    if not user_messages:
-        return ""
-
-    latest = user_messages[-1]
-    if len(_tokens(latest)) >= 2:
-        return latest
-
-    for previous in reversed(user_messages[:-1]):
-        if _tokens(previous):
-            return f"{previous}\n{latest}"
-    return latest
-
-
 def _casual_answer(kind: str, project_payload: dict, corpus_size: int) -> str:
     topic = str(project_payload.get("topic") or "acervo").strip()
     scope = str(project_payload.get("scope") or "TOPIC").upper()
@@ -119,19 +80,6 @@ def _casual_answer(kind: str, project_payload: dict, corpus_size: int) -> str:
         "Você pode me perguntar sobre temas, períodos, operações, pessoas, veículos, "
         "dados encontrados ou comparar informações do acervo."
     )
-
-
-def _normalize_member_references(answer: str, by_index: dict[int, dict]) -> str:
-    """Converte referências técnicas como '(Index 0)' em referências públicas [F1]."""
-    text = str(answer or "")
-
-    def replace(match: re.Match) -> str:
-        index = int(match.group(1))
-        if index not in by_index:
-            return match.group(0)
-        return f"[F{index + 1}]"
-
-    return re.sub(r"[\(\[]?\s*Index\s+(\d+)\s*[\)\]]?", replace, text, flags=re.IGNORECASE)
 
 
 def _rank_items(items: list[MediaItem], question: str, limit: int) -> list[MediaItem]:
