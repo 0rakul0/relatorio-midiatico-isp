@@ -383,6 +383,7 @@ function render(result){
   const kit=(d.press_kit||[]).map(x=>[x.product,x.purpose]);
   const rawCorpus=result.corpus||[];
   const socialPerception=result.social_repercussion||{};
+  const socialPostInventory=socialPerception.post_inventory||[];
   const wordCloud=result.word_cloud||{};
   const academicPapers=result.academic_papers||[];
   const academicSection=academicPapers.length?`<h2>Literatura científica relacionada</h2>
@@ -425,10 +426,28 @@ function render(result){
       : '';
     return note+`<div class="annex-table">${table(['#','Data','Fonte','Título','Origem','URL'],rows.map(corpusRow))}</div>`;
   };
+  const socialAnnexTable=(rows)=>{
+    if(!rows.length)return '<p>Nenhum post social monitorado nesta execução.</p>';
+    return `<div class="annex-table">${table(
+      ['#','Plataforma','Data','Post / referência','Comentários','Descoberta','URL'],
+      rows.map((x,i)=>[
+        String(i+1),
+        socialLabel(x.platform),
+        x.published_at||'N/D',
+        x.title||'Post social',
+        String(Number(x.comments_collected||0)),
+        x.discovery_source||'monitoramento social',
+        x.url?raw(`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">Abrir</a>`):'N/D'
+      ])
+    )}</div>`;
+  };
   const duplicateNote=collapsedDuplicates
     ? ` ${collapsedDuplicates} entrada(s) repetida(s) foram consolidadas para evitar dupla contagem.`
     : '';
-  const relatedSummary=`<p class="related-intro">${displayCorpusCount} item(ns) único(s) validado(s) como materialmente relacionados ao tema: ${socialItems.length} em mídias sociais, ${youtubeItems.length} no YouTube e ${portalItems.length} em portais de notícias.${duplicateNote} O detalhamento item a item está nos anexos.</p><p class="note">Origem: <span class="origin-badge new">Nova coleta</span> = coletado desta vez; <span class="origin-badge reused">Corpus reutilizado</span> = reaproveitado de coleta anterior.</p>`;
+  const socialMonitoringNote=socialPostInventory.length
+    ? ` Separadamente, ${socialPostInventory.length} post(s) social(is) foram monitorado(s) para a análise de comentários; eles não são somados ao corpus jornalístico validado.`
+    : '';
+  const relatedSummary=`<p class="related-intro">${displayCorpusCount} item(ns) único(s) validados no corpus principal: ${socialItems.length} em mídias sociais, ${youtubeItems.length} no YouTube e ${portalItems.length} em portais de notícias.${duplicateNote}${socialMonitoringNote} O detalhamento auditável está nos anexos.</p><p class="note">Origem: <span class="origin-badge new">Nova coleta</span> = coletado desta vez; <span class="origin-badge reused">Corpus reutilizado</span> = reaproveitado de coleta anterior.</p>`;
 
   const socialLabel=value=>({
     instagram:'Instagram',facebook:'Facebook',x:'X',
@@ -530,7 +549,7 @@ function render(result){
     <h2>VII. Recomendações e Kit de Imprensa</h2><ul>${(d.recommendations||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul>${table(['Produto','Finalidade'],kit)}
     <h2>VIII. Síntese</h2><p>${esc(d.synthesis)}</p>
     <h2>Anexo A - Nota Metodológica</h2><p>${esc(d.methodological_note)}</p>
-    <h2>Anexo ${annexLetter(0)} - Mídias Sociais</h2><p class="related-intro">Itens validados na janela de repercussão.</p>${annexTable(socialItems)}
+    <h2>Anexo ${annexLetter(0)} - Mídias Sociais Monitoradas</h2><p class="related-intro">Posts públicos usados como âncoras da camada social; não são somados ao corpus jornalístico validado.</p>${socialPostInventory.length?socialAnnexTable(socialPostInventory):annexTable(socialItems)}
     <h2>Anexo ${annexLetter(1)} - YouTube</h2><p class="related-intro">Itens validados na janela de repercussão.</p>${annexTable(youtubeItems)}
     <h2>Anexo ${annexLetter(2)} - Portais de Notícias</h2><p class="related-intro">Itens validados na janela de repercussão.</p>${annexTable(portalItems)}
     ${qa.findings?.length?`<h2>Achados de QA</h2>${table(['Severidade','Código','Mensagem'],qa.findings.map(x=>[x.severity,x.code,x.message]))}`:''}
