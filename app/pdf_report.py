@@ -7,8 +7,6 @@ from app.reports.pdf.corpus import (
 )
 from app.reports.pdf.helpers import (
     pdf_link as _pdf_link,
-    scope_label as _scope_label,
-    status_label as _status_label,
     view_count_label as _view_count_label,
     window_label as _window_label,
 )
