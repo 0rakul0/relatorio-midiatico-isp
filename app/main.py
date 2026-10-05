@@ -10,7 +10,10 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.auth import AuthUser, get_current_user, require_admin
+from app.auth import AuthUser, get_current_user
+from app.api.deps import project_or_404
+from app.api.chat import router as chat_router
+from app.api.costs import router as costs_router, summarize_costs as _summarize_costs
 from app.billing import check_quota, clamp_profile, plan_for, router as billing_router
 from app.cost_tracker import cost_context
 from app.database import SessionLocal, get_db
@@ -94,16 +97,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="ISP Repercussão Midiática", version="0.3.4", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(billing_router)
-
-
-def project_or_404(db: Session, user: AuthUser, project_id: int) -> Project:
-    project = db.get(Project, project_id)
-    if not project:
-        raise HTTPException(404, "Projeto não encontrado")
-    if project.owner_id != user.id and not user.is_admin:
-        # 404 proposital: não revelar existência de projeto alheio.
-        raise HTTPException(404, "Projeto não encontrado")
-    return project
+app.include_router(costs_router)
+app.include_router(chat_router)
 
 
 @app.get("/health")
@@ -141,90 +136,6 @@ def health():
             "classification_item_max_chars": settings.classification_item_max_chars,
         },
     }
-
-
-def _costs_rows(rows) -> list[dict]:
-    return [
-        {
-            "id": row.id,
-            "project_id": row.project_id,
-            "run_id": row.run_id,
-            "operation": row.operation,
-            "schema_name": row.schema_name,
-            "caller": row.caller,
-            "model": row.model,
-            "success": row.success,
-            "error": row.error,
-            "input_tokens": row.input_tokens,
-            "output_tokens": row.output_tokens,
-            "cached_input_tokens": row.cached_input_tokens,
-            "search_calls": row.search_calls,
-            "cost_usd": row.cost_usd,
-            "created_at": row.created_at,
-        }
-        for row in rows
-    ]
-
-
-@app.get("/costs")
-def costs(db: Session = Depends(get_db), admin: AuthUser = Depends(require_admin), limit: int = 200):
-    rows = db.execute(
-        select(LLMCall).order_by(LLMCall.id.desc()).limit(max(1, min(limit, 1000)))
-    ).scalars().all()
-    return {"calls": _costs_rows(rows)}
-
-
-@app.get("/costs/summary")
-def costs_summary(db: Session = Depends(get_db), admin: AuthUser = Depends(require_admin)):
-    calls = db.query(LLMCall).all()
-    return _summarize_costs(calls)
-
-
-@app.get("/projects/{project_id}/costs")
-def project_costs(project_id: int, db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    project_or_404(db, user, project_id)
-    calls = db.scalars(
-        select(LLMCall).where(LLMCall.project_id == project_id).order_by(LLMCall.id.desc())
-    ).all()
-    return {"project_id": project_id, "calls": _costs_rows(calls), "summary": _summarize_costs(calls)}
-
-
-def _summarize_costs(calls) -> dict:
-    totals = {
-        "total_cost_usd": 0.0,
-        "total_input_tokens": 0,
-        "total_output_tokens": 0,
-        "total_cached_input_tokens": 0,
-        "total_search_calls": 0,
-        "calls": len(calls),
-        "by_model": {},
-        "by_operation": {},
-    }
-    for call in calls:
-        totals["total_cost_usd"] += call.cost_usd or 0.0
-        totals["total_input_tokens"] += call.input_tokens or 0
-        totals["total_output_tokens"] += call.output_tokens or 0
-        totals["total_cached_input_tokens"] += call.cached_input_tokens or 0
-        totals["total_search_calls"] += call.search_calls or 0
-        model_bucket = totals["by_model"].setdefault(
-            call.model, {"model": call.model, "cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "calls": 0}
-        )
-        _add_to_bucket(model_bucket, call)
-        op_key = call.operation or "desconhecida"
-        op_bucket = totals["by_operation"].setdefault(
-            op_key, {"operation": op_key, "cost_usd": 0.0, "calls": 0}
-        )
-        op_bucket["cost_usd"] += call.cost_usd or 0.0
-        op_bucket["calls"] += 1
-    totals["total_cost_usd"] = round(totals["total_cost_usd"], 6)
-    return totals
-
-
-def _add_to_bucket(bucket: dict, call) -> None:
-    bucket["cost_usd"] = round(bucket["cost_usd"] + (call.cost_usd or 0.0), 6)
-    bucket["input_tokens"] += call.input_tokens or 0
-    bucket["output_tokens"] += call.output_tokens or 0
-    bucket["calls"] += 1
 
 
 @app.get("/reports/history")
@@ -344,147 +255,6 @@ def auth_config():
         "supabase_key": settings.supabase_key,
         "local_auth_bypass": settings.local_auth_bypass,
     }
-
-
-@app.get("/chat", include_in_schema=False)
-def chat_page():
-    return FileResponse("app/static/chat.html")
-
-
-@app.get("/chat/projects")
-def chat_projects(db: Session = Depends(get_db), user: AuthUser = Depends(get_current_user)):
-    """Bases tematicas disponiveis e resumo do acervo completo."""
-    return list_chat_projects(db, user)
-
-
-def _chat_project_from_scope(
-    project_id: str,
-    db: Session,
-    user: AuthUser,
-) -> Project | None:
-    if str(project_id).casefold() == "all":
-        return None
-    try:
-        numeric_id = int(project_id)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(422, "project_id inválido") from exc
-    return project_or_404(db, user, numeric_id)
-
-
-def _last_chat_question(payload: ChatAskRequest) -> str:
-    for message in reversed(payload.messages):
-        if message.role == "user":
-            return message.content
-    raise HTTPException(422, "A conversa precisa terminar com uma pergunta do usuário")
-
-
-@app.get("/chat/conversations")
-def chat_conversations(
-    project_id: str,
-    db: Session = Depends(get_db),
-    user: AuthUser = Depends(get_current_user),
-):
-    """Lista as conversas persistidas do tema selecionado."""
-    project = _chat_project_from_scope(project_id, db, user)
-    return {
-        "conversations": list_chat_conversations(
-            db,
-            owner_id=user.id,
-            project=project,
-        )
-    }
-
-
-@app.get("/chat/conversations/{conversation_id}")
-def chat_conversation(
-    conversation_id: int,
-    db: Session = Depends(get_db),
-    user: AuthUser = Depends(get_current_user),
-):
-    """Carrega uma conversa persistida sem chamar a LLM novamente."""
-    conversation = get_chat_conversation(
-        db,
-        owner_id=user.id,
-        conversation_id=conversation_id,
-    )
-    if conversation is None:
-        raise HTTPException(404, "Conversa não encontrada")
-    return conversation
-
-
-@app.delete("/chat/conversations/{conversation_id}", status_code=204)
-def delete_chat_conversation_route(
-    conversation_id: int,
-    db: Session = Depends(get_db),
-    user: AuthUser = Depends(get_current_user),
-):
-    if not delete_chat_conversation(
-        db,
-        owner_id=user.id,
-        conversation_id=conversation_id,
-    ):
-        raise HTTPException(404, "Conversa não encontrada")
-    return Response(status_code=204)
-
-
-@app.post("/chat/all/ask")
-def chat_all_ask(
-    payload: ChatAskRequest,
-    db: Session = Depends(get_db),
-    user: AuthUser = Depends(get_current_user),
-):
-    """Responde sobre todo o acervo e persiste o turno da conversa."""
-    messages = [message.model_dump(mode="json") for message in payload.messages]
-    try:
-        state = chat_with_all_corpus(db, user, messages)
-        conversation = persist_chat_exchange(
-            db,
-            owner_id=user.id,
-            project=None,
-            conversation_id=payload.conversation_id,
-            question=_last_chat_question(payload),
-            answer_state=state,
-            history_messages=messages,
-        )
-        state["conversation_id"] = conversation.id
-        return state
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-
-@app.post("/chat/{project_id}/ask")
-def chat_ask(
-    project_id: int,
-    payload: ChatAskRequest,
-    db: Session = Depends(get_db),
-    user: AuthUser = Depends(get_current_user),
-):
-    """Responde usando o corpus do tema e persiste o turno da conversa."""
-    project = project_or_404(db, user, project_id)
-    messages = [message.model_dump(mode="json") for message in payload.messages]
-    try:
-        state = chat_with_corpus(db, project, messages)
-        conversation = persist_chat_exchange(
-            db,
-            owner_id=user.id,
-            project=project,
-            conversation_id=payload.conversation_id,
-            question=_last_chat_question(payload),
-            answer_state=state,
-            history_messages=messages,
-        )
-        state["conversation_id"] = conversation.id
-        return state
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/projects", status_code=201)
