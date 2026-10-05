@@ -21,7 +21,7 @@ from app.models import (
     SocialComment,
     SocialPost,
 )
-from app.schemas import SocialCommentBatchResponse
+from app.schemas import SocialCommentBatchResponse, SocialDiscourseAnalysisResponse
 from app.services.collection.common import canonicalize, result_publication_date
 from app.services.collection.media_origin import REDE_SOCIAL
 from app.tools.social import (
@@ -749,6 +749,7 @@ def analyze_social_comments(db: Session, project: Project) -> dict:
         analysis.emotion_counts = {}
         analysis.position_counts = {}
         analysis.themes = []
+        analysis.discourse_analysis = {}
         analysis.summary = "Nenhum comentario publico foi recuperado na amostra."
         db.commit()
         return social_repercussion_for_report(db, project.id)
@@ -760,6 +761,7 @@ def analyze_social_comments(db: Session, project: Project) -> dict:
         analysis.emotion_counts = {}
         analysis.position_counts = {}
         analysis.themes = []
+        analysis.discourse_analysis = {}
         analysis.summary = (
             "Comentarios coletados; classificacao semantica indisponivel sem LLM."
         )
@@ -823,6 +825,59 @@ def analyze_social_comments(db: Session, project: Project) -> dict:
                     if 2 <= len(cleaned) <= 80:
                         themes[cleaned] += 1
 
+    discourse_analysis: dict = {}
+    if analyzed_indices:
+        # Segunda leitura: sai da simples classificação e interpreta o debate
+        # observado na amostra, mantendo os comentários anonimizados e sem
+        # generalizar os achados para a população.
+        discourse_comments = [
+            {
+                "platform": comment.platform,
+                "text": comment.text[:900],
+                "like_count": comment.like_count,
+                "reply_count": comment.reply_count,
+            }
+            for comment in sample[: min(len(sample), 80)]
+        ]
+        discourse_payload = {
+            "project": {
+                "topic": project.topic,
+                "collection_start": project.collection_start.isoformat(),
+                "collection_end": project.collection_end.isoformat(),
+            },
+            "sample": {
+                "comments_collected": len(comments),
+                "comments_classified": len(analyzed_indices),
+                "platform_counts": platform_counts,
+                "sentiment_counts": dict(sentiment),
+                "emotion_counts": dict(emotion),
+                "position_counts": dict(position),
+                "themes": [
+                    {"theme": theme, "count": count}
+                    for theme, count in themes.most_common(12)
+                ],
+            },
+            "comments": discourse_comments,
+            "methodology": METHODOLOGY_NOTE,
+        }
+        discourse_analysis = get_report_agent().run(
+            task="social_discourse_analysis",
+            payload=discourse_payload,
+            extra_instructions=(
+                "Faça uma análise qualitativa e discursiva dos comentários públicos da amostra. "
+                "Não se limite a repetir percentuais de positivo/negativo. Explique narrativas, "
+                "argumentos, conflitos, formas de interação, rejeição, apoio, fadiga, confiança, "
+                "desconfiança, ironia, personalismo e sinais de polarização quando sustentados pelos comentários. "
+                "Nunca escreva 'a população pensa', 'os brasileiros são' ou equivalentes. Use formulações como "
+                "'entre os comentários analisados', 'uma parcela da amostra manifesta' e 'o debate observado sugere'. "
+                "Não invente grupos, intenções ou causas que não estejam sustentados pela amostra. "
+                "Não reproduza nomes de usuários nem dados pessoais. Aponte contradições e limitações da amostra."
+            ),
+            response_model=SocialDiscourseAnalysisResponse,
+            schema_name="social_discourse_analysis_v1",
+            max_output_tokens=5000,
+        )
+
     analysis.status = "COMPLETED" if analyzed_indices else "COLLECTED_ONLY"
     analysis.analyzed_comments = len(analyzed_indices)
     analysis.sentiment_counts = dict(sentiment)
@@ -832,12 +887,17 @@ def analyze_social_comments(db: Session, project: Project) -> dict:
         {"theme": theme, "count": count}
         for theme, count in themes.most_common(12)
     ]
-    analysis.summary = _human_summary(
+    analysis.discourse_analysis = discourse_analysis
+    analysis.summary = (
+        discourse_analysis.get("overall_reading")
+        if discourse_analysis
+        else _human_summary(
         len(analyzed_indices),
         sentiment,
         emotion,
         position,
         themes,
+    )
     )
     db.commit()
     return social_repercussion_for_report(db, project.id)
@@ -1111,6 +1171,7 @@ def social_repercussion_for_report(db: Session, project_id: int) -> dict:
             "emotion_counts": {},
             "position_counts": {},
             "themes": [],
+            "discourse_analysis": {},
             "summary": None,
             "methodology_note": METHODOLOGY_NOTE,
         }
@@ -1124,6 +1185,7 @@ def social_repercussion_for_report(db: Session, project_id: int) -> dict:
         "emotion_counts": dict(analysis.emotion_counts or {}),
         "position_counts": dict(analysis.position_counts or {}),
         "themes": list(analysis.themes or []),
+        "discourse_analysis": dict(analysis.discourse_analysis or {}),
         "summary": analysis.summary,
         "methodology_note": analysis.methodology_note or METHODOLOGY_NOTE,
     }
