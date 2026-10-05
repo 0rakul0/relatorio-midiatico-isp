@@ -1072,32 +1072,124 @@ def _ensure_post(
     return post
 
 
+def _comment_recency_key(comment: SocialComment) -> float:
+    value = comment.published_at
+    if value is None:
+        return 0.0
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).timestamp()
+
+
+def _mixed_post_comment_order(rows: list[SocialComment]) -> list[SocialComment]:
+    """Mistura sinais de engajamento e recência dentro de cada post.
+
+    A seleção não deve ser dominada apenas pelos comentários mais curtidos.
+    Primeiro preservamos exemplos de alta curtida, alta resposta, recência e
+    baixo engajamento; depois completamos deterministicamente pelos demais.
+    """
+    if not rows:
+        return []
+
+    by_likes = sorted(
+        rows,
+        key=lambda row: ((row.like_count or 0), (row.reply_count or 0), row.id),
+        reverse=True,
+    )
+    by_replies = sorted(
+        rows,
+        key=lambda row: ((row.reply_count or 0), (row.like_count or 0), row.id),
+        reverse=True,
+    )
+    by_recent = sorted(
+        rows,
+        key=lambda row: (_comment_recency_key(row), row.id),
+        reverse=True,
+    )
+    by_low_engagement = sorted(
+        rows,
+        key=lambda row: (
+            (row.like_count or 0) + (row.reply_count or 0),
+            _comment_recency_key(row),
+            row.id,
+        ),
+    )
+
+    ordered: list[SocialComment] = []
+    seen: set[int] = set()
+
+    def add(row: SocialComment) -> None:
+        key = int(row.id)
+        if key not in seen:
+            seen.add(key)
+            ordered.append(row)
+
+    for candidates in (by_likes, by_replies, by_recent, by_low_engagement):
+        if candidates:
+            add(candidates[0])
+
+    remaining = sorted(
+        rows,
+        key=lambda row: (
+            (row.like_count or 0) + (row.reply_count or 0),
+            _comment_recency_key(row),
+            row.id,
+        ),
+        reverse=True,
+    )
+    for row in remaining:
+        add(row)
+    return ordered
+
+
 def _balanced_sample(
     comments: list[SocialComment],
     limit: int,
 ) -> list[SocialComment]:
-    groups: dict[str, list[SocialComment]] = defaultdict(list)
-    for comment in comments:
-        groups[comment.platform].append(comment)
-    for rows in groups.values():
-        rows.sort(
-            key=lambda row: (row.like_count or 0, row.id),
-            reverse=True,
-        )
+    """Amostra hierárquica: plataforma -> post -> comentário.
 
-    platforms = sorted(groups)
+    Faz round-robin entre plataformas e, dentro delas, entre posts. Isso evita
+    que um único post muito movimentado domine a leitura de uma plataforma.
+    """
+    grouped: dict[str, dict[int, list[SocialComment]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for comment in comments:
+        grouped[comment.platform][int(comment.social_post_id)].append(comment)
+
+    queues: dict[str, dict[int, list[SocialComment]]] = {}
+    post_order: dict[str, list[int]] = {}
+    for platform, posts in grouped.items():
+        queues[platform] = {
+            post_id: _mixed_post_comment_order(rows)
+            for post_id, rows in posts.items()
+        }
+        post_order[platform] = sorted(posts)
+
+    active_platforms = sorted(post_order)
+    post_cursor = {platform: 0 for platform in active_platforms}
     output: list[SocialComment] = []
-    cursor = 0
-    while platforms and len(output) < limit:
-        platform = platforms[cursor % len(platforms)]
-        rows = groups[platform]
-        if rows:
-            output.append(rows.pop(0))
-        if not rows:
-            platforms.remove(platform)
-            cursor = 0
-        else:
-            cursor += 1
+    platform_cursor = 0
+
+    while active_platforms and len(output) < max(0, int(limit)):
+        platform = active_platforms[platform_cursor % len(active_platforms)]
+        available_posts = [
+            post_id
+            for post_id in post_order[platform]
+            if queues[platform].get(post_id)
+        ]
+        if not available_posts:
+            active_platforms.remove(platform)
+            post_cursor.pop(platform, None)
+            platform_cursor = 0
+            continue
+
+        cursor = post_cursor[platform] % len(available_posts)
+        post_id = available_posts[cursor]
+        output.append(queues[platform][post_id].pop(0))
+        post_cursor[platform] = (cursor + 1) % max(1, len(available_posts))
+        platform_cursor += 1
+
     return output
 
 
@@ -1214,8 +1306,10 @@ def analyze_social_comments(db: Session, project: Project) -> dict:
                     {
                         "index": index,
                         "platform": comment.platform,
+                        "post_id": comment.social_post_id,
                         "text": comment.text[:700],
                         "like_count": comment.like_count,
+                        "reply_count": comment.reply_count,
                     }
                     for index, comment in batch
                 ],
@@ -1249,11 +1343,13 @@ def analyze_social_comments(db: Session, project: Project) -> dict:
         discourse_comments = [
             {
                 "platform": comment.platform,
-                "text": comment.text[:900],
+                "post_id": comment.social_post_id,
+                "text": comment.text[:700],
                 "like_count": comment.like_count,
                 "reply_count": comment.reply_count,
             }
-            for comment in sample[: min(len(sample), 80)]
+            for index, comment in indexed
+            if index in analyzed_indices
         ]
         discourse_payload = {
             "project": {
@@ -1264,6 +1360,8 @@ def analyze_social_comments(db: Session, project: Project) -> dict:
             "sample": {
                 "comments_collected": len(comments),
                 "comments_classified": len(analyzed_indices),
+                "comments_in_discourse_analysis": len(discourse_comments),
+                "posts_represented": len({comment["post_id"] for comment in discourse_comments}),
                 "platform_counts": platform_counts,
                 "sentiment_counts": dict(sentiment),
                 "emotion_counts": dict(emotion),
@@ -1276,23 +1374,30 @@ def analyze_social_comments(db: Session, project: Project) -> dict:
             "comments": discourse_comments,
             "methodology": METHODOLOGY_NOTE,
         }
-        discourse_analysis = get_report_agent().run(
-            task="social_discourse_analysis",
-            payload=discourse_payload,
-            extra_instructions=(
-                "Faça uma análise qualitativa e discursiva dos comentários públicos da amostra. "
-                "Não se limite a repetir percentuais de positivo/negativo. Explique narrativas, "
-                "argumentos, conflitos, formas de interação, rejeição, apoio, fadiga, confiança, "
-                "desconfiança, ironia, personalismo e sinais de polarização quando sustentados pelos comentários. "
-                "Nunca escreva 'a população pensa', 'os brasileiros são' ou equivalentes. Use formulações como "
-                "'entre os comentários analisados', 'uma parcela da amostra manifesta' e 'o debate observado sugere'. "
-                "Não invente grupos, intenções ou causas que não estejam sustentados pela amostra. "
-                "Não reproduza nomes de usuários nem dados pessoais. Aponte contradições e limitações da amostra."
-            ),
-            response_model=SocialDiscourseAnalysisResponse,
+        with cost_context(
+            project_id=project.id,
+            operation="social_discourse_analysis",
             schema_name="social_discourse_analysis_v1",
-            max_output_tokens=5000,
-        )
+        ):
+            discourse_analysis = get_report_agent().run(
+                task="social_discourse_analysis",
+                payload=discourse_payload,
+                extra_instructions=(
+                    "Faça uma análise qualitativa e discursiva dos comentários públicos da amostra. "
+                    "Considere que a amostra foi balanceada hierarquicamente por plataforma e por post, "
+                    "misturando comentários mais curtidos, mais respondidos, recentes e de baixo engajamento. "
+                    "Não se limite a repetir percentuais de positivo/negativo. Explique narrativas, "
+                    "argumentos, conflitos, formas de interação, rejeição, apoio, fadiga, confiança, "
+                    "desconfiança, ironia, personalismo e sinais de polarização quando sustentados pelos comentários. "
+                    "Nunca escreva 'a população pensa', 'os brasileiros são' ou equivalentes. Use formulações como "
+                    "'entre os comentários analisados', 'uma parcela da amostra manifesta' e 'o debate observado sugere'. "
+                    "Não invente grupos, intenções ou causas que não estejam sustentados pela amostra. "
+                    "Não reproduza nomes de usuários nem dados pessoais. Aponte contradições e limitações da amostra."
+                ),
+                response_model=SocialDiscourseAnalysisResponse,
+                schema_name="social_discourse_analysis_v1",
+                max_output_tokens=5000,
+            )
 
     analysis.status = "COMPLETED" if analyzed_indices else "COLLECTED_ONLY"
     analysis.analyzed_comments = len(analyzed_indices)
