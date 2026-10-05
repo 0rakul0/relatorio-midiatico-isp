@@ -30,7 +30,6 @@ from app.search.inventory import (
     annual_event_inventory_queries,
     official_operation_inventory_queries,
 )
-
 from app.search.guards import (
     is_redundant as _is_redundant,
     media_query_is_acceptable as _media_query_is_acceptable,
