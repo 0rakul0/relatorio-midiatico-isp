@@ -47,6 +47,8 @@ def add_social_section(
 ) -> None:
     social_comments = int(social_repercussion.get("comments") or 0)
     social_analyzed = int(social_repercussion.get("analyzed_comments") or 0)
+    social_views = int(social_repercussion.get("view_count_total") or 0)
+    social_view_posts = int(social_repercussion.get("view_count_known_posts") or 0)
     if not social_comments:
         return
 
@@ -57,33 +59,49 @@ def add_social_section(
     story.append(
         table(
             [
-                ["Posts sociais", "Comentários coletados", "Comentários analisados"],
+                ["Posts sociais", "Comentários coletados", "Comentários analisados", "Visualizações disponíveis"],
                 [
                     social_repercussion.get("posts", 0),
                     social_comments,
                     social_analyzed,
+                    social_views if social_view_posts else "N/D",
                 ],
             ],
-            [5.5 * cm, 5.5 * cm, 5.6 * cm],
+            [3.8 * cm, 4.3 * cm, 4.3 * cm, 4.2 * cm],
             small,
         )
     )
 
     platform_counts = social_repercussion.get("platform_counts") or {}
-    if platform_counts:
+    platform_views = social_repercussion.get("platform_view_counts") or {}
+    if platform_counts or platform_views:
         story.append(Paragraph("Distribuição por plataforma", heading))
+        labels = sorted(
+            set(platform_counts) | set(platform_views),
+            key=lambda label: int(platform_views.get(label, 0) or 0),
+            reverse=True,
+        )
         story.append(
             table(
-                [["Plataforma", "Comentários"]]
+                [["Plataforma", "Comentários", "Visualizações disponíveis"]]
                 + [
-                    [_social_label(label), int(count or 0)]
-                    for label, count in sorted(
-                        platform_counts.items(),
-                        key=lambda item: int(item[1] or 0),
-                        reverse=True,
-                    )
+                    [
+                        _social_label(label),
+                        int(platform_counts.get(label, 0) or 0),
+                        int(platform_views[label]) if label in platform_views else "N/D",
+                    ]
+                    for label in labels
                 ],
-                [8.3 * cm, 8.3 * cm],
+                [6.0 * cm, 4.6 * cm, 6.0 * cm],
+                small,
+            )
+        )
+
+    if social_view_posts:
+        story.append(
+            Paragraph(
+                "<b>Alcance observado:</b> "
+                + escape(text(social_repercussion.get("view_count_note") or "")),
                 small,
             )
         )
