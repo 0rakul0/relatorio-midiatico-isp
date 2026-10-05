@@ -786,6 +786,8 @@ pytest
 
 A organização segue uma regra simples: `utils/` contém apenas helpers transversais; regras específicas permanecem em pacotes de domínio como `facts/`, `search/`, `social/` e `reports/pdf/`. A camada HTTP também foi dividida em routers sob `api/`. Arquivos históricos como `fact_layer.py`, `pdf_report.py`, `services/search_planning.py` e `services/social_repercussion.py` continuam como fachadas compatíveis, para não quebrar imports existentes enquanto a implementação é distribuída em módulos menores.
 
+O `app/main.py` passou a funcionar essencialmente como **composition root**: inicializa o FastAPI, registra routers, monta arquivos estáticos, executa o lifespan e expõe apenas endpoints institucionais mínimos como health, login e configuração pública de autenticação.
+
 ```text
 app/
 ├── main.py
@@ -829,7 +831,8 @@ app/
 │   ├── deps.py                  # autorização/escopo comum das rotas
 │   ├── costs.py                 # custos de LLM
 │   ├── chat.py                  # chat sobre corpus
-│   └── reports.py               # histórico/cache/refinamento
+│   ├── reports.py               # histórico/cache/refinamento
+│   └── projects.py              # criação, execução, fatos, métricas e exportações
 │
 ├── orchestration/
 │   ├── executor.py
