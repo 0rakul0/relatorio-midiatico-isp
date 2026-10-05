@@ -655,3 +655,102 @@ def test_social_collection_promotes_apify_post_date_to_social_post(monkeypatch):
         if isinstance(entry, dict)
     )
     db.close()
+
+
+
+def test_duckduckgo_relative_days_use_retrieval_time():
+    row = {
+        "published_at": "3 days ago",
+        "published_at_raw": "3 days ago",
+        "retrieved_at": "2026-10-05T10:30:00+00:00",
+    }
+
+    published_at, source, raw = social._duckduckgo_result_date(row)
+
+    assert published_at == date(2026, 10, 2)
+    assert source == "duckduckgo_relative_date"
+    assert raw == "3 days ago"
+
+
+def test_duckduckgo_relative_date_supports_portuguese():
+    row = {
+        "published_at": "há 2 dias",
+        "retrieved_at": "2026-10-05T10:30:00+00:00",
+    }
+
+    published_at, source, raw = social._duckduckgo_result_date(row)
+
+    assert published_at == date(2026, 10, 3)
+    assert source == "duckduckgo_relative_date"
+    assert raw == "há 2 dias"
+
+
+def test_duckduckgo_relative_hours_can_cross_calendar_day():
+    row = {
+        "published_at": "5 hours ago",
+        "retrieved_at": "2026-10-05T02:00:00+00:00",
+    }
+
+    published_at, source, _raw = social._duckduckgo_result_date(row)
+
+    assert published_at == date(2026, 10, 4)
+    assert source == "duckduckgo_relative_date"
+
+
+def test_social_discovery_persists_relative_duckduckgo_date(monkeypatch):
+    db = _session()
+    project = Project(
+        topic="eleições 2026",
+        launch_date=date(2026, 1, 1),
+        collection_start=date(2026, 1, 1),
+        collection_end=date(2026, 10, 5),
+        has_custom_date_window=True,
+        project_type="GENERAL_TOPIC",
+        topic_profile={"subject_terms": ["eleições 2026"]},
+        execution_options={},
+        execution_plan={},
+    )
+    db.add(project)
+    db.commit()
+
+    monkeypatch.setattr(
+        social,
+        "get_settings",
+        lambda: SimpleNamespace(
+            social_discovery_enabled=True,
+            social_discovery_queries_per_platform=1,
+            social_discovery_results_per_query=8,
+            apify_social_max_posts_per_platform=8,
+        ),
+    )
+    monkeypatch.setattr(
+        social,
+        "discover_public_posts",
+        lambda **_kwargs: {
+            "instagram": [{
+                "title": "Eleições 2026",
+                "url": "https://www.instagram.com/p/RELDATE/",
+                "snippet": "Debate eleitoral",
+                "published_at": "3 days ago",
+                "published_at_raw": "3 days ago",
+                "retrieved_at": "2026-10-05T10:30:00+00:00",
+                "discovery_query": "site:instagram.com eleições 2026",
+            }],
+            "facebook": [],
+            "tiktok": [],
+            "x": [],
+        },
+    )
+
+    social._discover_and_persist_social_posts(db, project)
+
+    item = db.scalar(select(MediaItem).where(MediaItem.project_id == project.id))
+    assert item is not None
+    assert item.published_at == date(2026, 10, 2)
+    assert any(
+        entry.get("date_source") == "duckduckgo_relative_date"
+        and entry.get("published_at_raw") == "3 days ago"
+        for entry in (item.source_provenance or [])
+        if isinstance(entry, dict)
+    )
+    db.close()
