@@ -22,6 +22,7 @@ from .execution_profile import effective_execution_profile, execution_flags
 from .metrics import metrics
 from .pipeline import run_full_methodology
 from .project_profile import discover_project_profile
+from .public_opinion import collect_public_opinion, public_opinion_for_report
 from .reporting import draft_report_with_llm, export_report_pdf
 from .search_planning import plan_queries, plan_queries_with_llm
 from .validation import validate_and_classify, validate_video_metadata_cross_source
@@ -40,6 +41,8 @@ __all__ = [
     "collect_media_sources",
     "collect_web",
     "discover_project_profile",
+    "collect_public_opinion",
+    "public_opinion_for_report",
     "draft_report_with_llm",
     "effective_execution_profile",
     "execution_flags",
