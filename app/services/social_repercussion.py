@@ -1,26 +1,24 @@
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from urllib.parse import urlparse
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agent import get_report_agent
 from app.config import get_settings
-from app.cost_tracker import cost_context, current_run_id
+from app.cost_tracker import current_run_id
 from app.llm import llm_is_configured
 from app.models import (
     MediaItem,
     Project,
     SearchHit,
-    SocialAnalysis,
     SocialComment,
     SocialPost,
 )
-from app.schemas import SocialCommentBatchResponse, SocialDiscourseAnalysisResponse
 from app.services.collection.common import canonicalize, result_publication_date
 from app.services.collection.media_origin import REDE_SOCIAL
 from app.social.comments import (
