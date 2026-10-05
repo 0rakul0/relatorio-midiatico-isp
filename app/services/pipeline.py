@@ -24,6 +24,7 @@ from app.services.project_profile import discover_project_profile, project_paylo
 from app.services.reporting import draft_report_with_llm, refine_report_with_qa
 from app.services.search_planning import plan_report_with_llm
 from app.services.social_repercussion import collect_social_repercussion
+from app.services.public_opinion import collect_public_opinion
 
 
 def run_full_methodology(
@@ -376,6 +377,51 @@ def run_full_methodology(
                 + discovery_note,
             )
 
+    # 3c. Opinião pública: pesquisas amostrais permanecem separadas
+    # tanto do corpus jornalístico quanto dos comentários de redes sociais.
+    public_opinion = {
+        "status": "NO_SURVEYS",
+        "count": 0,
+        "surveys": [],
+    }
+    check()
+    stage(
+        "public_opinion",
+        "RUNNING",
+        "Buscando pesquisas de opinião com população, amostra, período de campo e metodologia auditáveis",
+    )
+    try:
+        public_opinion = collect_public_opinion(db, project)
+    except RuntimeError as exc:
+        public_opinion = {
+            "status": "UNAVAILABLE",
+            "count": 0,
+            "surveys": [],
+            "reason": str(exc)[:500],
+        }
+        stage(
+            "public_opinion",
+            "SKIPPED",
+            f"Camada de opinião pública indisponível: {str(exc)[:180]}",
+        )
+    else:
+        opinion_status = str(public_opinion.get("status") or "")
+        if opinion_status in {"DISABLED", "NO_SURVEYS", "DISCOVERED_ONLY"}:
+            detail = (
+                f"{public_opinion.get('candidates', 0)} fonte(s) candidata(s); "
+                f"{public_opinion.get('count', 0)} pesquisa(s) estruturada(s)"
+            )
+            if opinion_status == "DISCOVERED_ONLY":
+                detail += "; LLM indisponível para estruturar a metodologia"
+            stage("public_opinion", "SKIPPED", detail)
+        else:
+            stage(
+                "public_opinion",
+                "DONE",
+                f"{public_opinion.get('count', 0)} pesquisa(s) de opinião estruturada(s) "
+                f"a partir de {public_opinion.get('candidates', 0)} fonte(s) candidata(s)",
+            )
+
     # 4. News validation ------------------------------------------------
     validation = {
         "valid": 0,
@@ -648,6 +694,7 @@ def run_full_methodology(
         "validation": validation,
         "academic_research": academic_research,
         "social_repercussion": social_repercussion,
+        "public_opinion": public_opinion,
         "classification": classification,
         "gap_fill": gap_fill,
         "refinements": refinements,
