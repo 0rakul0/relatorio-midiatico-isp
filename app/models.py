@@ -449,6 +449,7 @@ class SocialAnalysis(Base):
     emotion_counts: Mapped[dict] = mapped_column(JSON, default=dict)
     position_counts: Mapped[dict] = mapped_column(JSON, default=dict)
     themes: Mapped[list] = mapped_column(JSON, default=list)
+    discourse_analysis: Mapped[dict] = mapped_column(JSON, default=dict)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     methodology_note: Mapped[str] = mapped_column(Text)
     generated_at: Mapped[datetime] = mapped_column(
