@@ -383,6 +383,8 @@ function render(result){
   const kit=(d.press_kit||[]).map(x=>[x.product,x.purpose]);
   const rawCorpus=result.corpus||[];
   const socialPerception=result.social_repercussion||{};
+  const publicOpinion=result.public_opinion||{};
+  const publicOpinionSurveys=publicOpinion.surveys||[];
   const socialPostInventory=socialPerception.post_inventory||[];
   const wordCloud=result.word_cloud||{};
   const academicPapers=result.academic_papers||[];
@@ -448,6 +450,44 @@ function render(result){
     ? ` Separadamente, ${socialPostInventory.length} post(s) social(is) foram monitorado(s) para a análise de comentários; eles não são somados ao corpus jornalístico validado.`
     : '';
   const relatedSummary=`<p class="related-intro">${displayCorpusCount} item(ns) único(s) validados no corpus principal: ${socialItems.length} em mídias sociais, ${youtubeItems.length} no YouTube e ${portalItems.length} em portais de notícias.${duplicateNote}${socialMonitoringNote} O detalhamento auditável está nos anexos.</p><p class="note">Origem: <span class="origin-badge new">Nova coleta</span> = coletado desta vez; <span class="origin-badge reused">Corpus reutilizado</span> = reaproveitado de coleta anterior.</p>`;
+
+  const publicOpinionSection=publicOpinionSurveys.length? `
+    <h2>Opinião pública sobre o tema</h2>
+    ${d.public_opinion_summary?`<p class="related-intro">${esc(d.public_opinion_summary)}</p>`:''}
+    <p class="note">Pesquisas de opinião são apresentadas separadamente da cobertura jornalística e das redes sociais. Cada resultado deve ser interpretado dentro do universo pesquisado e da metodologia declarada.</p>
+    ${table(
+      ['Instituto','Campo','População / amostra','Metodologia','Fonte'],
+      publicOpinionSurveys.map(survey=>{
+        const start=survey.field_start||'',end=survey.field_end||'';
+        const field=start&&end?`${start} a ${end}`:(start||end||'N/D');
+        const population=[survey.population||'N/D',survey.sample_size?`n=${survey.sample_size}`:''].filter(Boolean).join(' · ');
+        const methodology=[survey.sampling_method,survey.margin_of_error,survey.confidence_level].filter(Boolean).join(' · ')||survey.methodology||'N/D';
+        return [
+          survey.institute||'N/D',
+          field,
+          population,
+          methodology,
+          survey.source_url?raw(`<a href="${esc(survey.source_url)}" target="_blank" rel="noreferrer">Abrir</a>`):'N/D'
+        ];
+      })
+    )}
+    ${(()=>{
+      const rows=[];
+      for(const survey of publicOpinionSurveys){
+        for(const indicator of (survey.indicators||[])){
+          const result=[indicator.value,indicator.unit].filter(Boolean).join(' ');
+          rows.push([
+            survey.institute||'N/D',
+            indicator.question||indicator.label||'Indicador',
+            result||'N/D',
+            indicator.subgroup||survey.representative_scope||'Total da amostra'
+          ]);
+        }
+      }
+      return rows.length?'<h3>Indicadores de opinião pública</h3>'+table(['Instituto','Indicador / pergunta','Resultado','Recorte'],rows):'';
+    })()}
+    <p class="note"><strong>Nota metodológica:</strong> ${esc(publicOpinion.methodology_note||'Os resultados devem ser lidos dentro da população-alvo, do período de campo e da metodologia declarada por cada pesquisa.')}</p>
+  `: '';
 
   const socialLabel=value=>({
     instagram:'Instagram',facebook:'Facebook',x:'X',
@@ -549,6 +589,7 @@ function render(result){
     ${academicSection}
     <h2>Itens relacionados encontrados</h2>
     ${relatedSummary}
+    ${publicOpinionSection}
     ${socialSection}
     ${operationSection}
     ${factSection}
