@@ -819,7 +819,8 @@ app/
 │
 ├── facts/
 │   ├── normalization.py         # identidade, datas e normalização factual
-│   └── operations.py            # tabela-mestra e inventário de operações
+│   ├── operations.py            # tabela-mestra e inventário de operações
+│   └── reporting.py             # projeções auditáveis e filtros do relatório
 │
 ├── search/
 │   ├── guards.py                # âncoras, similaridade e redundância
