@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Relatório de Repercussão Midiática</title>
-  <link rel="stylesheet" href="/static/styles.css?v=25">
+  <link rel="stylesheet" href="/static/styles.css?v=26">
 </head>
 <body>
 <header class="top index-top screen-only">
@@ -91,6 +91,27 @@
     <div id="run-steps" class="run-steps" aria-label="Etapas da execução"></div>
     <div id="run-stage-detail" class="run-stage-detail"></div>
 </section>
+
+      <section id="research-audit" class="research-audit hidden" aria-live="polite">
+        <div class="research-audit-head">
+          <div>
+            <span class="section-kicker">Trilha de auditoria</span>
+            <h3>Interpretação do tema e estratégia de busca</h3>
+            <p>Veja o que o sistema entendeu e quais consultas serão executadas antes da coleta.</p>
+          </div>
+          <span id="research-audit-status" class="research-audit-status">Aguardando perfil</span>
+        </div>
+        <div class="research-audit-grid">
+          <details id="topic-interpretation-card" class="research-audit-card" open>
+            <summary>1. Como o tema foi interpretado</summary>
+            <div id="topic-interpretation-content" class="research-audit-content"></div>
+          </details>
+          <details id="search-strategy-card" class="research-audit-card" open>
+            <summary>2. Como será pesquisado</summary>
+            <div id="search-strategy-content" class="research-audit-content"></div>
+          </details>
+        </div>
+      </section>
     </section>
     <aside class="panel history">
       <h2>Histórico</h2><p class="note">Últimas versões geradas.</p><div id="history-list" class="history-list">Carregando…</div>
@@ -110,6 +131,6 @@
 <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3-cloud@1.2.9/build/d3.layout.cloud.js"></script>
 <script src="/static/auth.js?v=3"></script>
-<script src="/static/app.js?v=20"></script>
+<script src="/static/app.js?v=21"></script>
 </body>
 </html>
