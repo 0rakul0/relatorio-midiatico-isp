@@ -50,6 +50,9 @@ def test_social_collection_persists_comments_without_author_identity(monkeypatch
         lambda: SimpleNamespace(
             apify_social_enabled=True,
             apify_api_token="token",
+            social_discovery_enabled=False,
+            social_discovery_queries_per_platform=2,
+            social_discovery_results_per_query=8,
             apify_instagram_comments_actor_id="apify/instagram-comment-scraper",
             apify_facebook_comments_actor_id="apify/facebook-comments-scraper",
             apify_tiktok_comments_actor_id="clockworks/tiktok-comments-scraper",
@@ -219,4 +222,70 @@ def test_social_candidates_accept_duckduckgo_and_reused_provenance():
     assert "https://www.instagram.com/p/DDG123/" in urls
     assert "https://www.instagram.com/p/REUSED123/" in urls
     assert "https://www.instagram.com/p/MANUAL123/" not in urls
+    db.close()
+
+
+
+def test_social_discovery_persists_direct_post_urls(monkeypatch):
+    db = _session()
+    project = Project(
+        topic="polarização política no Brasil em 2026",
+        launch_date=date(2026, 1, 1),
+        collection_start=date(2026, 1, 1),
+        collection_end=date(2026, 10, 5),
+        has_custom_date_window=True,
+        project_type="GENERAL_TOPIC",
+        topic_profile={
+            "search_synonyms": [
+                "polarização política Brasil 2026",
+                "Lula Bolsonaro polarização",
+            ]
+        },
+        execution_options={},
+        execution_plan={},
+    )
+    db.add(project)
+    db.commit()
+
+    monkeypatch.setattr(
+        social,
+        "get_settings",
+        lambda: SimpleNamespace(
+            social_discovery_enabled=True,
+            social_discovery_queries_per_platform=2,
+            social_discovery_results_per_query=8,
+            apify_social_max_posts_per_platform=8,
+        ),
+    )
+    monkeypatch.setattr(
+        social,
+        "discover_public_posts",
+        lambda **_kwargs: {
+            "instagram": [{
+                "title": "Debate sobre polarização",
+                "url": "https://www.instagram.com/p/POLAR123/",
+                "snippet": "Discussão sobre polarização política.",
+                "provider": "duckduckgo_social",
+                "discovery_query": 'site:instagram.com "polarização política Brasil 2026"',
+            }],
+            "facebook": [],
+            "tiktok": [],
+            "x": [{
+                "title": "Polarização e eleições",
+                "url": "https://x.com/exemplo/status/123456",
+                "snippet": "Debate eleitoral.",
+                "provider": "duckduckgo_social",
+                "discovery_query": 'site:x.com "Lula Bolsonaro polarização"',
+            }],
+        },
+    )
+
+    stats = social._discover_and_persist_social_posts(db, project)
+
+    assert stats["eligible_posts"] == 2
+    assert stats["new_items"] == 2
+    rows = db.scalars(select(MediaItem).where(MediaItem.project_id == project.id)).all()
+    assert len(rows) == 2
+    assert all(row.media_origin == "REDE_SOCIAL" for row in rows)
+    assert all(row.search_source == "duckduckgo_social" for row in rows)
     db.close()
