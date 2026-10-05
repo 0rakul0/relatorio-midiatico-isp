@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.agent import get_report_agent
 from app.config import get_settings
-from app.cost_tracker import cost_context
+from app.cost_tracker import cost_context, current_run_id
 from app.llm import llm_is_configured
 from app.models import (
     MediaItem,
@@ -22,7 +22,13 @@ from app.models import (
     SocialPost,
 )
 from app.schemas import SocialCommentBatchResponse
-from app.tools.social import SocialCollectionUnavailable, collect_public_comments
+from app.services.collection.common import canonicalize, result_publication_date
+from app.services.collection.media_origin import REDE_SOCIAL
+from app.tools.social import (
+    SocialCollectionUnavailable,
+    collect_public_comments,
+    discover_public_posts,
+)
 
 
 METHODOLOGY_NOTE = (
@@ -139,6 +145,165 @@ def _candidate_urls(
         for platform, rows in found.items()
         if rows
     }
+
+
+def _social_discovery_terms(project: Project) -> list[str]:
+    profile = project.topic_profile or {}
+    values = [project.topic]
+    for key in ("search_synonyms", "subject_terms", "actors", "actions"):
+        raw = profile.get(key)
+        if isinstance(raw, list):
+            values.extend(str(value) for value in raw if str(value).strip())
+    cleaned = []
+    for value in values:
+        text = " ".join(str(value or "").split()).strip()
+        if len(text) < 3:
+            continue
+        if text.casefold() in {item.casefold() for item in cleaned}:
+            continue
+        cleaned.append(text)
+    return cleaned
+
+
+def _discover_and_persist_social_posts(
+    db: Session,
+    project: Project,
+) -> dict[str, int]:
+    settings = get_settings()
+    if not getattr(settings, "social_discovery_enabled", True):
+        return {"queries": 0, "returned": 0, "eligible_posts": 0, "new_items": 0}
+
+    terms = _social_discovery_terms(project)
+    query_terms = terms[: max(1, int(settings.social_discovery_queries_per_platform))]
+    discovered = discover_public_posts(
+        terms=query_terms,
+        max_queries_per_platform=settings.social_discovery_queries_per_platform,
+        results_per_query=settings.social_discovery_results_per_query,
+    )
+
+    existing = {
+        item.canonical_url: item
+        for item in db.scalars(
+            select(MediaItem).where(MediaItem.project_id == project.id)
+        ).all()
+        if item.canonical_url
+    }
+    stats = {
+        "queries": len(query_terms) * 4,
+        "returned": sum(len(rows) for rows in discovered.values()),
+        "eligible_posts": 0,
+        "new_items": 0,
+    }
+
+    per_platform_limit = max(1, int(settings.apify_social_max_posts_per_platform))
+    for platform, rows in discovered.items():
+        accepted_for_platform = 0
+        for row in rows:
+            if accepted_for_platform >= per_platform_limit:
+                break
+            url = str(row.get("url") or "").strip()
+            if _platform_for_url(url) != platform:
+                continue
+
+            stats["eligible_posts"] += 1
+            accepted_for_platform += 1
+            canonical = canonicalize(url)
+            domain = urlparse(url).netloc.lower().split(":", 1)[0]
+            title = str(row.get("title") or "Post social").strip() or "Post social"
+            snippet = str(row.get("snippet") or "").strip() or None
+            published_at = result_publication_date(row.get("published_at"))
+            query = str(row.get("discovery_query") or "").strip() or None
+
+            item = existing.get(canonical)
+            if item is None:
+                item = MediaItem(
+                    project_id=project.id,
+                    title=title,
+                    url=url,
+                    canonical_url=canonical,
+                    domain=domain,
+                    published_at=published_at,
+                    snippet=snippet,
+                    content=snippet or "",
+                    source_name=domain,
+                    search_source="duckduckgo_social",
+                    media_origin=REDE_SOCIAL,
+                    source_provenance=[{
+                        "source": "duckduckgo_social",
+                        "provider": "duckduckgo",
+                        "query": query,
+                        "platform": platform,
+                        "url": url,
+                        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    }],
+                    discovery_purposes=["SOCIAL_DISCOVERY"],
+                    status="PENDING",
+                    fact_status="PENDING",
+                )
+                db.add(item)
+                db.flush()
+                existing[canonical] = item
+                stats["new_items"] += 1
+            else:
+                provenance = list(item.source_provenance or [])
+                if not any(
+                    isinstance(entry, dict)
+                    and entry.get("source") == "duckduckgo_social"
+                    and entry.get("query") == query
+                    for entry in provenance
+                ):
+                    provenance.append({
+                        "source": "duckduckgo_social",
+                        "provider": "duckduckgo",
+                        "query": query,
+                        "platform": platform,
+                        "url": url,
+                        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                    item.source_provenance = provenance
+                purposes = list(item.discovery_purposes or [])
+                if "SOCIAL_DISCOVERY" not in purposes:
+                    purposes.append("SOCIAL_DISCOVERY")
+                    item.discovery_purposes = purposes
+                if not item.media_origin:
+                    item.media_origin = REDE_SOCIAL
+
+            db.add(SearchHit(
+                project_id=project.id,
+                run_id=current_run_id(),
+                search_query_id=None,
+                media_item_id=item.id,
+                provider="duckduckgo_social",
+                purpose="SOCIAL_DISCOVERY",
+                media_origin=REDE_SOCIAL,
+                query=query,
+                target=platform,
+                title=title,
+                url=url,
+                canonical_url=canonical,
+                domain=domain,
+                published_at=published_at,
+                published_at_raw=(
+                    str(row.get("published_at"))
+                    if row.get("published_at") not in (None, "")
+                    else None
+                ),
+                snippet=snippet,
+                content=snippet,
+                source_name=domain,
+                technical_status="COLLECTED",
+                technical_flags=[],
+                raw_payload={
+                    "provider": "duckduckgo_social",
+                    "platform": platform,
+                    "query": query,
+                },
+                retrieved_at=datetime.now(timezone.utc),
+            ))
+
+    db.commit()
+    return stats
+
 
 def _historical_post(db: Session, project_id: int, platform: str, url: str) -> SocialPost | None:
     key = _url_key(url)
@@ -680,32 +845,38 @@ def analyze_social_comments(db: Session, project: Project) -> dict:
 
 def collect_social_repercussion(db: Session, project: Project) -> dict:
     settings = get_settings()
+
+    discovery = _discover_and_persist_social_posts(db, project)
+    candidates = _candidate_urls(db, project.id)
+    discovered_posts = sum(len(rows) for rows in candidates.values())
+
     if not settings.apify_social_enabled:
         return {
-            "status": "DISABLED",
-            "reason": "APIFY_SOCIAL_ENABLED=false",
-            "posts": 0,
+            "status": "DISCOVERED_ONLY" if discovered_posts else "DISABLED",
+            "reason": "Apify desativado; descoberta social via DuckDuckGo preservada.",
+            "posts": discovered_posts,
             "comments": 0,
-            "platforms": {},
+            "platforms": {platform: len(rows) for platform, rows in candidates.items()},
+            "discovery": discovery,
             "methodology_note": METHODOLOGY_NOTE,
         }
     if not settings.apify_api_token:
         return {
-            "status": "NOT_CONFIGURED",
-            "reason": "APIFY_API_TOKEN nao configurado",
-            "posts": 0,
+            "status": "DISCOVERED_ONLY" if discovered_posts else "NOT_CONFIGURED",
+            "reason": "APIFY_API_TOKEN nao configurado; posts publicos ainda foram descobertos via DuckDuckGo.",
+            "posts": discovered_posts,
             "comments": 0,
-            "platforms": {},
+            "platforms": {platform: len(rows) for platform, rows in candidates.items()},
+            "discovery": discovery,
             "methodology_note": METHODOLOGY_NOTE,
         }
 
-    candidates = _candidate_urls(db, project.id)
     if not candidates:
         return {
             "status": "NO_POSTS",
             "reason": (
-                "DuckDuckGo nao localizou posts sociais publicos elegiveis "
-                "na amostra"
+                "A busca social dedicada no DuckDuckGo nao localizou posts "
+                "publicos elegiveis na amostra"
             ),
             "posts": 0,
             "comments": 0,
