@@ -45,6 +45,14 @@ from app.search.gap_fill import (
 _INITIAL_PURPOSES = {"MEDIA_REPERCUSSION", "FACT_DISCOVERY", "OFFICIAL_FACT"}
 
 
+def _existing_queries(db: Session, project_id: int) -> set[str]:
+    return set(
+        db.scalars(
+            select(SearchQuery.query).where(SearchQuery.project_id == project_id)
+        ).all()
+    )
+
+
 def _annual_event_inventory_queries(project: Project) -> list[tuple[str, str]]:
     return annual_event_inventory_queries(project, settings=get_settings())
 
