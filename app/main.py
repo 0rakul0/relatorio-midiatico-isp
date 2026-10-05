@@ -90,7 +90,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="ISP Repercussão Midiática", version="0.3.3", lifespan=lifespan)
+app = FastAPI(title="ISP Repercussão Midiática", version="0.3.4", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(billing_router)
 
@@ -110,7 +110,7 @@ def health():
     settings = get_settings()
     return {
         "status": "ok",
-        "version": "0.3.3",
+        "version": "0.3.4",
         "features": {"qa_history_refinement": True, "qa_refinement_paths": ["/reports/history/{project_id}/refine", "/projects/{project_id}/refine-qa-async"]},
         "search_limits": {
             "max_search_results": settings.max_search_results,
@@ -619,6 +619,101 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db), user: 
             "status": "DEFERRED",
             "message": "O perfil será executado como a primeira etapa acompanhada do relatório.",
         },
+    }
+
+
+@app.get("/projects/{project_id}/research-plan")
+def project_research_plan(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """Expõe a interpretação do tema e a estratégia de busca sem nova chamada à LLM."""
+    project = project_or_404(db, user, project_id)
+    profile = project.topic_profile or {}
+    options = project.execution_options or {}
+    execution_plan = project.execution_plan or {}
+
+    queries = db.scalars(
+        select(SearchQuery)
+        .where(SearchQuery.project_id == project_id)
+        .order_by(SearchQuery.priority.asc(), SearchQuery.id.asc())
+    ).all()
+
+    project_type_labels = {
+        "INSTITUTIONAL_PRODUCT": "Produto institucional",
+        "EVENT_TOPIC": "Tema factual / evento",
+        "GENERAL_TOPIC": "Tema geral",
+        "AUTO": "Classificação automática",
+    }
+
+    primary_anchor = (
+        profile.get("product_name")
+        or profile.get("event_anchor")
+        or profile.get("product_anchor")
+        or project.topic
+    )
+
+    variants = []
+    for key in (
+        "product_search_variants",
+        "event_search_variants",
+        "fact_discovery_variants",
+        "search_synonyms",
+    ):
+        value = profile.get(key)
+        if isinstance(value, list):
+            variants.extend(str(item).strip() for item in value if str(item).strip())
+    variants = list(dict.fromkeys(variants))
+
+    entities = {
+        "atores": list(profile.get("actors") or []),
+        "ações": list(profile.get("actions") or []),
+        "locais": list(profile.get("locations") or []),
+        "organizações": list(profile.get("organizations") or []),
+        "assuntos": list(profile.get("subject_terms") or []),
+    }
+
+    return {
+        "project_id": project.id,
+        "original_topic": project.topic,
+        "interpreted_topic": primary_anchor,
+        "project_type": project.project_type,
+        "project_type_label": project_type_labels.get(project.project_type, project.project_type),
+        "temporal_mode": options.get("temporal_mode"),
+        "collection_window": {
+            "start": project.collection_start.isoformat() if project.has_custom_date_window and project.collection_start else None,
+            "end": project.collection_end.isoformat() if project.has_custom_date_window and project.collection_end else None,
+            "source": options.get("collection_window_source"),
+        },
+        "event_window": {
+            "start": project.event_start.isoformat() if project.event_start else None,
+            "end": project.event_end.isoformat() if project.event_end else None,
+            "source": options.get("event_window_source"),
+        },
+        "geographic_scopes": list(options.get("geographic_scopes") or []),
+        "corrections_and_variants": variants,
+        "entities": entities,
+        "inclusion_rules": list(profile.get("inclusion_rules") or []),
+        "exclusion_rules": list(profile.get("exclusion_rules") or []),
+        "search_strategy": profile.get("search_strategy") or {},
+        "execution_plan": execution_plan,
+        "queries": [
+            {
+                "id": row.id,
+                "query": row.query,
+                "kind": row.kind,
+                "purpose": row.purpose,
+                "rationale": row.rationale,
+                "priority": row.priority,
+                "execution_status": row.execution_status,
+                "executed_at": row.executed_at.isoformat() if row.executed_at else None,
+                "providers_attempted": list(row.providers_attempted or []),
+                "results_returned": row.results_returned,
+                "results_accepted": row.results_accepted,
+            }
+            for row in queries
+        ],
     }
 
 
