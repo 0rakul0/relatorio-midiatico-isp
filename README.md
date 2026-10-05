@@ -827,6 +827,10 @@ app/
 │   ├── operations.py            # tabela-mestra e inventário de operações
 │   └── reporting.py             # projeções auditáveis e filtros do relatório
 │
+├── topics/
+│   ├── temporal.py              # normalização textual e janelas temporais
+│   └── locations.py             # aliases e variantes geográficas
+│
 ├── search/
 │   ├── guards.py                # âncoras, similaridade e redundância
 │   ├── persistence.py           # criação/idempotência das consultas
@@ -859,6 +863,7 @@ app/
 │       ├── corpus.py            # deduplicação e buckets por origem
 │       ├── facts.py             # verificação factual
 │       ├── helpers.py           # labels e links
+│       ├── layout.py            # estilos, documento e paginação
 │       ├── operations.py        # inventário de operações
 │       ├── public_opinion.py    # pesquisas de opinião pública
 │       ├── social.py            # percepção observada nas redes
@@ -870,7 +875,9 @@ app/
 │   ├── costs.py                 # custos de LLM
 │   ├── chat.py                  # chat sobre corpus
 │   ├── reports.py               # histórico/cache/refinamento
-│   ├── projects.py              # criação, plano, coleta e métricas
+│   ├── projects.py              # criação e prévia metodológica
+│   ├── project_search.py        # perfil, planejamento e consultas
+│   ├── project_collection.py    # coleta, validação, classificação e métricas
 │   ├── runs.py                  # execução assíncrona e cancelamento
 │   ├── facts.py                 # fatos oficiais e evidências
 │   └── project_reports.py       # relatório, QA e exportações
