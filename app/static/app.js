@@ -475,6 +475,23 @@ function render(result){
   const themeRows=(socialPerception.themes||[]).map((item,i)=>[
     String(i+1),item.theme||'N/D',String(Number(item.count||0))
   ]);
+  const discourse=socialPerception.discourse_analysis||{};
+  const discourseGroup=(title,rows)=>{
+    const clean=(rows||[]).filter(x=>x&&(x.title||x.analysis));
+    if(!clean.length)return '';
+    return `<h3>${esc(title)}</h3><div class="social-discourse-list">${clean.map(x=>`<p><strong>${esc(x.title||'Achado')}:</strong> ${esc(x.analysis||'')}</p>`).join('')}</div>`;
+  };
+  const discourseSection=Object.keys(discourse).length?`
+    <h3>Leitura qualitativa dos comentários</h3>
+    ${discourse.overall_reading?`<p class="related-intro">${esc(discourse.overall_reading)}</p>`:''}
+    ${discourseGroup('Narrativas dominantes',discourse.dominant_narratives)}
+    ${discourseGroup('Argumentos recorrentes',discourse.recurring_arguments)}
+    ${discourseGroup('Tensões e contradições',discourse.tensions_and_contradictions)}
+    ${discourseGroup('Formas de interação',discourse.interaction_patterns)}
+    ${discourse.polarization_signals?`<h3>Sinais de polarização na amostra</h3><p>${esc(discourse.polarization_signals)}</p>`:''}
+    ${discourse.sample_limitations?`<p class="note"><strong>Limitações da leitura social:</strong> ${esc(discourse.sample_limitations)}</p>`:''}
+  `: '';
+
   const socialSection=socialComments? `
     <h2>Percepção observada nas redes sociais</h2>
     <p class="related-intro">${esc(socialPerception.summary||'Comentários públicos coletados e analisados como camada complementar.')}</p>
@@ -488,6 +505,7 @@ function render(result){
     ${socialAnalyzed&&Object.keys(socialPerception.emotion_counts||{}).length?'<h3>Emoções observadas</h3>'+table(['Classificação','Comentários','Participação na amostra'],socialRows(socialPerception.emotion_counts,socialAnalyzed)):''}
     ${socialAnalyzed&&Object.keys(socialPerception.position_counts||{}).length?'<h3>Posição em relação ao tema</h3>'+table(['Classificação','Comentários','Participação na amostra'],socialRows(socialPerception.position_counts,socialAnalyzed)):''}
     ${themeRows.length?'<h3>Temas recorrentes nos comentários</h3>'+table(['#','Tema','Ocorrências'],themeRows):''}
+    ${discourseSection}
     <p class="note"><strong>Nota metodológica:</strong> ${esc(socialPerception.methodology_note||'Esta camada descreve somente a amostra de comentários públicos coletada e não representa a população.')}</p>
   `: '';
 
