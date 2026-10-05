@@ -93,61 +93,6 @@ def requested_topic_window(topic: str) -> tuple[date, date] | None:
     return start, end
 
 
-def _clean_phrase(value: str | None) -> str:
-    return " ".join((value or "").split()).strip()
-
-
-def canonicalize_known_locations(text: str) -> str:
-    """Corrige apenas aliases geograficos conhecidos, preservando o restante."""
-
-    value = _clean_phrase(text)
-    if not value:
-        return ""
-
-    corrected = value
-    for alias, canonical in KNOWN_LOCATION_ALIASES.items():
-        corrected = re.sub(
-            rf"\b{re.escape(alias)}\b",
-            canonical,
-            corrected,
-            flags=re.IGNORECASE,
-        )
-    return corrected
-
-
-def location_topic_variants(topic: str) -> tuple[list[str], list[str]]:
-    """Retorna locais reconhecidos e variantes ancoradas do tema para busca.
-
-    A variante canonica vem primeiro. A grafia original e mantida como consulta
-    complementar quando realmente difere, permitindo auditoria sem deixar um
-    erro ortografico dominar a busca principal.
-    """
-
-    original = _clean_phrase(topic)
-    if not original:
-        return [], []
-
-    normalized = normalized_text(original)
-    locations: list[str] = []
-
-    for alias, canonical in KNOWN_LOCATION_ALIASES.items():
-        if re.search(rf"\b{re.escape(alias)}\b", normalized):
-            locations.append(canonical)
-
-    if "rio de janeiro" in normalized or re.search(r"\brj\b", normalized):
-        locations.extend(["Rio de Janeiro", "RJ", "estado do Rio de Janeiro"])
-
-    canonical_topic = canonicalize_known_locations(original)
-    variants = [canonical_topic]
-    if normalized_text(canonical_topic) != normalized_text(original):
-        variants.append(original)
-
-    return (
-        list(dict.fromkeys(location for location in locations if location)),
-        list(dict.fromkeys(variant for variant in variants if variant)),
-    )
-
-
 def product_anchor_from_name(product_name: str | None) -> str | None:
     """Deriva uma ancora nominal estavel sem transformar o produto em tokens soltos.
 
