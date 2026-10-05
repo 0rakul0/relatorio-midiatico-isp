@@ -38,6 +38,7 @@ O MVP operacional reúne, em uma única trilha auditável, descoberta, validaç�
 - amostragem hierárquica de comentários por **plataforma → post → comentário**, combinando exemplos mais curtidos, mais respondidos, recentes e de baixo engajamento para reduzir a dominância de poucos posts muito movimentados;
 - classificação dos comentários por sentimento, emoção, posição e temas, seguida de análise qualitativa/discursiva das narrativas, argumentos recorrentes, tensões, formas de interação e sinais de polarização observados na amostra;
 - separação explícita entre corpus jornalístico validado e camada social monitorada: posts e comentários permanecem auditáveis em anexo próprio, sem serem somados às métricas de notícias validadas;
+- camada independente de **opinião pública**, que procura levantamentos com população-alvo, amostra, período de campo e metodologia declarados, estrutura indicadores e preserva instituto, recorte e limitações sem confundir esses resultados com comentários em redes sociais;
 - persistência dos resultados brutos, inclusive itens posteriormente rejeitados, preservando a trilha de auditoria;
 - hidratação, validação semântica, deduplicação e reutilização do corpus histórico;
 - camada factual opcional para pessoas, eventos, locais, circunstâncias e operações policiais;
@@ -371,7 +372,45 @@ A classificação produz agregados de sentimento, emoção, posição e temas. E
 
 Comentários representam **reação e percepção pública observável**, e não evidência factual. Posts monitorados e comentários permanecem fora do corpus jornalístico validado, mas são apresentados em seção própria e em anexo auditável com plataforma, data quando recuperável, referência, quantidade de comentários, método de descoberta e link.
 
-### 3.8 Consolidação e proveniência
+### 3.8 Opinião pública
+
+A opinião pública é tratada como uma terceira camada, independente da cobertura jornalística e da percepção social online. O sistema abre consultas específicas para localizar pesquisas e levantamentos relacionados ao tema, hidrata as fontes candidatas e extrai apenas resultados que possuam base metodológica suficiente para auditoria.
+
+A estrutura preservada inclui, quando disponível:
+
+```text
+instituto / patrocinador
+população ou universo pesquisado
+geografia
+período de campo
+tamanho da amostra
+margem de erro
+nível de confiança
+metodologia / amostragem
+indicadores e resultados
+escopo de representatividade
+limitações declaradas
+fonte
+```
+
+Enquetes abertas, curtidas, comentários, visualizações ou votações espontâneas em sites e redes sociais não são promovidas a pesquisa de opinião. Da mesma forma, um levantamento com eleitores, moradores de determinada região ou participantes de painel é descrito dentro desse universo; o sistema não o converte automaticamente em opinião de toda a população.
+
+No relatório, as três camadas permanecem separadas:
+
+```text
+repercussão midiática
+    = o que a mídia publicou e como enquadrou o tema
+
+opinião pública
+    = o que levantamentos amostrais mediram no universo pesquisado
+
+percepção social online
+    = discursos, emoções e argumentos nos comentários monitorados
+```
+
+Essa separação permite combinar contexto midiático, medidas amostrais e comportamento discursivo sem atribuir representatividade estatística aos comentários de redes sociais.
+
+### 3.9 Consolidação e proveniência
 
 Resultados que representam o mesmo endereço são consolidados em `MediaItem`, preservando a proveniência de suas diferentes descobertas.
 
@@ -385,7 +424,7 @@ YOUTUBE
 
 Além da URL, são preservados título, domínio, data de publicação, snippet, corpo textual quando recuperável, fonte, consulta de origem e horário de recuperação.
 
-### 3.9 Hidratação e validação semântica
+### 3.10 Hidratação e validação semântica
 
 O snippet retornado pelo mecanismo de busca pode ser insuficiente para decidir se uma matéria realmente pertence ao tema. Por isso, antes da validação semântica, o sistema pode recuperar o conteúdo integral da página.
 
@@ -399,7 +438,7 @@ resultado da busca ≠ item válido de repercussão
 
 A busca maximiza recuperação; a validação decide pertencimento ao corpus analítico.
 
-### 3.10 Camada factual
+### 3.11 Camada factual
 
 Em pautas que exigem identificação de eventos, vítimas, locais ou circunstâncias, uma camada factual separada estrutura afirmações e suas evidências.
 
@@ -423,7 +462,7 @@ resolução final
 
 Essa separação reduz o risco de inferir que uma matéria pertence à repercussão apenas porque foi útil para confirmar determinado fato.
 
-### 3.11 Memória global do corpus
+### 3.12 Memória global do corpus
 
 Uma característica central do sistema é não tratar cada relatório como uma investigação isolada.
 
@@ -441,7 +480,7 @@ A relação entre projeto e documento permanece separada em `ProjectCorpusLink`.
 
 Uma matéria considerada válida para o Projeto A pode ser recuperada no Projeto B, porém volta a ser avaliada em relação ao novo tema.
 
-### 3.12 Recuperação semântica
+### 3.13 Recuperação semântica
 
 Antes de abrir novas pesquisas externas, projetos anteriores semanticamente próximos são examinados.
 
@@ -461,7 +500,7 @@ Os embeddings utilizam `text-embedding-3-small` quando o endpoint OpenAI está c
 
 O corpus reutilizado não elimina automaticamente novas buscas. Ele serve como ponto de partida; o planejador pode reduzir consultas redundantes e posteriormente procurar lacunas de cobertura.
 
-### 3.13 Aprendizado supervisionado incremental
+### 3.14 Aprendizado supervisionado incremental
 
 Após a validação, decisões `VALID` e `NOT_RELATED` são convertidas em `RelevanceTrainingExample`.
 
@@ -493,7 +532,7 @@ decisão final
 
 Dessa maneira, o sistema aprende com o uso sem transformar previsões do modelo em verdade não supervisionada.
 
-### 3.14 Cobertura complementar
+### 3.15 Cobertura complementar
 
 Após validação e classificação, o sistema verifica lacunas, especialmente em veículos prioritários. Se a cobertura estiver incompleta, uma segunda fase pode gerar consultas adicionais.
 
@@ -501,7 +540,7 @@ O `gap_fill` ocorre **depois** da primeira análise. Portanto, a pergunta deixa 
 
 Essa estratégia reduz buscas redundantes.
 
-### 3.15 Geração e controle de qualidade
+### 3.16 Geração e controle de qualidade
 
 A redação é produzida apenas após consolidação do corpus, fatos e métricas. O relatório gerado é submetido a QA determinístico e, quando habilitado, QA por LLM.
 
@@ -538,6 +577,7 @@ Os principais resultados funcionais são:
 - suporte a portais de notícias, YouTube e redes sociais sem transformar os conectores especializados em mecanismos paralelos de descoberta;
 - Apify restrito ao enriquecimento de posts sociais previamente descobertos pelo DuckDuckGo;
 - camada de percepção observada em comentários públicos de Instagram, Facebook, TikTok e X quando posts elegíveis forem descobertos e o Apify estiver configurado;
+- camada de opinião pública baseada em levantamentos estruturados, com preservação de universo pesquisado, amostra, campo, metodologia, indicadores e limitações;
 - persistência separada de posts/comentários, sem misturar comentários ao corpus jornalístico;
 - agregação de sentimento, emoções, posição e temas recorrentes com ressalva explícita de não representatividade populacional;
 - tratamento independente das janelas factual e midiática;
@@ -769,6 +809,7 @@ app/
 │   ├── classification.py
 │   ├── reporting.py
 │   ├── social_repercussion.py
+│   ├── public_opinion.py
 │   └── collection/
 │
 └── tools/
