@@ -11,6 +11,7 @@ import gzip
 import zlib
 
 import ipaddress
+from datetime import datetime, timezone
 import random
 import socket
 import time
@@ -98,6 +99,7 @@ def search_text(
                 max_results=max(1, max_results),
             )
         normalized: list[dict[str, Any]] = []
+        retrieved_at = datetime.now(timezone.utc).isoformat()
         for row in rows:
             url = str(row.get("href") or row.get("url") or "").strip()
             if not url:
@@ -108,6 +110,8 @@ def search_text(
                     "url": url,
                     "snippet": row.get("body") or row.get("description"),
                     "published_at": row.get("date") or row.get("published"),
+                    "published_at_raw": row.get("date") or row.get("published"),
+                    "retrieved_at": retrieved_at,
                     "source_name": row.get("source") or urlparse(url).netloc.lower(),
                     "provider": "duckduckgo_text",
                     "raw": row,
@@ -137,6 +141,7 @@ def search_news(
                 max_results=max(1, max_results),
             )
         normalized: list[dict[str, Any]] = []
+        retrieved_at = datetime.now(timezone.utc).isoformat()
         for row in rows:
             url = str(row.get("url") or row.get("href") or "").strip()
             if not url:
@@ -147,6 +152,8 @@ def search_news(
                     "url": url,
                     "snippet": row.get("body") or row.get("description"),
                     "published_at": row.get("date") or row.get("published"),
+                    "published_at_raw": row.get("date") or row.get("published"),
+                    "retrieved_at": retrieved_at,
                     "source_name": row.get("source") or urlparse(url).netloc.lower(),
                     "provider": "duckduckgo_news",
                     "raw": row,
