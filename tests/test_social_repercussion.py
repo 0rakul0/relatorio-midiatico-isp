@@ -289,3 +289,75 @@ def test_social_discovery_persists_direct_post_urls(monkeypatch):
     assert all(row.media_origin == "REDE_SOCIAL" for row in rows)
     assert all(row.search_source == "duckduckgo_social" for row in rows)
     db.close()
+
+
+
+def test_social_report_exposes_post_inventory_with_comment_counts():
+    db = _session()
+    project = Project(
+        topic="tema social auditável",
+        launch_date=date(2026, 1, 1),
+        collection_start=date(2026, 1, 1),
+        collection_end=date(2026, 10, 5),
+        has_custom_date_window=True,
+        project_type="GENERAL_TOPIC",
+        topic_profile={},
+        execution_options={},
+        execution_plan={},
+    )
+    db.add(project)
+    db.flush()
+    item = MediaItem(
+        project_id=project.id,
+        title="Post sobre o tema",
+        url="https://x.com/exemplo/status/777",
+        canonical_url="https://x.com/exemplo/status/777",
+        domain="x.com",
+        status="PENDING",
+        media_origin="REDE_SOCIAL",
+        search_source="duckduckgo_social",
+    )
+    db.add(item)
+    db.flush()
+    post = SocialPost(
+        project_id=project.id,
+        media_item_id=item.id,
+        platform="x",
+        url=item.url,
+        post_text=item.title,
+        actor_id="actor/test",
+    )
+    db.add(post)
+    db.flush()
+    db.add_all([
+        SocialComment(
+            project_id=project.id,
+            social_post_id=post.id,
+            platform="x",
+            external_id="c1",
+            text="comentário 1",
+            source_url=post.url,
+        ),
+        SocialComment(
+            project_id=project.id,
+            social_post_id=post.id,
+            platform="x",
+            external_id="c2",
+            text="comentário 2",
+            source_url=post.url,
+        ),
+    ])
+    db.commit()
+
+    report = social.social_repercussion_for_report(db, project.id)
+
+    assert report["posts"] == 1
+    assert report["comments"] == 2
+    assert len(report["post_inventory"]) == 1
+    row = report["post_inventory"][0]
+    assert row["platform"] == "x"
+    assert row["title"] == "Post sobre o tema"
+    assert row["comments_collected"] == 2
+    assert row["discovery_source"] == "duckduckgo_social"
+    assert row["collector"] == "Apify"
+    db.close()
