@@ -41,6 +41,7 @@ from app.facts.resolution import (
     resolve_event,
     resolve_project_facts,
 )
+from app.facts.followups import plan_nominal_followups
 
 
 FACT_PURPOSES = {"FACT_DISCOVERY", "OFFICIAL_FACT", "NOMINAL_FOLLOWUP"}
@@ -483,43 +484,3 @@ def extract_project_facts(
 
     db.commit()
     return {"processed": processed, "events_extracted": events_extracted, "errors": errors}
-
-
-def plan_nominal_followups(db: Session, project: Project) -> int:
-    events = db.scalars(
-        select(FactEvent).where(
-            FactEvent.project_id == project.id,
-            FactEvent.subject_name.is_not(None),
-        )
-    ).all()
-    existing = set(db.scalars(select(SearchQuery.query).where(SearchQuery.project_id == project.id)).all())
-    created = 0
-
-    for event in events:
-        name = (event.subject_name or "").strip()
-        if not name:
-            continue
-        location = event.city or ((project.topic_profile or {}).get("locations") or ["Rio de Janeiro"])[0]
-        organization = event.institution or ""
-        queries = [
-            f'"{name}"',
-            f'"{name}" {organization}'.strip(),
-            f'"{name}" "{location}"',
-        ]
-        for query in queries:
-            if query in existing:
-                continue
-            db.add(
-                SearchQuery(
-                    project_id=project.id,
-                    query=query,
-                    kind="nominal",
-                    purpose="NOMINAL_FOLLOWUP",
-                    rationale="Busca nominal de corroboradores para fato já identificado",
-                    priority=1,
-                )
-            )
-            existing.add(query)
-            created += 1
-    db.commit()
-    return created
