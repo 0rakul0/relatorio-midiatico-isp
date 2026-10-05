@@ -431,7 +431,7 @@ function render(result){
   const socialAnnexTable=(rows)=>{
     if(!rows.length)return '<p>Nenhum post social monitorado nesta execução.</p>';
     return `<div class="annex-table">${table(
-      ['#','Plataforma','Data','Post / referência','Comentários','Visualizações','Descoberta','URL'],
+      ['#','Plataforma','Data','Post / referência','Comentários','Visualizações','URL'],
       rows.map((x,i)=>[
         String(i+1),
         socialLabel(x.platform),
@@ -439,7 +439,6 @@ function render(result){
         x.title||'Post social',
         String(Number(x.comments_collected||0)),
         x.view_count===null||x.view_count===undefined?'N/D':viewLabel(Number(x.view_count||0)),
-        x.discovery_source||'monitoramento social',
         x.url?raw(`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">Abrir</a>`):'N/D'
       ])
     )}</div>`;
