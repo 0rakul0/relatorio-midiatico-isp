@@ -459,6 +459,48 @@ class SocialAnalysis(Base):
     )
 
 
+class PublicOpinionSurvey(Base):
+    """Levantamento de opinião pública separado do corpus jornalístico."""
+
+    __tablename__ = "public_opinion_surveys"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "source_url",
+            name="uq_public_opinion_project_source",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    institute: Mapped[str] = mapped_column(String(300), index=True)
+    sponsor: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    population: Mapped[str | None] = mapped_column(Text, nullable=True)
+    geography: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    field_start: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    field_end: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    publication_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    sample_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    margin_of_error: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    confidence_level: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    methodology: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sampling_method: Mapped[str | None] = mapped_column(Text, nullable=True)
+    representative_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    caveats: Mapped[str | None] = mapped_column(Text, nullable=True)
+    indicators: Mapped[list] = mapped_column(JSON, default=list)
+    evidence_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_title: Mapped[str] = mapped_column(Text)
+    source_url: Mapped[str] = mapped_column(Text)
+    source_domain: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    provider: Mapped[str] = mapped_column(String(50), default="duckduckgo_text")
+    collected_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+
+
 class FactEvent(Base):
     __tablename__ = "fact_events"
 
