@@ -1,3 +1,4 @@
+from collections import Counter
 from datetime import date
 from contextlib import asynccontextmanager
 import logging
@@ -714,6 +715,136 @@ def project_research_plan(
             }
             for row in queries
         ],
+    }
+
+
+
+@app.get("/projects/{project_id}/execution-preview")
+def project_execution_preview(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    """Prévia auditável das etapas enquanto o relatório ainda está sendo executado."""
+    project = project_or_404(db, user, project_id)
+
+    items = db.scalars(
+        select(MediaItem)
+        .where(MediaItem.project_id == project_id)
+        .order_by(MediaItem.id.desc())
+    ).all()
+    queries = db.scalars(
+        select(SearchQuery)
+        .where(SearchQuery.project_id == project_id)
+        .order_by(SearchQuery.priority.asc(), SearchQuery.id.asc())
+    ).all()
+
+    def item_origin(item: MediaItem) -> str:
+        return item.media_origin or classify_media_origin(item.url, item.domain)
+
+    domains = Counter(
+        (item.domain or "").lower().removeprefix("www.")
+        for item in items
+        if item.domain
+    )
+    origins = Counter(item_origin(item) for item in items)
+    statuses = Counter(str(item.status or "PENDING") for item in items)
+    query_statuses = Counter(str(row.execution_status or "PENDING") for row in queries)
+
+    recent_items = [
+        {
+            "id": item.id,
+            "title": item.title,
+            "url": item.url,
+            "domain": item.domain,
+            "published_at": item.published_at.isoformat() if item.published_at else None,
+            "status": item.status,
+            "media_origin": item_origin(item),
+            "search_source": item.search_source,
+            "corpus_origin": item.corpus_origin,
+        }
+        for item in items[:24]
+    ]
+
+    classifications = db.scalars(
+        select(Classification)
+        .join(MediaItem, Classification.media_item_id == MediaItem.id)
+        .where(MediaItem.project_id == project_id)
+    ).all()
+    themes = Counter(
+        str(row.theme)
+        for row in classifications
+        if row.theme
+    )
+
+    fact_rows = fact_events_for_report(db, project_id)
+    fact_statuses = Counter(
+        str(row.get("resolution_status") or "PENDING")
+        for row in fact_rows
+    )
+
+    papers = db.scalars(
+        select(AcademicPaper)
+        .where(AcademicPaper.project_id == project_id)
+        .order_by(AcademicPaper.id.desc())
+    ).all()
+
+    return {
+        "project_id": project.id,
+        "collection": {
+            "items_found": len(items),
+            "new_items": sum(str(item.corpus_origin or "SEARCH").upper() != "REUSED" for item in items),
+            "reused_items": sum(str(item.corpus_origin or "").upper() == "REUSED" for item in items),
+            "origins": dict(origins),
+            "domains": [
+                {"domain": domain, "items": count}
+                for domain, count in domains.most_common(20)
+            ],
+            "recent_items": recent_items,
+            "queries": {
+                "total": len(queries),
+                "executed": sum(row.executed_at is not None for row in queries),
+                "statuses": dict(query_statuses),
+                "returned": sum(int(row.results_returned or 0) for row in queries),
+                "accepted": sum(int(row.results_accepted or 0) for row in queries),
+            },
+        },
+        "social": {
+            "social_items": int(origins.get("REDE_SOCIAL", 0)),
+            "youtube_items": int(origins.get("YOUTUBE", 0)),
+        },
+        "validation": {
+            "status_counts": dict(statuses),
+            "valid": int(statuses.get("VALID", 0)),
+            "pending": int(statuses.get("PENDING", 0)),
+            "discarded": sum(
+                count
+                for status, count in statuses.items()
+                if status not in {"VALID", "PENDING"}
+            ),
+        },
+        "facts": {
+            "events": len(fact_rows),
+            "statuses": dict(fact_statuses),
+        },
+        "classification": {
+            "classified_items": len(classifications),
+            "themes": [
+                {"theme": theme, "items": count}
+                for theme, count in themes.most_common(12)
+            ],
+        },
+        "academic": {
+            "papers": len(papers),
+            "recent": [
+                {
+                    "title": paper.title_ptbr or paper.title,
+                    "provider": paper.provider,
+                    "url": paper.url,
+                }
+                for paper in papers[:8]
+            ],
+        },
     }
 
 
