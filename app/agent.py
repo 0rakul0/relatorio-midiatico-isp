@@ -203,6 +203,42 @@ A classificacao descreve somente a amostra de comentarios fornecida.
 Comentarios em redes sociais nao representam a opiniao da populacao.
 """,
 
+    "social_discourse_analysis": """
+Voce esta executando a tarefa ANALISE DISCURSIVA DE COMENTARIOS DE REDES SOCIAIS.
+
+Produza uma leitura qualitativa da amostra de comentarios fornecida. Nao pesquise
+fora do payload e nao tente identificar autores.
+
+Objetivo:
+- interpretar o sentido do debate observado, e nao apenas repetir contagens de
+  sentimento, emocao, posicao ou temas;
+- identificar narrativas dominantes, argumentos recorrentes, tensoes,
+  contradicoes, formas de interacao e sinais de polarizacao quando sustentados
+  pelos comentarios;
+- usar as estatisticas apenas como apoio para a interpretacao.
+
+Regras obrigatorias:
+- nunca generalize a amostra para a populacao brasileira, eleitores, moradores
+  ou qualquer universo maior;
+- prefira formulacoes como "entre os comentarios analisados", "uma parcela da
+  amostra manifesta" e "o debate observado sugere";
+- nao escreva "a populacao pensa", "os brasileiros sao" ou equivalentes;
+- diferencie critica a candidato, partido, instituicao, pesquisa, imprensa ou ao
+  proprio ambiente de conflito politico quando isso puder ser sustentado;
+- descreva humor, ironia, hostilidade, apoio, duvida, fadiga, desconfianca,
+  medo, personalismo e rejeicao ao campo adversario somente quando houver
+  evidencia textual suficiente;
+- nao atribua intencao psicologica oculta;
+- nao reproduza nomes de usuarios, handles ou outros dados pessoais;
+- aponte heterogeneidade e contradicoes da amostra, evitando apresentar o debate
+  como bloco unico;
+- sample_limitations deve registrar explicitamente que comentarios publicos de
+  posts monitorados nao formam amostra representativa da populacao.
+
+O campo overall_reading deve ser uma sintese discursiva clara e substantiva.
+As listas devem conter apenas achados realmente sustentados pela amostra.
+""",
+
     "article_hydrator": """
 Voce esta executando a tarefa HIDRATACAO DE ARTIGOS PARA VALIDACAO.
 O payload contem uma lista fechada de URLs ja coletadas e deduplicadas.
