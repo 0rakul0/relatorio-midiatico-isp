@@ -14,6 +14,8 @@ from app.reports.pdf.helpers import (
 )
 from app.reports.pdf.word_cloud import pdf_word_cloud_flowable as _pdf_word_cloud_flowable
 from app.reports.pdf.table import table as _table
+from app.reports.pdf.public_opinion import add_public_opinion_section
+from app.reports.pdf.social import add_social_section
 from app.utils.rendering import (
     has_content as _has_content,
     has_meaningful_fields as _has_meaningful_fields,
@@ -334,6 +336,7 @@ def build_pdf(data: dict) -> bytes:
             bool(metrics.get("top_reach_contents") or []),
             cross_validation_has_content,
             int(social_repercussion.get("comments") or 0) > 0,
+            bool(public_opinion_surveys),
         )
     )
     if panorama_has_content:
@@ -410,250 +413,21 @@ def build_pdf(data: dict) -> bytes:
                 )
             )
 
-        if public_opinion_surveys:
-            story.append(Paragraph("Opinião pública sobre o tema", heading))
-            public_summary = report.get("public_opinion_summary")
-            if public_summary:
-                story.append(Paragraph(escape(_text(public_summary)), body))
-            story.append(
-                Paragraph(
-                    "Esta camada reúne levantamentos amostrais identificados separadamente da cobertura jornalística e dos comentários em redes sociais. "
-                    "Os resultados devem ser lidos dentro do universo pesquisado, do período de campo e das limitações de cada estudo.",
-                    small,
-                )
-            )
-            survey_rows = [["Instituto", "Campo", "População / amostra", "Metodologia", "Fonte"]]
-            for survey in public_opinion_surveys:
-                field_start = _text(survey.get("field_start")).strip()
-                field_end = _text(survey.get("field_end")).strip()
-                field_label = (
-                    f"{field_start} a {field_end}"
-                    if field_start and field_end
-                    else field_start or field_end or "N/D"
-                )
-                population = _text(survey.get("population")).strip() or "N/D"
-                sample_size = survey.get("sample_size")
-                if sample_size:
-                    population += f" · n={sample_size}"
-                method_bits = [
-                    _text(survey.get("sampling_method")).strip(),
-                    _text(survey.get("margin_of_error")).strip(),
-                    _text(survey.get("confidence_level")).strip(),
-                ]
-                method_label = " · ".join(bit for bit in method_bits if bit) or _text(survey.get("methodology")).strip() or "N/D"
-                survey_rows.append([
-                    survey.get("institute") or "N/D",
-                    field_label,
-                    population,
-                    method_label,
-                    _pdf_link(survey.get("source_url")),
-                ])
-            story.append(
-                _table(
-                    survey_rows,
-                    [3.0 * cm, 3.1 * cm, 4.8 * cm, 3.8 * cm, 1.9 * cm],
-                    small,
-                )
-            )
-
-            indicator_rows = [["Instituto", "Indicador / pergunta", "Resultado", "Recorte"]]
-            for survey in public_opinion_surveys:
-                for indicator in survey.get("indicators") or []:
-                    question = indicator.get("question") or indicator.get("label") or "Indicador"
-                    value = _text(indicator.get("value")).strip()
-                    unit = _text(indicator.get("unit")).strip()
-                    result_label = (value + (f" {unit}" if unit else "")).strip() or "N/D"
-                    indicator_rows.append([
-                        survey.get("institute") or "N/D",
-                        question,
-                        result_label,
-                        indicator.get("subgroup") or survey.get("representative_scope") or "Total da amostra",
-                    ])
-            if len(indicator_rows) > 1:
-                story.append(Paragraph("Indicadores de opinião pública", heading))
-                story.append(
-                    _table(
-                        indicator_rows,
-                        [3.0 * cm, 6.6 * cm, 2.8 * cm, 4.2 * cm],
-                        small,
-                    )
-                )
-            if public_opinion.get("methodology_note"):
-                story.append(
-                    Paragraph(
-                        "<b>Nota metodológica:</b> " + escape(_text(public_opinion.get("methodology_note"))),
-                        small,
-                    )
-                )
-
-        social_comments = int(social_repercussion.get("comments") or 0)
-        social_analyzed = int(social_repercussion.get("analyzed_comments") or 0)
-        if social_comments:
-            def social_label(value: object) -> str:
-                labels = {
-                    "instagram": "Instagram",
-                    "facebook": "Facebook",
-                    "x": "X",
-                    "POSITIVO": "Positivo",
-                    "NEGATIVO": "Negativo",
-                    "NEUTRO": "Neutro",
-                    "AMBIGUO": "Ambíguo",
-                    "MEDO": "Medo",
-                    "INDIGNACAO": "Indignação",
-                    "CONFIANCA": "Confiança",
-                    "DESCONFIANCA": "Desconfiança",
-                    "TRISTEZA": "Tristeza",
-                    "IRONIA": "Ironia",
-                    "ESPERANCA": "Esperança",
-                    "OUTRA": "Outra",
-                    "NAO_IDENTIFICAVEL": "Não identificável",
-                    "APOIO": "Apoio",
-                    "CRITICA": "Crítica",
-                    "PREOCUPACAO": "Preocupação",
-                    "DUVIDA": "Dúvida",
-                    "RELATO_PESSOAL": "Relato pessoal",
-                }
-                raw = _text(value)
-                return labels.get(raw, raw.replace("_", " ").title())
-
-            story.append(Paragraph("Percepção observada nas redes sociais", heading))
-            if social_repercussion.get("summary"):
-                story.append(
-                    Paragraph(
-                        escape(_text(social_repercussion.get("summary"))),
-                        body,
-                    )
-                )
-
-            story.append(
-                _table(
-                    [
-                        ["Posts sociais", "Comentários coletados", "Comentários analisados"],
-                        [
-                            social_repercussion.get("posts", 0),
-                            social_comments,
-                            social_analyzed,
-                        ],
-                    ],
-                    [5.5 * cm, 5.5 * cm, 5.6 * cm],
-                    small,
-                )
-            )
-
-            platform_counts = social_repercussion.get("platform_counts") or {}
-            if platform_counts:
-                story.append(Paragraph("Distribuição por plataforma", heading))
-                story.append(
-                    _table(
-                        [["Plataforma", "Comentários"]]
-                        + [
-                            [social_label(label), int(count or 0)]
-                            for label, count in sorted(
-                                platform_counts.items(),
-                                key=lambda item: int(item[1] or 0),
-                                reverse=True,
-                            )
-                        ],
-                        [8.3 * cm, 8.3 * cm],
-                        small,
-                    )
-                )
-
-            def add_social_distribution(title: str, values: dict):
-                if not values or not social_analyzed:
-                    return
-                rows = []
-                for label, count in sorted(
-                    values.items(),
-                    key=lambda item: int(item[1] or 0),
-                    reverse=True,
-                ):
-                    count_value = int(count or 0)
-                    percent = (count_value * 100.0 / social_analyzed) if social_analyzed else 0
-                    rows.append(
-                        [
-                            social_label(label),
-                            count_value,
-                            f"{percent:.1f}%".replace(".", ","),
-                        ]
-                    )
-                story.append(Paragraph(title, heading))
-                story.append(
-                    _table(
-                        [["Classificação", "Comentários", "Participação na amostra"]]
-                        + rows,
-                        [7.0 * cm, 4.0 * cm, 5.6 * cm],
-                        small,
-                    )
-                )
-
-            add_social_distribution(
-                "Sentimento observado",
-                social_repercussion.get("sentiment_counts") or {},
-            )
-            add_social_distribution(
-                "Emoções observadas",
-                social_repercussion.get("emotion_counts") or {},
-            )
-            add_social_distribution(
-                "Posição em relação ao tema",
-                social_repercussion.get("position_counts") or {},
-            )
-
-            themes = list(social_repercussion.get("themes") or [])
-            if themes:
-                story.append(Paragraph("Temas recorrentes nos comentários", heading))
-                story.append(
-                    _table(
-                        [["#", "Tema", "Ocorrências"]]
-                        + [
-                            [index + 1, item.get("theme") or "N/D", item.get("count") or 0]
-                            for index, item in enumerate(themes)
-                        ],
-                        [1.4 * cm, 12.6 * cm, 2.6 * cm],
-                        small,
-                    )
-                )
-
-            discourse = social_repercussion.get("discourse_analysis") or {}
-            if discourse:
-                story.append(Paragraph("Leitura qualitativa dos comentários", heading))
-                if discourse.get("overall_reading"):
-                    story.append(Paragraph(escape(_text(discourse.get("overall_reading"))), body))
-
-                def add_discourse_group(title: str, rows: list[dict]):
-                    cleaned = [
-                        row for row in (rows or [])
-                        if isinstance(row, dict) and (row.get("title") or row.get("analysis"))
-                    ]
-                    if not cleaned:
-                        return
-                    story.append(Paragraph(title, heading))
-                    for row in cleaned:
-                        label = escape(_text(row.get("title") or "Achado"))
-                        analysis_text = escape(_text(row.get("analysis") or ""))
-                        story.append(Paragraph(f"<b>{label}</b> - {analysis_text}", body))
-
-                add_discourse_group("Narrativas dominantes", discourse.get("dominant_narratives") or [])
-                add_discourse_group("Argumentos recorrentes", discourse.get("recurring_arguments") or [])
-                add_discourse_group("Tensões e contradições", discourse.get("tensions_and_contradictions") or [])
-                add_discourse_group("Formas de interação", discourse.get("interaction_patterns") or [])
-                if discourse.get("polarization_signals"):
-                    story.append(Paragraph("Sinais de polarização na amostra", heading))
-                    story.append(Paragraph(escape(_text(discourse.get("polarization_signals"))), body))
-                if discourse.get("sample_limitations"):
-                    story.append(Paragraph("Limitações da leitura social", heading))
-                    story.append(Paragraph(escape(_text(discourse.get("sample_limitations"))), small))
-
-            methodology_note = social_repercussion.get("methodology_note")
-            if methodology_note:
-                story.append(
-                    Paragraph(
-                        "<b>Nota metodológica:</b> "
-                        + escape(_text(methodology_note)),
-                        small,
-                    )
-                )
+        add_public_opinion_section(
+            story,
+            report=report,
+            public_opinion=public_opinion,
+            heading=heading,
+            body=body,
+            small=small,
+        )
+        add_social_section(
+            story,
+            social_repercussion=social_repercussion,
+            heading=heading,
+            body=body,
+            small=small,
+        )
 
         add_section("Abertura", report["opening"])
         add_section("I. Panorama da Repercussão", report["panorama"])
