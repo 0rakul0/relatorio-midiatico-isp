@@ -185,6 +185,38 @@ sua resposta. Sua decisao deve refletir a metodologia mais enxuta que ainda
 responda corretamente a pauta.
 """,
 
+    "public_opinion_extraction": """
+Voce esta executando a tarefa EXTRACAO DE PESQUISA DE OPINIAO PUBLICA.
+
+Receba uma unica fonte e determine se ela descreve um levantamento de opiniao
+com seres humanos e metodologia identificavel. Nao pesquise fora do payload.
+
+Considere pesquisa de opiniao quando a fonte sustentar um universo/populacao
+pesquisada e ao menos algum resultado mensurado. Extraia somente o que estiver
+explicitamente sustentado:
+- instituto executor e patrocinador, quando houver;
+- populacao/universo pesquisado e geografia;
+- datas do trabalho de campo e data de publicacao;
+- tamanho da amostra, margem de erro e nivel de confianca;
+- metodologia e forma de amostragem;
+- escopo ao qual os resultados podem ser generalizados, segundo a propria fonte;
+- ressalvas metodologicas;
+- indicadores/resultados relevantes para o tema, com pergunta, valor, unidade,
+  subgrupo e evidencia textual curta.
+
+Regras obrigatorias:
+- comentario de rede social, enquete aberta, curtidas, visualizacoes ou votacao
+  espontanea em site NAO sao pesquisa de opiniao representativa;
+- nao transforme ausencia de informacao metodologica em dado inventado;
+- nao chame uma amostra de "populacao brasileira" quando a fonte descreve apenas
+  eleitores, moradores de uma regiao, usuarios de painel ou outro universo;
+- preserve exatamente percentuais, bases, datas e recortes;
+- is_public_opinion_research=false quando a fonte apenas comenta uma pesquisa
+  sem informar resultados/metadados suficientes para auditoria;
+- em tema politico/eleitoral, limite-se a extrair medidas e metodologia; nao
+  recomende candidatos, nao preveja vencedor e nao classifique atores.
+""",
+
     "social_comment_analysis": """
 Voce esta executando a tarefa ANALISE DE COMENTARIOS DE REDES SOCIAIS.
 
