@@ -154,6 +154,21 @@ class SocialCommentBatchResponse(StrictLLMOutput):
     )
 
 
+class SocialNarrativeOutput(StrictLLMOutput):
+    title: str = Field(min_length=3, max_length=200)
+    analysis: str = Field(min_length=10, max_length=2500)
+
+
+class SocialDiscourseAnalysisResponse(StrictLLMOutput):
+    overall_reading: str = Field(min_length=40, max_length=5000)
+    dominant_narratives: list[SocialNarrativeOutput] = Field(default_factory=list, max_length=8)
+    recurring_arguments: list[SocialNarrativeOutput] = Field(default_factory=list, max_length=8)
+    tensions_and_contradictions: list[SocialNarrativeOutput] = Field(default_factory=list, max_length=8)
+    interaction_patterns: list[SocialNarrativeOutput] = Field(default_factory=list, max_length=8)
+    polarization_signals: str = Field(min_length=20, max_length=4000)
+    sample_limitations: str = Field(min_length=20, max_length=2500)
+
+
 class AgentAcademicSearchArgs(BaseModel):
     queries: list[str] = Field(
         min_length=1,
