@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from urllib.parse import urlparse
@@ -41,6 +40,12 @@ from app.social.sampling import (
 )
 from app.social.urls import platform_for_url as _platform_for_url, url_key as _url_key
 from app.social.analysis import analyze_social_comments as _analyze_social_comments
+from app.social.discovery import (
+    candidate_urls as _candidate_urls,
+    has_duckduckgo_provenance as _has_duckduckgo_provenance,
+    social_discovery_terms as _social_discovery_terms,
+    social_recovery_terms as _social_recovery_terms,
+)
 from app.social.methodology import METHODOLOGY_NOTE
 from app.social.reporting import social_repercussion_for_report as _social_repercussion_for_report
 from app.tools.social import (
@@ -49,182 +54,6 @@ from app.tools.social import (
     discover_public_posts,
 )
 
-
-
-def _has_duckduckgo_provenance(item: MediaItem) -> bool:
-    source = str(item.search_source or "").strip().lower()
-    if source.startswith("duckduckgo"):
-        return True
-    for entry in item.source_provenance or []:
-        if not isinstance(entry, dict):
-            continue
-        provider = str(entry.get("source") or entry.get("provider") or "").strip().lower()
-        if provider.startswith("duckduckgo"):
-            return True
-    return False
-
-
-def _candidate_urls(
-    db: Session,
-    project_id: int,
-) -> dict[str, list[tuple[str, int | None, str | None]]]:
-    """Posts sociais conhecidos com descoberta DuckDuckGo auditavel."""
-    found: dict[str, dict[str, tuple[str, int | None, str | None]]] = defaultdict(dict)
-
-    for item in db.scalars(
-        select(MediaItem).where(MediaItem.project_id == project_id)
-    ).all():
-        if not _has_duckduckgo_provenance(item):
-            continue
-        platform = _platform_for_url(item.url)
-        if not platform:
-            continue
-        found[platform][_url_key(item.url)] = (item.url, item.id, item.title)
-
-    for hit in db.scalars(
-        select(SearchHit).where(SearchHit.project_id == project_id)
-    ).all():
-        if not str(hit.provider or "").strip().lower().startswith("duckduckgo"):
-            continue
-        platform = _platform_for_url(hit.url)
-        if not platform:
-            continue
-        url = str(hit.url or "").strip()
-        found[platform].setdefault(
-            _url_key(url), (url, hit.media_item_id, hit.title)
-        )
-
-    limit = max(1, int(get_settings().apify_social_max_posts_per_platform))
-    return {
-        platform: list(rows.values())[:limit]
-        for platform, rows in found.items()
-        if rows
-    }
-
-
-def _social_discovery_terms(project: Project) -> list[str]:
-    """Gera consultas sociais curtas, distintas da pergunta literal do relatório."""
-    profile = project.topic_profile or {}
-    values: list[str] = []
-
-    # Prioriza formulações que já foram normalizadas pelo perfil/planejador.
-    for key in (
-        "event_search_variants",
-        "product_search_variants",
-        "search_synonyms",
-        "subject_terms",
-        "actions",
-    ):
-        raw = profile.get(key)
-        if isinstance(raw, list):
-            values.extend(str(value) for value in raw if str(value).strip())
-
-    strategy = profile.get("search_strategy") or {}
-    if isinstance(strategy, dict):
-        if strategy.get("primary_query"):
-            values.append(str(strategy["primary_query"]))
-        values.extend(
-            str(value)
-            for value in (strategy.get("complementary_queries") or [])
-            if str(value).strip()
-        )
-
-    actors = [
-        " ".join(str(value).split()).strip()
-        for value in (profile.get("actors") or [])
-        if str(value).strip()
-    ][:4]
-    # Combina atores quando isso produz uma busca social natural, como
-    # "Lula Bolsonaro", sem depender da pergunta longa do usuário.
-    if len(actors) >= 2:
-        values.append(" ".join(actors[:2]))
-    values.extend(actors)
-
-    # A pergunta literal fica por último, apenas como fallback auditável.
-    values.append(project.topic)
-
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        text = " ".join(str(value or "").split()).strip(" ?.,;:")
-        if len(text) < 3:
-            continue
-
-        # Remove introduções interrogativas que não aparecem naturalmente em posts.
-        lowered = text.casefold()
-        for prefix in (
-            "como está ",
-            "como esta ",
-            "como ficou ",
-            "qual é ",
-            "qual e ",
-            "quais são ",
-            "quais sao ",
-        ):
-            if lowered.startswith(prefix):
-                text = text[len(prefix):].strip()
-                lowered = text.casefold()
-                break
-
-        # Evita consultas excessivamente longas; rede social responde melhor
-        # a núcleos temáticos compactos.
-        words = text.split()
-        if len(words) > 8:
-            text = " ".join(words[:8])
-
-        key = text.casefold()
-        if len(text) < 3 or key in seen:
-            continue
-        seen.add(key)
-        cleaned.append(text)
-
-    return cleaned
-
-
-def _social_recovery_terms(project: Project, primary_terms: list[str]) -> list[str]:
-    """Segunda rodada mais ampla quando a descoberta inicial retorna zero."""
-    profile = project.topic_profile or {}
-    values: list[str] = []
-
-    for key in ("subject_terms", "actions", "actors", "organizations"):
-        raw = profile.get(key)
-        if isinstance(raw, list):
-            values.extend(str(value) for value in raw if str(value).strip())
-
-    # Acrescenta âncoras curtas derivadas dos termos iniciais.
-    for term in primary_terms:
-        words = [word for word in term.split() if len(word) > 2]
-        if 2 <= len(words) <= 6:
-            values.append(" ".join(words[:4]))
-
-    year = str(project.collection_end.year) if project.collection_end else ""
-    locations = [
-        " ".join(str(value).split()).strip()
-        for value in (profile.get("locations") or [])
-        if str(value).strip()
-    ]
-    location = locations[0] if locations else ""
-
-    cleaned: list[str] = []
-    seen = {item.casefold() for item in primary_terms}
-    for value in values:
-        text = " ".join(str(value or "").split()).strip(" ?.,;:")
-        if len(text) < 3:
-            continue
-        words = text.split()
-        if len(words) > 5:
-            text = " ".join(words[:5])
-        if location and location.casefold() not in text.casefold() and len(text.split()) <= 3:
-            text = f"{text} {location}".strip()
-        if year and year not in text and len(text.split()) <= 4:
-            text = f"{text} {year}".strip()
-        key = text.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        cleaned.append(text)
-
-    return cleaned
 
 
 def _discover_and_persist_social_posts(
