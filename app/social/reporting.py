@@ -48,6 +48,9 @@ def social_repercussion_for_report(db: Session, project_id: int) -> dict:
     }
 
     post_inventory = []
+    known_view_count = 0
+    total_view_count = 0
+    platform_view_counts: dict[str, int] = {}
     for post in posts:
         media = media_by_id.get(post.media_item_id)
         published_at = post.published_at
@@ -63,6 +66,24 @@ def social_repercussion_for_report(db: Session, project_id: int) -> dict:
         published_label = (
             published_at.date().isoformat() if published_at is not None else None
         )
+        effective_views = (
+            post.view_count
+            if post.view_count is not None
+            else (media.view_count if media is not None else None)
+        )
+        view_source = (
+            post.view_count_source
+            if post.view_count is not None
+            else ("media_item" if effective_views is not None else None)
+        )
+        if effective_views is not None:
+            known_view_count += 1
+            total_view_count += int(effective_views or 0)
+            platform_view_counts[post.platform] = (
+                platform_view_counts.get(post.platform, 0)
+                + int(effective_views or 0)
+            )
+
         post_inventory.append(
             {
                 "platform": post.platform,
@@ -76,8 +97,8 @@ def social_repercussion_for_report(db: Session, project_id: int) -> dict:
                 "comments_collected": comment_counts.get(post.id, 0),
                 "like_count": post.like_count,
                 "share_count": post.share_count,
-                "view_count": post.view_count,
-                "view_count_source": post.view_count_source,
+                "view_count": effective_views,
+                "view_count_source": view_source,
                 "discovery_source": (
                     media.search_source
                     if media is not None and media.search_source
@@ -88,23 +109,13 @@ def social_repercussion_for_report(db: Session, project_id: int) -> dict:
             }
         )
 
-    known_view_posts = [
-        post for post in posts if post.view_count is not None
-    ]
-    platform_view_counts: dict[str, int] = {}
-    for post in known_view_posts:
-        platform_view_counts[post.platform] = (
-            platform_view_counts.get(post.platform, 0)
-            + int(post.view_count or 0)
-        )
-
     base = {
         "posts": total_posts,
         "comments": total_comments,
         "post_inventory": post_inventory,
-        "view_count_total": sum(int(post.view_count or 0) for post in known_view_posts),
-        "view_count_known_posts": len(known_view_posts),
-        "view_count_missing_posts": total_posts - len(known_view_posts),
+        "view_count_total": total_view_count,
+        "view_count_known_posts": known_view_count,
+        "view_count_missing_posts": total_posts - known_view_count,
         "platform_view_counts": platform_view_counts,
         "view_count_note": (
             "Soma bruta das visualizações reportadas pelas plataformas/coletor nos posts com métrica disponível. "
