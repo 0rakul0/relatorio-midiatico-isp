@@ -57,16 +57,18 @@ def int_metric(value: Any) -> int | None:
     if not text:
         return None
 
-    compact = text.replace(" ", "").replace(",", ".")
-    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([kmb])?", compact)
-    if match:
-        number = float(match.group(1))
+    compact = text.replace(" ", "")
+    suffix_match = re.fullmatch(
+        r"([0-9]+(?:[\.,][0-9]+)?)([kmb])",
+        compact,
+    )
+    if suffix_match:
+        number = float(suffix_match.group(1).replace(",", "."))
         multiplier = {
-            None: 1,
             "k": 1_000,
             "m": 1_000_000,
             "b": 1_000_000_000,
-        }[match.group(2)]
+        }[suffix_match.group(2)]
         return max(0, int(round(number * multiplier)))
 
     digits = re.sub(r"[^0-9]", "", text)
