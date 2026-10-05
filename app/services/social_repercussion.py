@@ -148,38 +148,178 @@ def _candidate_urls(
 
 
 def _social_discovery_terms(project: Project) -> list[str]:
+    """Gera consultas sociais curtas, distintas da pergunta literal do relatório."""
     profile = project.topic_profile or {}
-    values = [project.topic]
-    for key in ("search_synonyms", "subject_terms", "actors", "actions"):
+    values: list[str] = []
+
+    # Prioriza formulações que já foram normalizadas pelo perfil/planejador.
+    for key in (
+        "event_search_variants",
+        "product_search_variants",
+        "search_synonyms",
+        "subject_terms",
+        "actions",
+    ):
         raw = profile.get(key)
         if isinstance(raw, list):
             values.extend(str(value) for value in raw if str(value).strip())
-    cleaned = []
+
+    strategy = profile.get("search_strategy") or {}
+    if isinstance(strategy, dict):
+        if strategy.get("primary_query"):
+            values.append(str(strategy["primary_query"]))
+        values.extend(
+            str(value)
+            for value in (strategy.get("complementary_queries") or [])
+            if str(value).strip()
+        )
+
+    actors = [
+        " ".join(str(value).split()).strip()
+        for value in (profile.get("actors") or [])
+        if str(value).strip()
+    ][:4]
+    # Combina atores quando isso produz uma busca social natural, como
+    # "Lula Bolsonaro", sem depender da pergunta longa do usuário.
+    if len(actors) >= 2:
+        values.append(" ".join(actors[:2]))
+    values.extend(actors)
+
+    # A pergunta literal fica por último, apenas como fallback auditável.
+    values.append(project.topic)
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
     for value in values:
-        text = " ".join(str(value or "").split()).strip()
+        text = " ".join(str(value or "").split()).strip(" ?.,;:")
         if len(text) < 3:
             continue
-        if text.casefold() in {item.casefold() for item in cleaned}:
+
+        # Remove introduções interrogativas que não aparecem naturalmente em posts.
+        lowered = text.casefold()
+        for prefix in (
+            "como está ",
+            "como esta ",
+            "como ficou ",
+            "qual é ",
+            "qual e ",
+            "quais são ",
+            "quais sao ",
+        ):
+            if lowered.startswith(prefix):
+                text = text[len(prefix):].strip()
+                lowered = text.casefold()
+                break
+
+        # Evita consultas excessivamente longas; rede social responde melhor
+        # a núcleos temáticos compactos.
+        words = text.split()
+        if len(words) > 8:
+            text = " ".join(words[:8])
+
+        key = text.casefold()
+        if len(text) < 3 or key in seen:
             continue
+        seen.add(key)
         cleaned.append(text)
+
+    return cleaned
+
+
+def _social_recovery_terms(project: Project, primary_terms: list[str]) -> list[str]:
+    """Segunda rodada mais ampla quando a descoberta inicial retorna zero."""
+    profile = project.topic_profile or {}
+    values: list[str] = []
+
+    for key in ("subject_terms", "actions", "actors", "organizations"):
+        raw = profile.get(key)
+        if isinstance(raw, list):
+            values.extend(str(value) for value in raw if str(value).strip())
+
+    # Acrescenta âncoras curtas derivadas dos termos iniciais.
+    for term in primary_terms:
+        words = [word for word in term.split() if len(word) > 2]
+        if 2 <= len(words) <= 6:
+            values.append(" ".join(words[:4]))
+
+    year = str(project.collection_end.year) if project.collection_end else ""
+    locations = [
+        " ".join(str(value).split()).strip()
+        for value in (profile.get("locations") or [])
+        if str(value).strip()
+    ]
+    location = locations[0] if locations else ""
+
+    cleaned: list[str] = []
+    seen = {item.casefold() for item in primary_terms}
+    for value in values:
+        text = " ".join(str(value or "").split()).strip(" ?.,;:")
+        if len(text) < 3:
+            continue
+        words = text.split()
+        if len(words) > 5:
+            text = " ".join(words[:5])
+        if location and location.casefold() not in text.casefold() and len(text.split()) <= 3:
+            text = f"{text} {location}".strip()
+        if year and year not in text and len(text.split()) <= 4:
+            text = f"{text} {year}".strip()
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(text)
+
     return cleaned
 
 
 def _discover_and_persist_social_posts(
     db: Session,
     project: Project,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     settings = get_settings()
     if not getattr(settings, "social_discovery_enabled", True):
-        return {"queries": 0, "returned": 0, "eligible_posts": 0, "new_items": 0}
+        return {
+            "queries": 0,
+            "returned": 0,
+            "eligible_posts": 0,
+            "new_items": 0,
+            "rounds": 0,
+            "terms": [],
+            "platforms": {},
+        }
 
+    max_terms = max(1, int(settings.social_discovery_queries_per_platform))
     terms = _social_discovery_terms(project)
-    query_terms = terms[: max(1, int(settings.social_discovery_queries_per_platform))]
+    query_terms = terms[:max_terms]
     discovered = discover_public_posts(
         terms=query_terms,
-        max_queries_per_platform=settings.social_discovery_queries_per_platform,
+        max_queries_per_platform=max_terms,
         results_per_query=settings.social_discovery_results_per_query,
     )
+    rounds = 1
+    recovery_terms: list[str] = []
+
+    # Se a primeira rodada não devolveu sequer uma URL social, fazemos uma
+    # segunda rodada obrigatória com termos mais curtos antes de aceitar NO_POSTS.
+    if not any(discovered.values()):
+        recovery_terms = _social_recovery_terms(project, query_terms)[:max_terms]
+        if recovery_terms:
+            recovered = discover_public_posts(
+                terms=recovery_terms,
+                max_queries_per_platform=max_terms,
+                results_per_query=settings.social_discovery_results_per_query,
+            )
+            rounds = 2
+            for platform, rows in recovered.items():
+                known = {
+                    _url_key(str(row.get("url") or ""))
+                    for row in discovered.get(platform, [])
+                }
+                for row in rows:
+                    key = _url_key(str(row.get("url") or ""))
+                    if key and key not in known:
+                        discovered.setdefault(platform, []).append(row)
+                        known.add(key)
 
     existing = {
         item.canonical_url: item
@@ -188,11 +328,21 @@ def _discover_and_persist_social_posts(
         ).all()
         if item.canonical_url
     }
+    platform_stats = {
+        platform: {"returned": len(rows), "eligible_posts": 0}
+        for platform, rows in discovered.items()
+    }
+    total_terms = len(query_terms) + len(recovery_terms)
     stats = {
-        "queries": len(query_terms) * 4,
+        "queries": total_terms * 4,
         "returned": sum(len(rows) for rows in discovered.values()),
         "eligible_posts": 0,
         "new_items": 0,
+        "rounds": rounds,
+        "terms": [*query_terms, *recovery_terms],
+        "primary_terms": query_terms,
+        "recovery_terms": recovery_terms,
+        "platforms": platform_stats,
     }
 
     per_platform_limit = max(1, int(settings.apify_social_max_posts_per_platform))
@@ -206,6 +356,8 @@ def _discover_and_persist_social_posts(
                 continue
 
             stats["eligible_posts"] += 1
+            platform_stats.setdefault(platform, {"returned": 0, "eligible_posts": 0})
+            platform_stats[platform]["eligible_posts"] += 1
             accepted_for_platform += 1
             canonical = canonicalize(url)
             domain = urlparse(url).netloc.lower().split(":", 1)[0]
@@ -941,6 +1093,7 @@ def collect_social_repercussion(db: Session, project: Project) -> dict:
             "posts": 0,
             "comments": 0,
             "platforms": {},
+            "discovery": discovery,
             "methodology_note": METHODOLOGY_NOTE,
         }
 
@@ -1071,6 +1224,7 @@ def collect_social_repercussion(db: Session, project: Project) -> dict:
 
     db.commit()
     report = analyze_social_comments(db, project)
+    report["discovery"] = discovery
     report["collection"] = {
         "actor_runs": actor_runs,
         "new_comments": new_comments,
