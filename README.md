@@ -792,7 +792,7 @@ O `app/models.py` também passou a ser uma **fachada de compatibilidade**: as cl
 
 O `app/schemas.py` segue a mesma estratégia: continua sendo o ponto de importação público, mas os contratos Pydantic ficam em `app/schema_groups/`. O registry de prompts em `app/prompts/report_agent.py` também virou uma fachada que agrega prompts separados por domínio.
 
-A decomposição também alcançou `services/metrics.py`, `services/search_planning.py` e `services/social_repercussion.py`: deduplicação de corpus, planejamento de gap-fill e descoberta social passaram para pacotes de domínio, mantendo os serviços como fachadas/orquestradores menores.
+A decomposição também alcançou `services/metrics.py`, `services/search_planning.py` e `services/social_repercussion.py`: deduplicação de corpus, estratégia/refinamento de busca, planejamento de gap-fill, descoberta social e persistência/reuso de posts passaram para pacotes de domínio, mantendo os serviços como fachadas/orquestradores menores.
 
 ```text
 app/
@@ -854,6 +854,8 @@ app/
 ├── search/
 │   ├── guards.py                # âncoras, similaridade e redundância
 │   ├── persistence.py           # criação/idempotência das consultas
+│   ├── strategy.py              # estratégia compacta e persistência inicial
+│   ├── refinement.py            # refinamento mensal de inventários
 │   ├── gap_fill.py              # heurísticas de recuperação complementar
 │   ├── gap_planning.py          # detecção de lacunas e planejamento de expansão
 │   └── inventory.py             # varredura mensal factual/oficial
@@ -864,6 +866,7 @@ app/
 │   ├── comments.py              # normalização dos comentários
 │   ├── dates.py                 # datas DDG/Apify/X/TikTok
 │   ├── methodology.py           # nota metodológica compartilhada
+│   ├── persistence.py           # posts, datas, reuso e proveniência
 │   ├── reporting.py             # projeção auditável para o relatório
 │   ├── sampling.py              # amostragem plataforma → post → comentário
 │   └── urls.py                  # reconhecimento/canonicalização social
