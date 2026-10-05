@@ -92,7 +92,9 @@ def run_social_layer(
         "DONE",
         f"{social_repercussion.get('posts', 0)} post(s); "
         f"{social_repercussion.get('comments', 0)} comentario(s); "
-        f"{social_repercussion.get('analyzed_comments', 0)} analisado(s)"
+        f"{social_repercussion.get('analyzed_comments', 0)} analisado(s); "
+        f"{social_repercussion.get('view_count_total', 0)} visualização(ões) "
+        f"em {social_repercussion.get('view_count_known_posts', 0)} post(s) com métrica"
         + discovery_note,
     )
     return social_repercussion
