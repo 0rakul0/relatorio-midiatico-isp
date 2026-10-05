@@ -132,19 +132,35 @@ def _heuristic_project_type(topic: str) -> str:
 
 
 def requested_topic_window(topic: str) -> tuple[date, date] | None:
-    """Resolve mês explícito primeiro e ano completo apenas para pauta factual.
+    """Resolve o recorte temporal explícito sem inventar datas para produtos.
 
-    Exemplos:
-    - "mortes ... agosto de 2026" -> 2026-08-01..2026-08-31
-    - "morte por intervenção ... 2026" -> 2026-01-01..2026-12-31
-    - "Dossiê Mulher 2026" -> None (produto institucional, busca temática)
+    Regras:
+    - mês explícito prevalece;
+    - EVENT_TOPIC com um ano explícito usa o ano completo;
+    - GENERAL_TOPIC com um ano explícito também usa esse ano, pois o usuário
+      pediu um panorama temporal definido;
+    - no ano corrente, a janela termina hoje para impedir que datas futuras
+      entrem no relatório;
+    - INSTITUTIONAL_PRODUCT continua temático: o ano pode ser parte do nome da
+      edição e não deve virar automaticamente uma janela editorial.
     """
     month_window = requested_month_window(topic)
     if month_window:
         return month_window
-    if _heuristic_project_type(topic) != "EVENT_TOPIC":
+
+    project_type = _heuristic_project_type(topic)
+    if project_type == "INSTITUTIONAL_PRODUCT":
         return None
-    return requested_year_window(topic)
+
+    year_window = requested_year_window(topic)
+    if not year_window:
+        return None
+
+    start, end = year_window
+    today = date.today()
+    if start.year == today.year:
+        end = min(end, today)
+    return start, end
 
 
 def _clean_phrase(value: str | None) -> str:
