@@ -334,19 +334,36 @@ def run_full_methodology(
     else:
         social_status = str(social_repercussion.get("status") or "")
         if social_status in {"DISABLED", "NOT_CONFIGURED", "NO_POSTS"}:
+            discovery = social_repercussion.get("discovery") or {}
+            platform_audit = discovery.get("platforms") or {}
+            platform_text = ", ".join(
+                f"{name}: {int((data or {}).get('returned') or 0)}"
+                for name, data in platform_audit.items()
+            )
+            detail = str(
+                social_repercussion.get("reason")
+                or "Nenhum comentario social disponivel na amostra"
+            )
+            if discovery:
+                detail += (
+                    f" | {discovery.get('queries', 0)} consulta(s), "
+                    f"{discovery.get('rounds', 0)} rodada(s), "
+                    f"{discovery.get('returned', 0)} retorno(s)"
+                )
+                if platform_text:
+                    detail += f" | {platform_text}"
             stage(
                 "social_repercussion",
                 "SKIPPED",
-                str(
-                    social_repercussion.get("reason")
-                    or "Nenhum comentario social disponivel na amostra"
-                )[:180],
+                detail[:500],
             )
         else:
             discovery = social_repercussion.get("discovery") or {}
             discovery_note = (
                 f"; descoberta dedicada: {discovery.get('eligible_posts', 0)} post(s) elegivel(is), "
-                f"{discovery.get('new_items', 0)} novo(s)"
+                f"{discovery.get('new_items', 0)} novo(s), "
+                f"{discovery.get('queries', 0)} consulta(s), "
+                f"{discovery.get('rounds', 1)} rodada(s)"
                 if discovery
                 else ""
             )
