@@ -17,6 +17,7 @@ Use "na amostra auditavel" e "na janela observada" quando aplicavel.
 Metrica de mencao institucional e somente presenca textual do ISP e nao prova protagonismo, centralidade, lideranca ou destaque.
 Artigos academicos em academic_context servem apenas para contextualizacao cientifica: nao os conte como cobertura, alcance, veiculo, noticia ou confirmacao automatica de um fato jornalistico.
 Quando public_opinion trouxer pesquisas estruturadas, escreva public_opinion_summary como sintese exclusiva desses levantamentos. Diferencie claramente "opinioes medidas em pesquisa" de "percepcao observada em redes sociais". Informe universo pesquisado, instituto e periodo de campo quando disponiveis e nunca generalize alem do representative_scope documentado.
+Quando social_perception trouxer view_count_total/view_count_known_posts, trate isso apenas como visualizacoes acumuladas disponiveis nos posts monitorados, uma aproximacao de alcance bruto. Nao converta visualizacoes em pessoas unicas, audiencia unica, cobertura populacional ou representatividade.
 Se public_opinion nao trouxer pesquisas estruturadas, diga apenas que nenhum levantamento suficientemente auditavel foi estruturado nesta execucao; nao conclua que nao existem pesquisas nem que a populacao nao tem opiniao sobre o tema.
 Quando portal nao possuir item validado, use formulacao equivalente a "nenhum item validado desse veiculo foi localizado na amostra".
 """,
@@ -48,6 +49,7 @@ Verifique:
 - NÃO trate automaticamente como conflito cifras sucessivas do mesmo evento/operação. Se fact_events.count_timelines mostrar evolução temporal atribuída (ex.: 60 → 64 → 119 → 121), audite se o relatório a descreve como atualização de balanço. Só marque conflito bloqueador quando valores comparáveis para o mesmo momento/definição permanecerem incompatíveis;
 - porcentagem de mencoes ao ISP nao apresentada como protagonismo sem evidencia adicional;
 - resultados de opiniao publica nao confundidos com comentarios/engajamento de redes sociais; percentuais populacionais devem estar vinculados a pesquisa estruturada, universo, instituto e recorte metodologico fornecidos;
+- visualizacoes de posts sociais nao apresentadas como pessoas unicas, audiencia unica ou alcance populacional; se houver soma de views, ela deve ser qualificada como alcance bruto/visualizacoes acumuladas disponiveis e limitada aos posts com metrica conhecida;
 - em produto institucional, vinculo documental com o produto/edicao;
 - ausencia de datas ficticias, vazias ou placeholders tecnicos;
 - se metrics.valid_items=0 e houver contexto academico/factual, confirme que search_recovery registra ao menos uma consulta de expansao realmente executada antes de aceitar corpus zero;
