@@ -4,6 +4,9 @@ from types import SimpleNamespace
 from app.fact_layer import _operation_display_name, event_identity_key, normalize_fact_value
 from app.main import app
 from app.database import Base
+from app.facts.resolution import resolve_assertions as domain_resolve_assertions
+from app.facts.selection import is_annual_police_operation_project
+from app.corpus.similarity import project_similarity as corpus_project_similarity
 from app.models import (
     AppUser,
     MediaItem,
@@ -119,4 +122,35 @@ def test_social_discovery_domain_keeps_compact_terms():
     assert terms
     assert any("Lula Bolsonaro" in term for term in terms)
     assert all(len(term.split()) <= 8 for term in terms)
+
+def test_fact_resolution_facade_points_to_domain_module():
+    from app.fact_layer import resolve_assertions as facade_resolve_assertions
+    assert facade_resolve_assertions is domain_resolve_assertions
+
+
+def test_fact_selection_recognizes_annual_operation_topic():
+    project = SimpleNamespace(
+        project_type="EVENT_TOPIC",
+        event_start=date(2025, 1, 1),
+        event_end=date(2025, 12, 31),
+        topic="operações policiais no Rio de Janeiro em 2025",
+        topic_profile={"event_anchor": "operações policiais"},
+    )
+    assert is_annual_police_operation_project(project) is True
+
+
+def test_corpus_similarity_keeps_identical_topic_at_one():
+    project_a = SimpleNamespace(
+        topic="Dossiê Mulher 2026",
+        topic_profile={},
+        event_start=None,
+        event_end=None,
+    )
+    project_b = SimpleNamespace(
+        topic="Dossiê Mulher 2026",
+        topic_profile={},
+        event_start=None,
+        event_end=None,
+    )
+    assert corpus_project_similarity(project_a, project_b) == 1.0
 
