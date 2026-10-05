@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Relatório de Repercussão Midiática</title>
-  <link rel="stylesheet" href="/static/styles.css?v=26">
+  <link rel="stylesheet" href="/static/styles.css?v=27">
 </head>
 <body>
 <header class="top index-top screen-only">
@@ -110,6 +110,36 @@
             <summary>2. Como será pesquisado</summary>
             <div id="search-strategy-content" class="research-audit-content"></div>
           </details>
+          <details id="collection-preview-card" class="research-audit-card">
+            <summary>3. Prévia da coleta</summary>
+            <div id="collection-preview-content" class="research-audit-content">
+              <div class="audit-waiting">A coleta ainda não começou.</div>
+            </div>
+          </details>
+          <details id="social-preview-card" class="research-audit-card">
+            <summary>4. Percepção nas redes sociais</summary>
+            <div id="social-preview-content" class="research-audit-content">
+              <div class="audit-waiting">Aguardando a etapa de redes sociais.</div>
+            </div>
+          </details>
+          <details id="validation-preview-card" class="research-audit-card">
+            <summary>5. Validação das notícias</summary>
+            <div id="validation-preview-content" class="research-audit-content">
+              <div class="audit-waiting">Aguardando a validação das notícias.</div>
+            </div>
+          </details>
+          <details id="facts-preview-card" class="research-audit-card">
+            <summary>6. Extração e consolidação factual</summary>
+            <div id="facts-preview-content" class="research-audit-content">
+              <div class="audit-waiting">Aguardando a camada factual.</div>
+            </div>
+          </details>
+          <details id="analysis-preview-card" class="research-audit-card">
+            <summary>7. Análise e classificação</summary>
+            <div id="analysis-preview-content" class="research-audit-content">
+              <div class="audit-waiting">Aguardando análise e classificação.</div>
+            </div>
+          </details>
         </div>
       </section>
     </section>
@@ -131,6 +161,6 @@
 <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3-cloud@1.2.9/build/d3.layout.cloud.js"></script>
 <script src="/static/auth.js?v=3"></script>
-<script src="/static/app.js?v=21"></script>
+<script src="/static/app.js?v=22"></script>
 </body>
 </html>
