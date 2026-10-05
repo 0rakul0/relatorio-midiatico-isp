@@ -8,8 +8,6 @@ como corpus validado do relatorio.
 
 from __future__ import annotations
 
-import math
-from datetime import date
 from urllib.parse import urlparse
 
 from sqlalchemy import select
@@ -30,6 +28,12 @@ from app.corpus.chat_text import (
     tokens as _tokens,
     topic_key as _topic_key,
 )
+from app.corpus.chat_retrieval import (
+    dedupe_items as _dedupe_items,
+    rank_items as _rank_items,
+    recent_key as _recent_key,
+    serialize_members as _serialize_members,
+)
 
 
 def _visible_projects(db: Session, user) -> list[Project]:
@@ -44,25 +48,6 @@ def _group_project_ids(db: Session, project: Project) -> list[int]:
     rows = db.execute(query).all()
     key = _topic_key(project.topic)
     return [project_id for project_id, topic in rows if _topic_key(topic) == key]
-
-
-def _dedupe_items(items: list[MediaItem]) -> list[MediaItem]:
-    unique: dict[str, MediaItem] = {}
-    for item in items:
-        key = (item.canonical_url or item.url or f"id:{item.id}").strip()
-        current = unique.get(key)
-        if current is None:
-            unique[key] = item
-            continue
-        current_text = (current.content or current.snippet or "").strip()
-        candidate_text = (item.content or item.snippet or "").strip()
-        if len(candidate_text) > len(current_text):
-            unique[key] = item
-    return list(unique.values())
-
-
-def _recent_key(item: MediaItem) -> tuple[date, int]:
-    return item.published_at or date.min, item.id or 0
 
 
 def _casual_answer(kind: str, project_payload: dict, corpus_size: int) -> str:
@@ -80,95 +65,6 @@ def _casual_answer(kind: str, project_payload: dict, corpus_size: int) -> str:
         "Você pode me perguntar sobre temas, períodos, operações, pessoas, veículos, "
         "dados encontrados ou comparar informações do acervo."
     )
-
-
-def _rank_items(items: list[MediaItem], question: str, limit: int) -> list[MediaItem]:
-    """BM25-like leve, sem custo externo, para reduzir contexto enviado a LLM."""
-    if not items:
-        return []
-    query_tokens = _tokens(question)
-    if not query_tokens:
-        # Pergunta sem termos recuperáveis não deve puxar notícias arbitrárias.
-        return []
-
-    normalized_question = _topic_key(question)
-    document_tokens: dict[int, set[str]] = {}
-    document_frequency = {token: 0 for token in query_tokens}
-
-    for item in items:
-        combined = " ".join(filter(None, [item.title, item.snippet, (item.content or "")[:6000]]))
-        tokens = _tokens(combined)
-        document_tokens[item.id] = tokens
-        for token in query_tokens:
-            if token in tokens:
-                document_frequency[token] += 1
-
-    total = max(1, len(items))
-    ranked: list[tuple[float, date, int, MediaItem]] = []
-    for item in items:
-        title_tokens = _tokens(item.title)
-        snippet_tokens = _tokens(item.snippet)
-        body_tokens = document_tokens.get(item.id, set())
-        matched = query_tokens & body_tokens
-        score = 0.0
-        for token in matched:
-            idf = math.log((total + 1) / (document_frequency[token] + 1)) + 1.0
-            weight = 1.0
-            if token in snippet_tokens:
-                weight += 0.8
-            if token in title_tokens:
-                weight += 2.2
-            score += idf * weight
-
-        if query_tokens:
-            score += 4.0 * (len(matched) / len(query_tokens))
-
-        haystack = _topic_key(" ".join(filter(None, [item.title, item.snippet, (item.content or "")[:6000]])))
-        if len(normalized_question) >= 12 and normalized_question in haystack:
-            score += 8.0
-
-        published, item_id = _recent_key(item)
-        ranked.append((score, published, item_id, item))
-
-    ranked.sort(key=lambda row: (row[0], row[1], row[2]), reverse=True)
-    positive = [row[3] for row in ranked if row[0] > 0]
-    selected = positive[:limit]
-
-    # Se a pergunta tiver poucos matches lexicais, completa com documentos
-    # recentes. Isso evita contexto vazio para perguntas resumidoras.
-    if len(selected) < min(6, limit):
-        seen = {item.id for item in selected}
-        for item in sorted(items, key=_recent_key, reverse=True):
-            if item.id in seen:
-                continue
-            selected.append(item)
-            seen.add(item.id)
-            if len(selected) >= limit:
-                break
-    return selected[:limit]
-
-
-def _serialize_members(items: list[MediaItem]) -> list[dict]:
-    max_chars = get_settings().chat_item_max_chars
-    members: list[dict] = []
-    for index, item in enumerate(items):
-        text = (item.content or "").strip() or (item.snippet or "").strip()
-        members.append(
-            {
-                "index": index,
-                "reference": f"F{index + 1}",
-                "id": item.id,
-                "title": item.title,
-                "domain": item.domain,
-                "url": item.url,
-                "published_at": item.published_at.isoformat() if item.published_at else None,
-                "source_name": item.source_name,
-                "media_origin": item.media_origin,
-                "search_source": item.search_source,
-                "content": text[:max_chars],
-            }
-        )
-    return members
 
 
 def _project_items(db: Session, project: Project) -> tuple[list[MediaItem], list[int]]:
