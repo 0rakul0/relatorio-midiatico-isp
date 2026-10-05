@@ -25,7 +25,7 @@ async function renderAuth(){
 $('#auth-logout').onclick=doLogout;
 bootstrapAuth().then(session=>{if(session){renderAuth();}else{window.location.href='/login';}}).catch(()=>window.location.href='/login');
 const table=(headers,rows)=>`<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(cell=>{const s=String(cell??'');return `<td>${s.startsWith(RAW_HTML)?s.slice(RAW_HTML.length):esc(s)}</td>`}).join('')}</tr>`).join('')}</tbody></table></div>`;
-let currentProjectId=null,currentRunId=null,pollTimer=null;
+let currentProjectId=null,currentRunId=null,pollTimer=null,researchAuditKey=null;
 
 const BRAZIL_STATES_GEOJSON='https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson';
 let selectedGeographicScopes=new Set();
@@ -609,16 +609,139 @@ function runStatusClass(status){
 
 
 
+function researchPurposeLabel(value){
+  return ({
+    MEDIA_REPERCUSSION:'Busca de repercussão',
+    FACT_DISCOVERY:'Busca factual',
+    OFFICIAL_FACT:'Fontes oficiais',
+    NOMINAL_FOLLOWUP:'Busca nominal complementar'
+  })[value]||value||'Outra busca';
+}
+
+function auditValue(label,value){
+  if(value===null||value===undefined||value===''||(Array.isArray(value)&&!value.length))return '';
+  const display=Array.isArray(value)?value.join(' · '):value;
+  return `<div class="audit-field"><span>${esc(label)}</span><strong>${esc(display)}</strong></div>`;
+}
+
+function auditChips(values){
+  const rows=(values||[]).filter(Boolean);
+  if(!rows.length)return '<span class="audit-empty">Nenhum item adicional identificado.</span>';
+  return `<div class="audit-chips">${rows.map(value=>`<span>${esc(value)}</span>`).join('')}</div>`;
+}
+
+function renderResearchAudit(data,{planningDone=false}={}){
+  const panel=$('#research-audit');
+  if(!panel)return;
+  panel.classList.remove('hidden');
+
+  const collection=data.collection_window||{};
+  const eventWindow=data.event_window||{};
+  const entities=data.entities||{};
+  const geographic=(data.geographic_scopes||[]).length?(data.geographic_scopes||[]).join(', '):'Nacional';
+  const collectionLabel=collection.start&&collection.end?`${collection.start} → ${collection.end}`:'Busca temática, sem restrição temporal';
+  const eventLabel=eventWindow.start&&eventWindow.end?`${eventWindow.start} → ${eventWindow.end}`:'Sem janela factual explícita';
+
+  $('#topic-interpretation-content').innerHTML=`
+    <div class="audit-topic-block">
+      <span>Tema pesquisado</span>
+      <strong>${esc(data.original_topic||'')}</strong>
+    </div>
+    <div class="audit-topic-block interpreted">
+      <span>Núcleo interpretado pelo sistema</span>
+      <strong>${esc(data.interpreted_topic||data.original_topic||'')}</strong>
+    </div>
+    <div class="audit-fields">
+      ${auditValue('Tipo de pauta',data.project_type_label||data.project_type)}
+      ${auditValue('Recorte geográfico',geographic)}
+      ${auditValue('Janela de repercussão',collectionLabel)}
+      ${auditValue('Janela dos fatos',eventLabel)}
+    </div>
+    <div class="audit-subsection">
+      <span class="audit-subtitle">Correções e variações de busca</span>
+      ${auditChips(data.corrections_and_variants)}
+    </div>
+    <div class="audit-subsection">
+      <span class="audit-subtitle">Entidades e conceitos reconhecidos</span>
+      ${auditChips([
+        ...(entities.atores||[]),
+        ...(entities['ações']||[]),
+        ...(entities.locais||[]),
+        ...(entities['organizações']||[]),
+        ...(entities.assuntos||[])
+      ])}
+    </div>
+  `;
+
+  const queries=data.queries||[];
+  const grouped=new Map();
+  for(const query of queries){
+    const key=researchPurposeLabel(query.purpose);
+    if(!grouped.has(key))grouped.set(key,[]);
+    grouped.get(key).push(query);
+  }
+  const monthlyCount=queries.filter(q=>String(q.kind||'').includes('month')).length;
+  const querySummary=queries.length
+    ? `<div class="audit-query-summary">
+        <span><strong>${queries.length}</strong> consultas planejadas</span>
+        ${monthlyCount?`<span><strong>${monthlyCount}</strong> consultas mensais</span>`:''}
+        <span><strong>${grouped.size}</strong> finalidades</span>
+      </div>`
+    : '<div class="audit-waiting">O perfil foi concluído. As consultas aparecerão assim que o planejamento terminar.</div>';
+
+  const queryGroups=[...grouped.entries()].map(([label,rows])=>`
+    <div class="audit-query-group">
+      <div class="audit-query-group-head">
+        <strong>${esc(label)}</strong>
+        <span>${rows.length} consulta(s)</span>
+      </div>
+      <div class="audit-query-list">
+        ${rows.map(row=>`
+          <div class="audit-query">
+            <div class="audit-query-main"><code>${esc(row.query)}</code></div>
+            <div class="audit-query-meta">
+              <span>${esc(row.kind||'busca')}</span>
+              ${row.rationale?`<span>${esc(row.rationale)}</span>`:''}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
+
+  $('#search-strategy-content').innerHTML=querySummary+queryGroups;
+  $('#research-audit-status').textContent=planningDone?'Perfil e planejamento concluídos':'Perfil concluído · planejando consultas';
+  $('#research-audit-status').classList.toggle('done',planningDone);
+}
+
+async function maybeLoadResearchAudit(run,stages){
+  const profile=stages.find(stage=>stage.key==='profile');
+  if(!run?.project_id||!profile||profile.status!=='DONE')return;
+  const planning=stages.find(stage=>stage.key==='search_plan');
+  const planningDone=planning?.status==='DONE';
+  const key=`${run.project_id}:${profile.status}:${planning?.status||'PENDING'}`;
+  if(researchAuditKey===key)return;
+  researchAuditKey=key;
+  try{
+    const data=await api(`/projects/${run.project_id}/research-plan`);
+    renderResearchAudit(data,{planningDone});
+  }catch(error){
+    researchAuditKey=null;
+    const status=$('#research-audit-status');
+    if(status)status.textContent=`Não foi possível carregar a auditoria: ${error.message}`;
+  }
+}
+
 const STAGE_GROUPS = [
   { number: 1, label: 'Perfil do tema', keys: ['profile'] },
   { number: 2, label: 'Planejamento do relatório', keys: ['search_plan'] },
   {
     number: 3,
     label: 'Coleta',
-    keys: ['collection', 'youtube', 'social_repercussion'],
+    keys: ['collection', 'youtube', 'academic_research'],
     vertical: true
   },
-  { number: 4, label: 'Literatura científica', keys: ['academic_research'] },
+  { number: 4, label: 'Percepção nas redes sociais', keys: ['social_repercussion'] },
   { number: 5, label: 'Validação das notícias', keys: ['validation'] },
   { number: 6, label: 'Extração factual', keys: ['facts_pass_1'] },
   { number: 7, label: 'Consolidação factual', keys: ['fact_resolution_1'] },
@@ -712,6 +835,7 @@ function renderRun(run){
   $('#run-tracker').classList.remove('hidden');
 
   const rawStages = run.stages || [];
+  maybeLoadResearchAudit(run,rawStages);
   const allGroups = buildGroupedStages(rawStages);
   const planningFinished = rawStages.find(stage => stage.key === 'search_plan')?.status === 'DONE';
   const groups = (planningFinished
@@ -856,7 +980,7 @@ async function pollRun(){
 
 async function loadHistory(){try{const rows=await api('/reports/history');const box=$('#history-list');if(!rows.length){box.innerHTML='<span class="note">Nenhum relatório salvo.</span>';return}box.innerHTML='';rows.forEach(row=>{const wrap=document.createElement('div');wrap.className='history-entry';const open=document.createElement('button');open.className='history-item';open.innerHTML=`<strong>${esc(row.topic)}</strong><span>${esc(row.generated_at||'')} · QA ${esc(row.qa_status||'PENDING')}</span>`;open.onclick=async()=>{const d=await api(`/reports/history/${row.id}`);currentProjectId=row.id;render(d.report)};const actions=document.createElement('div');actions.className='history-actions';const refine=document.createElement('button');refine.className='history-refine';refine.textContent=row.qa_status==='APPROVED'?'✓':'Refinar';refine.title=row.qa_status==='APPROVED'?'QA já aprovado':'Refinar a pesquisa a partir dos achados CRITICAL/HIGH do QA';refine.disabled=row.qa_status==='APPROVED';refine.onclick=async()=>{if(!confirm('Refinar este relatório usando os achados bloqueadores do QA? Novas buscas e chamadas de LLM podem gerar custo.'))return;try{currentProjectId=row.id;refine.disabled=true;let response;try{response=await api(`/reports/history/${row.id}/refine`,{method:'POST'})}catch(primaryError){if(primaryError.status!==404)throw primaryError;try{response=await api(`/projects/${row.id}/refine-qa-async`,{method:'POST'})}catch(legacyError){if(legacyError.status!==404)throw legacyError;let health={};try{health=await api(`/health?_=${Date.now()}`)}catch(_healthError){}throw new Error(`A API carregada não registrou as rotas de refinamento. Backend: ${health.version||'versão desconhecida'}. Arquivo esperado: app.main. Reinicie o processo que realmente ocupa a porta 8000.`)}}currentRunId=response.run.run_id;renderRun(response.run);$('#run-tracker').classList.remove('hidden');$('#progress').classList.remove('hidden');$('#progress').textContent='Refinando a pesquisa a partir dos achados do QA.';pollFailures=0;pollDelay=1000;schedulePoll(1000);await pollRun()}catch(e){alert(e.message);refine.disabled=false}};const del=document.createElement('button');del.className='danger history-delete';del.textContent='×';del.onclick=async()=>{if(!confirm('Excluir esta versão e seus dados associados?'))return;await api(`/reports/history/${row.id}`,{method:'DELETE'});loadHistory()};actions.append(refine,del);wrap.append(open,actions);box.appendChild(wrap)})}catch(e){$('#history-list').textContent=e.message}}
 
-$('#report-form').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#submit'),progress=$('#progress');btn.disabled=true;progress.classList.remove('hidden');$('#run-tracker').classList.add('hidden');try{
+$('#report-form').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#submit'),progress=$('#progress');btn.disabled=true;progress.classList.remove('hidden');$('#run-tracker').classList.add('hidden');$('#research-audit').classList.add('hidden');researchAuditKey=null;try{
   progress.textContent='Preparando projeto…';
   const payload={topic:$('#topic').value.trim(),execution_profile:$('#execution-profile').value||'AUTO'};
   if(selectedGeography().length)payload.geographic_scopes=selectedGeography();
