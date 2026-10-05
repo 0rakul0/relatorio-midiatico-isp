@@ -310,7 +310,7 @@ def run_full_methodology(
     stage(
         "social_repercussion",
         "RUNNING",
-        "Roteando posts sociais descobertos pelo DuckDuckGo e enriquecendo comentarios via Apify",
+        "Buscando posts diretamente por plataforma no DuckDuckGo e enriquecendo comentarios via Apify",
     )
     try:
         social_repercussion = collect_social_repercussion(db, project)
@@ -343,12 +343,20 @@ def run_full_methodology(
                 )[:180],
             )
         else:
+            discovery = social_repercussion.get("discovery") or {}
+            discovery_note = (
+                f"; descoberta dedicada: {discovery.get('eligible_posts', 0)} post(s) elegivel(is), "
+                f"{discovery.get('new_items', 0)} novo(s)"
+                if discovery
+                else ""
+            )
             stage(
                 "social_repercussion",
                 "DONE",
                 f"{social_repercussion.get('posts', 0)} post(s); "
                 f"{social_repercussion.get('comments', 0)} comentario(s); "
-                f"{social_repercussion.get('analyzed_comments', 0)} analisado(s)",
+                f"{social_repercussion.get('analyzed_comments', 0)} analisado(s)"
+                + discovery_note,
             )
 
     # 4. News validation ------------------------------------------------
