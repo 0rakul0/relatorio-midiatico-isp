@@ -22,7 +22,7 @@ from app.services.collection.media_origin import (
     YOUTUBE,
     classify_media_origin,
 )
-from app.services.collection.youtube_helpers import is_youtube_host, matches_priority_youtube_channel, youtube_tasks_for_execution
+from app.services.collection.youtube_helpers import is_youtube_host, matches_priority_youtube_channel
 from app.services.validation import low_information_title
 
 
@@ -435,10 +435,9 @@ def metrics(db: Session, project_id: int) -> dict:
             min(len(MediaScout(project.topic, project.topic_profile).web_tasks()), settings.max_search_queries)
             if project else 0
         ),
-        "youtube_tasks": (
-            len(youtube_tasks_for_execution(project))
-            if project else 0
-        ),
+        # YouTube é roteado dos resultados do DuckDuckGo; não há mais um
+        # planejador de consultas independente para a plataforma.
+        "youtube_tasks": 0,
         "platforms": platforms,
     }
 

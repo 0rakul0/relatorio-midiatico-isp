@@ -10,7 +10,7 @@ from .classification import classify_with_llm
 from .collection.common import canonicalize, query_window
 from .collection.web import collect_web
 from .collection.youtube import collect_media_sources
-from .collection.youtube_helpers import is_youtube_url, youtube_tasks_for_execution
+from .collection.youtube_helpers import is_youtube_url
 from .corpus_chat import chat_with_all_corpus, chat_with_corpus, list_chat_projects
 from .chat_history import (
     delete_chat_conversation,
@@ -53,5 +53,4 @@ __all__ = [
     "run_full_methodology",
     "validate_and_classify",
     "validate_video_metadata_cross_source",
-    "youtube_tasks_for_execution",
 ]
