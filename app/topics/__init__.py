@@ -1,1 +1,1 @@
-"""Regras determinísticas para perfis temáticos.\n"""\n
+# package
