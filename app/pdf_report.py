@@ -783,6 +783,36 @@ def build_pdf(data: dict) -> bytes:
                     )
                 )
 
+            discourse = social_repercussion.get("discourse_analysis") or {}
+            if discourse:
+                story.append(Paragraph("Leitura qualitativa dos comentários", heading))
+                if discourse.get("overall_reading"):
+                    story.append(Paragraph(escape(_text(discourse.get("overall_reading"))), body))
+
+                def add_discourse_group(title: str, rows: list[dict]):
+                    cleaned = [
+                        row for row in (rows or [])
+                        if isinstance(row, dict) and (row.get("title") or row.get("analysis"))
+                    ]
+                    if not cleaned:
+                        return
+                    story.append(Paragraph(title, heading))
+                    for row in cleaned:
+                        label = escape(_text(row.get("title") or "Achado"))
+                        analysis_text = escape(_text(row.get("analysis") or ""))
+                        story.append(Paragraph(f"<b>{label}</b> - {analysis_text}", body))
+
+                add_discourse_group("Narrativas dominantes", discourse.get("dominant_narratives") or [])
+                add_discourse_group("Argumentos recorrentes", discourse.get("recurring_arguments") or [])
+                add_discourse_group("Tensões e contradições", discourse.get("tensions_and_contradictions") or [])
+                add_discourse_group("Formas de interação", discourse.get("interaction_patterns") or [])
+                if discourse.get("polarization_signals"):
+                    story.append(Paragraph("Sinais de polarização na amostra", heading))
+                    story.append(Paragraph(escape(_text(discourse.get("polarization_signals"))), body))
+                if discourse.get("sample_limitations"):
+                    story.append(Paragraph("Limitações da leitura social", heading))
+                    story.append(Paragraph(escape(_text(discourse.get("sample_limitations"))), small))
+
             methodology_note = social_repercussion.get("methodology_note")
             if methodology_note:
                 story.append(
