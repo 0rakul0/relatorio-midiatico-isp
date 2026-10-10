@@ -389,13 +389,13 @@ function render(result){
   const wordCloud=result.word_cloud||{};
   const academicPapers=result.academic_papers||[];
   const academicSection=academicPapers.length?`<h2>Literatura científica relacionada</h2>
-    <p class="related-intro">Estes trabalhos foram recuperados no arXiv para contextualização científica. Eles não são contados como repercussão midiática e não confirmam automaticamente fatos noticiados.</p>
+    <p class="related-intro">Estes trabalhos foram recuperados em bases científicas como SciELO, OpenAlex, Crossref, Semantic Scholar e arXiv para contextualização científica. Eles não são contados como repercussão midiática e não confirmam automaticamente fatos noticiados.</p>
     ${table(['Ano','Autores','Artigo','Relação com o tema','Fonte'],academicPapers.map(x=>[
       x.published_at?String(x.published_at).slice(0,4):'N/D',
       (x.authors||[]).slice(0,4).join(', ')+((x.authors||[]).length>4?' et al.':''),
       raw(`<strong>${esc(x.title||'Sem título')}</strong>${x.title_original&&x.title_original!==x.title? `<br><small>Original: ${esc(x.title_original)}</small>`:''}${x.abstract_ptbr? `<details class="academic-abstract"><summary>Resumo em pt-BR</summary><small>${esc(x.abstract_ptbr)}</small></details>`:''}`),
       x.relation_to_topic||'Contexto científico relacionado',
-      x.url?raw(`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">arXiv</a>`):'N/D'
+      x.url?raw(`<a href="${esc(x.url)}" target="_blank" rel="noreferrer">Abrir artigo</a>`):'N/D'
     ]))}`:'';
   const sourceBuckets=rawCorpus.length
     ? bucketByOrigin(rawCorpus)
