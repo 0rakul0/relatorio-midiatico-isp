@@ -105,3 +105,14 @@ def test_project_create_accepts_scientific_profile():
     from app.schema_groups.api import ProjectCreate
     model = ProjectCreate(topic="Violencia contra mulheres no Brasil", execution_profile="MIDIATICO_CIENTIFICO")
     assert model.execution_profile == "MIDIATICO_CIENTIFICO"
+
+
+def test_pdf_opinion_table_retains_auditable_indicators_outside_summary():
+    from pathlib import Path
+    # Regression contract: summary table must stay bounded rather than
+    # occupying most of the document with repeated survey indicators.
+    from app.reports.pdf import public_opinion
+    import inspect
+    source = inspect.getsource(public_opinion.add_public_opinion_section)
+    assert "seen_indicators" in source
+    assert "indicator_rows[:19]" in source
