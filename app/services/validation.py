@@ -198,6 +198,22 @@ não para mera coincidência de palavras. Rejeite conteúdo tangencial,
 sem evidência textual da relação com o tema.
 """
 
+    # A ideologia de genero, sem agressao, ameaca, assedio ou discriminacao
+    # contra mulheres, nao comprova cobertura de violencia de genero.
+    # Este criterio vale para a analise semantica, nao apenas por palavra-chave.
+    if project.project_type == "GENERAL_TOPIC":
+        normalized_topic = normalized_text(project.topic)
+        if "violencia" in normalized_topic and "mulher" in normalized_topic:
+            extra_instructions += """
+REGRA DE EXCLUSAO:
+Reportagens exclusivamente sobre disputas eleitorais, candidatos, ou
+"ideologia de genero" nao sao evidencias de violencia contra mulheres.
+Exija descricao concreta de violencia, ameaca, assedio, femicidio,
+violencia politica de genero ou resposta institucional especifica.
+Politica de protecao as mulheres e violencia politica de genero sao
+relevantes quando a ligacao for explicita.
+"""
+
     payload_items = []
     max_chars = max(500, settings.validation_item_max_chars)
     for item in items:
