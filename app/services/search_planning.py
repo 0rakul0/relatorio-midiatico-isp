@@ -21,6 +21,7 @@ from app.services.collection.guards import query_preserves_project_anchor
 from app.services.execution_profile import (
     execution_flags,
     heuristic_execution_plan,
+    execution_profile_guidance,
     sanitize_execution_plan,
 )
 from app.services.project_profile import project_payload
@@ -109,6 +110,7 @@ def plan_report_with_llm(db: Session, project: Project) -> list[SearchQuery]:
         "project": project_payload(project),
         "topic_profile": project.topic_profile,
         "requested_execution_profile": project.execution_profile or "AUTO",
+        "perfil": execution_profile_guidance(project),
         "execution_overrides": project.execution_options or {},
         "reusable_corpus": (project.topic_profile or {}).get("corpus_reuse") or {},
         "planning_constraints": {
@@ -143,6 +145,7 @@ def plan_report_with_llm(db: Session, project: Project) -> list[SearchQuery]:
         result = get_report_agent().run(
             task="report_planner",
             payload=payload,
+            extra_instructions="INSTRUCOES DO PERFIL DE EXECUCAO (precedencia sobre decisoes opcionais do planejador):\n" + execution_profile_guidance(project),
             schema_name="report_plan_v1",
             response_model=ReportPlanResponse,
             max_output_tokens=3800,
