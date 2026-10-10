@@ -130,6 +130,10 @@ def social_repercussion_for_report(db: Session, project_id: int) -> dict:
     base = {
         "posts": total_posts,
         "excluded_posts": excluded_posts,
+        "discovered_posts": original_total_posts,
+        "eligible_posts": total_posts,
+        "posts_with_verified_views": known_view_count,
+        "posts_without_verified_views": total_posts - known_view_count,
         "comments": total_comments,
         "post_inventory": post_inventory,
         "view_count_total": total_view_count,
