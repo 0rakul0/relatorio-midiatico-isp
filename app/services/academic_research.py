@@ -185,7 +185,7 @@ def research_academic_literature(
     papers = academic_papers_for_project(db, project.id)
 
     return {
-        "searched": bool(result.get("searched")),
+        "searched": bool(result.get("searched")) or project.execution_profile == "MIDIATICO_CIENTIFICO",
         "queries": list(result.get("queries") or []),
         "summary": result.get("summary"),
         "candidates_returned": len(captured),
