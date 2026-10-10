@@ -63,6 +63,23 @@ class ReportAgent:
                 tools=tool_list,
             )
 
+        if task == "academic_research" and payload.get("require_academic_search"):
+            tool = next((item for item in tool_list if item.name == "pesquisar_literatura_cientifica"), None)
+            if tool is None:
+                raise RuntimeError("A ferramenta de literatura cientifica obrigatoria nao esta disponivel.")
+            topic = str((payload.get("project") or {}).get("topic") or "").strip()
+            terms = [topic] if topic else []
+            normalized = topic.casefold()
+            if "mulher" in normalized and "viol" in normalized:
+                terms.extend(["violencia de genero feminicidio Brasil", "violence against women Brazil"])
+            elif topic:
+                terms.append(topic + " Brasil pesquisa cientifica")
+            terms = list(dict.fromkeys(terms))[:3]
+            observation = tool.invoke({"queries": terms, "max_results_per_query": 8})
+            payload = dict(payload)
+            payload["mandatory_academic_search"] = observation
+            payload["mandatory_academic_queries"] = terms
+
         llm = create_chat_model(max_output_tokens=max_output_tokens)
         messages: list[Any] = [
             SystemMessage(content=prompt),
