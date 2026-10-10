@@ -331,7 +331,12 @@ def build_pdf(data: dict) -> bytes:
             f"<b>{metrics.get('unique_vehicles', 0)} veículos distintos</b> com cobertura auditável;",
             f"<b>{thematic_fronts} frentes temáticas</b> sintetizadas no relatório;",
             f"<b>{metrics.get('discarded_items', 0)} itens descartados</b> por insuficiência de relação documental;",
-            f"<b>{metrics.get('collection_days', 0)} dia(s)</b> na janela de observação;",
+            (
+                f"<b>{metrics.get('collection_days')} dia(s)</b> na janela de observação;"
+                if project.get("collection_start") and project.get("collection_end")
+                and metrics.get("collection_days") is not None
+                else "<b>Período não delimitado</b> - busca temática;"
+            ),
             f"<b>{metrics.get('isp_mentioned_items', 0)} itens ({metrics.get('isp_mention_percent', 0)}%)</b> mencionam a instituição na amostra.",
         ]
         metric_content.extend([Paragraph("• " + line, body) for line in number_lines])
