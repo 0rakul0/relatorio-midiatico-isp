@@ -89,6 +89,7 @@ def research_academic_literature(
         payload={
             "project": project_payload(project, for_report=True),
             "topic_profile": project.topic_profile or {},
+            "require_academic_search": project.execution_profile == "MIDIATICO_CIENTIFICO",
             "instruction": (
                 "Busque literatura que ajude a contextualizar cientificamente o tema. "
                 "Nao trate artigo academico como item de repercussao midiática."
