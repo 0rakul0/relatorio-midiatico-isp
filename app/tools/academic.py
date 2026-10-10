@@ -52,7 +52,7 @@ def make_academic_search_tool(*, sink: AcademicSink | None = None) -> Structured
             for query in clean_queries:
                 jobs.extend([
                     ("scielo", query, pool.submit(search_scielo, query, max_results=limit)),
-                    ("scielo_crossref", query, pool.submit(search_crossref, query, max_results=limit, scielo_only=True)),
+                    ("scielo", query, pool.submit(search_crossref, query, max_results=limit, scielo_only=True)),
                     ("openalex", query, pool.submit(search_openalex, query, max_results=limit)),
                     ("crossref", query, pool.submit(search_crossref, query, max_results=limit)),
                     ("semantic_scholar", query, pool.submit(search_semantic_scholar, query, max_results=limit)),
@@ -75,7 +75,7 @@ def make_academic_search_tool(*, sink: AcademicSink | None = None) -> Structured
 
         # Prioriza SciELO e bases com metadados estruturados antes do arXiv
         # para temas brasileiros; relevancia final continua a cargo do agente.
-        priority = {"scielo": 0, "scielo_crossref": 1, "openalex": 2, "crossref": 3, "semantic_scholar": 4, "arxiv": 5}
+        priority = {"scielo": 0, "openalex": 1, "crossref": 2, "semantic_scholar": 3, "arxiv": 4}
         combined.sort(key=lambda row: priority.get(str(row.get("provider")), 9))
         payload = {
             "queries": clean_queries,
