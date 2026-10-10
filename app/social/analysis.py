@@ -60,6 +60,23 @@ def analyze_social_comments(
             select(SocialPost).where(SocialPost.project_id == project.id)
         ).all()
     )
+    # Somente comentarios associados a posts ligados ao tema entram na analise.
+    from app.social.discovery import social_topic_relevance
+    from app.models import MediaItem
+    media_ids = [post.media_item_id for post in posts if post.media_item_id]
+    media = {item.id: item for item in db.scalars(
+        select(MediaItem).where(MediaItem.id.in_(media_ids))
+    ).all()} if media_ids else {}
+    posts = [
+        post for post in posts
+        if social_topic_relevance(
+            project,
+            media[post.media_item_id].title if post.media_item_id in media else post.post_text,
+            media[post.media_item_id].snippet if post.media_item_id in media else None,
+        )[0]
+    ]
+    allowed_posts = {post.id for post in posts}
+    comments = [comment for comment in comments if comment.social_post_id in allowed_posts]
     platform_counts = dict(Counter(comment.platform for comment in comments))
 
     analysis = db.scalar(
