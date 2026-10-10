@@ -15,6 +15,7 @@ from app.tools.providers.academic_multi import (
     AcademicProviderUnavailable,
     search_crossref,
     search_openalex,
+    search_scielo,
     search_semantic_scholar,
 )
 
@@ -37,7 +38,7 @@ def make_academic_search_tool(*, sink: AcademicSink | None = None) -> Structured
         max_results_per_query: int = 6,
     ) -> dict[str, Any]:
         clean_queries = [" ".join(str(q or "").split()).strip() for q in queries or []]
-        clean_queries = [q for q in clean_queries if q][:3]
+        clean_queries = list(dict.fromkeys(q for q in clean_queries if q))[:3]
         limit = max(1, min(int(max_results_per_query or 6), 8))
         combined: list[dict[str, Any]] = []
         errors: list[str] = []
@@ -50,7 +51,8 @@ def make_academic_search_tool(*, sink: AcademicSink | None = None) -> Structured
         with ThreadPoolExecutor(max_workers=5) as pool:
             for query in clean_queries:
                 jobs.extend([
-                    ("scielo", query, pool.submit(search_crossref, query, max_results=limit, scielo_only=True)),
+                    ("scielo", query, pool.submit(search_scielo, query, max_results=limit)),
+                    ("scielo_crossref", query, pool.submit(search_crossref, query, max_results=limit, scielo_only=True)),
                     ("openalex", query, pool.submit(search_openalex, query, max_results=limit)),
                     ("crossref", query, pool.submit(search_crossref, query, max_results=limit)),
                     ("semantic_scholar", query, pool.submit(search_semantic_scholar, query, max_results=limit)),
@@ -73,7 +75,7 @@ def make_academic_search_tool(*, sink: AcademicSink | None = None) -> Structured
 
         # Prioriza SciELO e bases com metadados estruturados antes do arXiv
         # para temas brasileiros; relevancia final continua a cargo do agente.
-        priority = {"scielo": 0, "openalex": 1, "crossref": 2, "semantic_scholar": 3, "arxiv": 4}
+        priority = {"scielo": 0, "scielo_crossref": 1, "openalex": 2, "crossref": 3, "semantic_scholar": 4, "arxiv": 5}
         combined.sort(key=lambda row: priority.get(str(row.get("provider")), 9))
         payload = {
             "queries": clean_queries,
