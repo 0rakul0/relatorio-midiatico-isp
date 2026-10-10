@@ -370,6 +370,13 @@ def run_report_qa(db: Session, project: Project, payload: dict) -> dict:
     }
 
     findings = deterministic_report_qa(qa_payload)
+    if (project.execution_profile or "").upper() == "MIDIATICO_CIENTIFICO" and academic_count == 0:
+        findings.append({
+            "code": "SCIENTIFIC_PROFILE_NO_ACADEMIC_PAPERS",
+            "severity": "HIGH",
+            "message": "Perfil cientifico solicitado, mas nenhum artigo academico verificavel foi preservado.",
+            "evidence": "academic_papers=0; consultar resultados e falhas da etapa academic_research.",
+        })
     social = qa_payload.get("social_repercussion") or qa_payload.get("social_perception") or {}
     if isinstance(social, dict) and social.get("status") == "REANALYSIS_REQUIRED":
         findings.append({
