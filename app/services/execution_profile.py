@@ -37,6 +37,20 @@ EXECUTION_PROFILE_DEFAULTS = {
         "enable_report_writer": True,
         "enable_qa": True,
     },
+    "MIDIATICO_CIENTIFICO": {
+        "enable_web_collection": True,
+        "enable_youtube": True,
+        "enable_social_repercussion": True,
+        "enable_academic_research": True,
+        "enable_media_validation": True,
+        "enable_fact_layer": False,
+        "enable_fact_resolution": False,
+        "enable_nominal_followup": False,
+        "enable_second_fact_pass": False,
+        "enable_classification": True,
+        "enable_report_writer": True,
+        "enable_qa": True,
+    },
     "COMPLETO_NOMINAL": {
         "enable_web_collection": True,
         "enable_youtube": True,
@@ -194,6 +208,9 @@ def sanitize_execution_plan(project: Project, raw: dict[str, Any] | None) -> dic
         value = overrides.get(option_name)
         if isinstance(value, bool):
             processes[process_name] = _decision(value, f"Override explicito do usuario: {option_name}={value}.")
+
+    if selected == "MIDIATICO_CIENTIFICO":
+        processes["academic_research"] = _decision(True, "Pesquisa cientifica obrigatoria neste perfil.")
 
     # Re-apply dependencies after overrides.
     if not processes["fact_extraction"]["enabled"]:
