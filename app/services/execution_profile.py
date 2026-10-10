@@ -67,6 +67,28 @@ EXECUTION_PROFILE_DEFAULTS = {
     },
 }
 
+EXECUTION_PROFILE_GUIDANCE = {
+    "AUTO": "Planeje etapas pela pertinencia ao tema. Para tema geral de natureza social, considere literatura cientifica.",
+    "MIDIATICO_SIMPLES": "Priorize cobertura jornalistica e percepcao social, sem levantamento nominal.",
+    "MIDIATICO_COM_FATOS": "Priorize noticias e verificacao de fatos individualizaveis e seus contextos.",
+    "MIDIATICO_CIENTIFICO": (
+        "PERFIL CIENTIFICO OBRIGATORIO: inclua academic_research=true; "
+        "pesquise SciELO, OpenAlex, Crossref, Semantic Scholar e arXiv; "
+        "separe artigos cientificos do corpus jornalistico e da opiniao publica; "
+        "preserve titulos, DOI, metodos, resultados e fontes verificaveis. "
+        "A busca nao pode ser omitida por criterio discricionario da LLM."
+    ),
+    "COMPLETO_NOMINAL": "Inclua fatos e corroboracao nominal quando houver ocorrencias e pessoas identificaveis.",
+}
+
+
+def execution_profile_guidance(project: Project) -> str:
+    return EXECUTION_PROFILE_GUIDANCE.get(
+        str(project.execution_profile or "AUTO").upper(),
+        EXECUTION_PROFILE_GUIDANCE["AUTO"],
+    )
+
+
 _PROCESS_TO_FLAG = {
     "web_collection": "enable_web_collection",
     "youtube_collection": "enable_youtube",
