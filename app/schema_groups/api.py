@@ -21,6 +21,7 @@ class ProjectCreate(BaseModel):
         "AUTO",
         "MIDIATICO_SIMPLES",
         "MIDIATICO_COM_FATOS",
+        "MIDIATICO_CIENTIFICO",
         "COMPLETO_NOMINAL",
     ] = "AUTO"
     enable_fact_layer: bool | None = None
