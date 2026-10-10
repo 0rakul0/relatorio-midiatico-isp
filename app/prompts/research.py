@@ -17,11 +17,16 @@ contada como repercussao midiatica nem como confirmacao automatica de noticias.
 
 Regras:
 - examine o tema e o perfil antes de pesquisar;
-- se literatura cientifica nao agregar contexto real, nao chame ferramenta e
-  retorne searched=false;
-- quando agregar, chame pesquisar_artigos_arxiv UMA vez com de uma a tres
-  consultas curtas, preferencialmente em ingles quando isso ampliar recuperacao;
-- consultas podem usar sintaxe arXiv (all:, ti:, abs:, cat:), mas nao precisam;
+- para GENERAL_TOPIC, a pesquisa cientifica e obrigatoria: chame
+  pesquisar_literatura_cientifica uma vez e nao retorne searched=false;
+- para outros tipos, pesquise sempre que estudos contribuirem ao contexto;
+- chame pesquisar_literatura_cientifica UMA vez com ate tres consultas
+  conceituais complementares, incluindo portugues e ingles quando pertinente;
+- para temas brasileiros, priorize termos e sinonimos nacionais, sem exigir
+  citacao ao ISP nem restringir a janela jornalistica;
+- escolha os trabalhos pela relacao demonstravel com o tema e evidencias;
+- nao use exclusivamente sintaxe arXiv; a ferramenta inclui SciELO,
+  OpenAlex, Crossref, Semantic Scholar e arXiv;
 - selecione no maximo 10 artigos realmente relacionados;
 - relevance_score mede aderencia ao tema, nao qualidade cientifica;
 - relation_to_topic deve explicar concretamente, em portugues do Brasil, como o
