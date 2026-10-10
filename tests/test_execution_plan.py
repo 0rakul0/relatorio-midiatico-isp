@@ -116,3 +116,22 @@ def test_pdf_opinion_table_retains_auditable_indicators_outside_summary():
     source = inspect.getsource(public_opinion.add_public_opinion_section)
     assert "seen_indicators" in source
     assert "indicator_rows[:19]" in source
+
+
+def test_scientific_profile_guidance_is_explicit_and_keeps_academic_enabled():
+    from app.services.execution_profile import execution_profile_guidance
+    project = _project(execution_profile="MIDIATICO_CIENTIFICO")
+    guidance = execution_profile_guidance(project)
+    assert "academic_research=true" in guidance
+    assert "SciELO" in guidance
+    plan = sanitize_execution_plan(project, _raw_plan(
+        academic_research={"enabled": False, "reason": "model declined"}
+    ))
+    assert plan["processes"]["academic_research"]["enabled"]
+
+
+def test_automatic_profile_has_distinct_guidance():
+    from app.services.execution_profile import execution_profile_guidance
+    assert execution_profile_guidance(_project(execution_profile="AUTO")) != execution_profile_guidance(
+        _project(execution_profile="MIDIATICO_CIENTIFICO")
+    )
