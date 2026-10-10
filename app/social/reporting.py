@@ -3,7 +3,8 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import MediaItem, SocialAnalysis, SocialComment, SocialPost
+from app.models import MediaItem, Project, SocialAnalysis, SocialComment, SocialPost
+from app.social.discovery import social_topic_relevance
 from app.social.dates import resolve_post_datetime
 from app.social.methodology import METHODOLOGY_NOTE
 
@@ -46,6 +47,23 @@ def social_repercussion_for_report(db: Session, project_id: int) -> dict:
             else []
         )
     }
+
+    project = db.get(Project, project_id)
+    original_total_posts = len(posts)
+    if project is not None:
+        posts = [
+            post for post in posts
+            if social_topic_relevance(
+                project,
+                media_by_id[post.media_item_id].title if post.media_item_id in media_by_id else post.post_text,
+                media_by_id[post.media_item_id].snippet if post.media_item_id in media_by_id else None,
+            )[0]
+        ]
+    excluded_posts = original_total_posts - len(posts)
+    included_ids = {post.id for post in posts}
+    total_posts = len(posts)
+    total_comments = sum(comment_counts.get(post.id, 0) for post in posts)
+    comment_counts = {post_id: count for post_id, count in comment_counts.items() if post_id in included_ids}
 
     post_inventory = []
     known_view_count = 0
@@ -111,6 +129,7 @@ def social_repercussion_for_report(db: Session, project_id: int) -> dict:
 
     base = {
         "posts": total_posts,
+        "excluded_posts": excluded_posts,
         "comments": total_comments,
         "post_inventory": post_inventory,
         "view_count_total": total_view_count,
@@ -134,6 +153,23 @@ def social_repercussion_for_report(db: Session, project_id: int) -> dict:
             "themes": [],
             "discourse_analysis": {},
             "summary": None,
+            "methodology_note": METHODOLOGY_NOTE,
+        }
+
+    # Analises anteriores a filtragem podem estar contaminadas. Exigir
+    # reanalise para exibir narrativas e percentuais historicos.
+    if excluded_posts:
+        return {
+            **base,
+            "status": "REANALYSIS_REQUIRED",
+            "analyzed_comments": 0,
+            "platform_counts": {},
+            "sentiment_counts": {},
+            "emotion_counts": {},
+            "position_counts": {},
+            "themes": [],
+            "discourse_analysis": {},
+            "summary": "Amostra social filtrada por relevancia. Reexecute a analise para atualizar comentarios e narrativas.",
             "methodology_note": METHODOLOGY_NOTE,
         }
 
