@@ -287,12 +287,20 @@ def run_full_methodology(
                 "SKIPPED",
                 academic_research.get("summary") or "O agente concluiu que a pauta nao exige contexto academico",
             )
+        elif not academic_research.get("papers"):
+            stage(
+                "academic_research",
+                "ERROR",
+                f"Pesquisa academica executada, mas nenhum artigo foi selecionado. "
+                f"Candidatos encontrados: {academic_research.get('candidates_returned', 0)}. "
+                "Verifique consultas, resultados e criterios de relevancia.",
+            )
         else:
             stage(
                 "academic_research",
                 "DONE",
                 f"{academic_research.get('candidates_returned', 0)} candidato(s) academico(s); "
-                f"{academic_research.get('persisted', 0)} artigo(s) relevante(s) preservado(s)",
+                f"{len(academic_research.get('papers') or [])} artigo(s) relevante(s) disponiveis no relatorio",
             )
 
     # 3b/3c. Camadas sociais e de opinião pública ----------------------
