@@ -186,6 +186,18 @@ THEMATIC_ONLY deve ficar restrito a semelhança superficial ou genérica e impli
 O campo anchor deve mostrar a conexão concreta com o tema; não exija o nome do ISP como prova de relevância.
 """
 
+    elif project.project_type == "GENERAL_TOPIC":
+        extra_instructions += """
+
+REGRA PARA TEMA GERAL:
+O próprio assunto é o objeto monitorado. Aceite matérias que tratem
+materialmente do tema, mesmo sem citar o ISP, produto institucional ou
+um evento específico. Use THEMATIC_CONTEXT para cobertura temática direta.
+THEMATIC_ONLY pode ser usado para cobertura diretamente pertinente,
+não para mera coincidência de palavras. Rejeite conteúdo tangencial,
+sem evidência textual da relação com o tema.
+"""
+
     payload_items = []
     max_chars = max(500, settings.validation_item_max_chars)
     for item in items:
@@ -236,6 +248,10 @@ O campo anchor deve mostrar a conexão concreta com o tema; não exija o nome do
         "DIRECT_EVENT",
         "THEMATIC_CONTEXT",
     }
+    # THEMATIC_ONLY é compatível apenas com pautas gerais: nesse perfil,
+    # a cobertura do próprio assunto é o objeto da pesquisa.
+    if project.project_type == "GENERAL_TOPIC":
+        allowed_types.add("THEMATIC_ONLY")
 
     decisions: dict[int, tuple[bool, str, str]] = {}
     for item in items:
