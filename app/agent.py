@@ -79,6 +79,9 @@ class ReportAgent:
             payload = dict(payload)
             payload["mandatory_academic_search"] = observation
             payload["mandatory_academic_queries"] = terms
+            # A pesquisa ja foi executada pelo agente; apenas a selecao
+            # estruturada dos resultados fica a cargo do modelo.
+            tool_list = []
 
         llm = create_chat_model(max_output_tokens=max_output_tokens)
         messages: list[Any] = [
