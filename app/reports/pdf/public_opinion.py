@@ -74,25 +74,26 @@ def add_public_opinion_section(
     )
 
     indicator_rows = [["Instituto", "Indicador / pergunta", "Resultado", "Recorte"]]
+    seen_indicators: set[tuple[str, str, str, str]] = set()
     for survey in surveys:
         for indicator in survey.get("indicators") or []:
             question = indicator.get("question") or indicator.get("label") or "Indicador"
             value = text(indicator.get("value")).strip()
             unit = text(indicator.get("unit")).strip()
             result_label = (value + (f" {unit}" if unit else "")).strip() or "N/D"
-            indicator_rows.append([
-                survey.get("institute") or "N/D",
-                question,
-                result_label,
-                indicator.get("subgroup")
-                or survey.get("representative_scope")
-                or "Total da amostra",
-            ])
+            subgroup = indicator.get("subgroup") or survey.get("representative_scope") or "Total da amostra"
+            key = (text(survey.get("institute")).casefold(), text(question).casefold(), result_label.casefold(), text(subgroup).casefold())
+            if key in seen_indicators:
+                continue
+            seen_indicators.add(key)
+            indicator_rows.append([survey.get("institute") or "N/D", question, result_label, subgroup])
     if len(indicator_rows) > 1:
-        story.append(Paragraph("Indicadores de opinião pública", heading))
+        story.append(Paragraph("Indicadores de opinião pública - síntese", heading))
+        if len(indicator_rows) > 19:
+            story.append(Paragraph(f"Seleção de 18 entre {len(indicator_rows)-1} indicadores. O conjunto integral permanece na base auditável.", small))
         story.append(
             table(
-                indicator_rows,
+                indicator_rows[:19],
                 [3.0 * cm, 6.6 * cm, 2.8 * cm, 4.2 * cm],
                 small,
             )
