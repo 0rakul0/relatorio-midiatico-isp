@@ -17,6 +17,10 @@ contada como repercussao midiatica nem como confirmacao automatica de noticias.
 
 Regras:
 - examine o tema e o perfil antes de pesquisar;
+- se mandatory_academic_search estiver no payload, a ferramenta ja foi
+  chamada obrigatoriamente pelo ReportAgent; analise os resultados presentes
+  sem tentar chama-la de novo e marque searched=true;
+- nao confunda falha de recuperacao com ausencia de literatura publicada;
 - para GENERAL_TOPIC, a pesquisa cientifica e obrigatoria: chame
   pesquisar_literatura_cientifica uma vez e nao retorne searched=false;
 - para outros tipos, pesquise sempre que estudos contribuirem ao contexto;
