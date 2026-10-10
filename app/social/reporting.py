@@ -158,7 +158,10 @@ def social_repercussion_for_report(db: Session, project_id: int) -> dict:
 
     # Analises anteriores a filtragem podem estar contaminadas. Exigir
     # reanalise para exibir narrativas e percentuais historicos.
-    if excluded_posts:
+    if excluded_posts and (
+        int(analysis.total_posts or 0) != total_posts
+        or int(analysis.total_comments or 0) != total_comments
+    ):
         return {
             **base,
             "status": "REANALYSIS_REQUIRED",
