@@ -370,6 +370,14 @@ def run_report_qa(db: Session, project: Project, payload: dict) -> dict:
     }
 
     findings = deterministic_report_qa(qa_payload)
+    social = qa_payload.get("social_repercussion") or qa_payload.get("social_perception") or {}
+    if isinstance(social, dict) and social.get("status") == "REANALYSIS_REQUIRED":
+        findings.append({
+            "code": "SOCIAL_REANALYSIS_REQUIRED",
+            "severity": "HIGH",
+            "message": "A analise social anterior inclui posts sem vinculo ao tema. Reexecute a analise antes de aprovar o relatorio.",
+            "evidence": "Amostra historica filtrada por relevancia temática.",
+        })
     if get_settings().enable_llm_qa and plan_allows(db, project, "llm_qa"):
         findings.extend(_llm_qa(qa_payload))
     else:
