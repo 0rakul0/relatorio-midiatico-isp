@@ -78,3 +78,30 @@ def test_legacy_social_override_does_not_disable_structural_routing():
     )
     plan = sanitize_execution_plan(project, _raw_plan())
     assert plan["processes"]["social_repercussion"]["enabled"] is True
+
+
+def test_scientific_profile_runs_academic_research_without_nominal_collection():
+    project = _project(execution_profile="MIDIATICO_CIENTIFICO")
+    plan = sanitize_execution_plan(project, _raw_plan(
+        academic_research={"enabled": False, "reason": "agent skipped"},
+    ))
+    assert plan["mode"] == "EXPLICIT_PRESET"
+    assert plan["processes"]["academic_research"]["enabled"] is True
+    assert plan["processes"]["web_collection"]["enabled"] is True
+    assert plan["processes"]["fact_extraction"]["enabled"] is False
+    assert plan["processes"]["nominal_followup"]["enabled"] is False
+
+
+def test_scientific_profile_cannot_disable_academic_search_by_override():
+    project = _project(
+        execution_profile="MIDIATICO_CIENTIFICO",
+        execution_options={"enable_academic_research": False},
+    )
+    plan = sanitize_execution_plan(project, _raw_plan())
+    assert plan["processes"]["academic_research"]["enabled"] is True
+
+
+def test_project_create_accepts_scientific_profile():
+    from app.schema_groups.api import ProjectCreate
+    model = ProjectCreate(topic="Violencia contra mulheres no Brasil", execution_profile="MIDIATICO_CIENTIFICO")
+    assert model.execution_profile == "MIDIATICO_CIENTIFICO"
