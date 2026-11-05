@@ -5,16 +5,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql+psycopg://relatorio:relatorio@localhost:5432/repercussao"
+    database_url: str = "sqlite+pysqlite:///./data/repercussao.db"
 
-    # Supabase Auth (login) — mesma URL/key do projeto.
-    supabase_url: str | None = None
-    supabase_key: str | None = None
-    # Somente para desenvolvimento local isolado. Nunca habilite em um
-    # ambiente acessível por outras pessoas ou ligado ao banco de produção.
+    # Contas locais com senhas PBKDF2 e tokens HMAC temporarios.
+    # Gere a chave com: openssl rand -hex 32
+    local_session_secret: str | None = None
+    # Apenas desenvolvimento offline (proibido em APP_ENV=production).
     local_auth_bypass: bool = False
-    # Emails separados por vírgula promovidos a admin no login.
-    admin_emails: str = ""
 
     # Pool do SQLAlchemy. Banco gerenciado (ex.: Supabase) limita conexões;
     # 5 + 10 comporta o app com alguns runs paralelos. SQLite ignora.
