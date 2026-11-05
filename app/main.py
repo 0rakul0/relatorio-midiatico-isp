@@ -36,6 +36,11 @@ async def lifespan(app: FastAPI):
             raise RuntimeError('LOCAL_AUTH_BYPASS nao pode ser usado em producao')
         if len((settings.local_session_secret or '').encode('utf-8')) < 32:
             raise RuntimeError('Configure LOCAL_SESSION_SECRET (openssl rand -hex 32) no .env')
+        if settings.openai_only:
+            if not (settings.openai_api_key or '').strip():
+                raise RuntimeError('OPENAI_ONLY=true: configure OPENAI_API_KEY no .env')
+            if (settings.openai_base_url or '').strip():
+                raise RuntimeError('OPENAI_ONLY=true: remova OPENAI_BASE_URL para usar a API oficial')
     if settings.corpus_metadata_repair_on_startup:
         try:
             with SessionLocal() as db:
