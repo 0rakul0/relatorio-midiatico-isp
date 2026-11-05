@@ -107,7 +107,13 @@ def plan_report_with_llm(db: Session, project: Project) -> list[SearchQuery]:
         select(OfficialFact).where(OfficialFact.project_id == project.id)
     ).all()
 
-    history = previous_analyses(db, project, [])
+    history = (
+        previous_analyses(
+            db, project, [], limit=settings.report_history_max_versions
+        )
+        if settings.report_history_enabled
+        else {"status": "DISABLED", "prior_reports": []}
+    )
     historical_guidance = None
     if history.get("status") == "AVAILABLE":
         earlier = history["prior_reports"][0]
