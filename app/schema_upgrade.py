@@ -1,12 +1,8 @@
-"""Migração aditiva para permitir testar a v2 sobre o banco atual sem perda de corpus.
+"""Migracoes aditivas para SQLite local sem perda do corpus existente.
 
-Compatível com PostgreSQL e SQLite. O SQLite não permite ``ALTER TABLE ... ADD
-COLUMN`` com defaults não constantes como ``CURRENT_TIMESTAMP``. Por isso,
-colunas desse tipo são adicionadas sem o default no SQLite, recebem backfill e
-passam a ser preenchidas pelo ORM nas novas inserções.
-
-Para produção, mantenha backups e converta estas mudanças para sua rotina de
-migrations (por exemplo, Alembic).
+Colunas com CURRENT_TIMESTAMP sao adicionadas sem default quando necessario,
+e a aplicacao/ORM preenche os valores nas novas insercoes.
+Faca backup antes de atualizar o schema.
 """
 
 from sqlalchemy import inspect, text
@@ -125,55 +121,11 @@ def _ddl_for_dialect(dialect_name: str, column_name: str, ddl: str) -> str:
 def ensure_schema() -> None:
     dialect_name = engine.dialect.name
 
-    # Todas as alterações de schema ficam no mesmo transaction scope. Em
-    # PostgreSQL, o advisory lock serializa startups concorrentes apontando
-    # para o mesmo banco (por exemplo, dois processos uvicorn/reload ou duas
-    # estações usando o mesmo Supabase).
     with engine.begin() as connection:
-        if dialect_name == "postgresql":
-            connection.execute(
-                text("SELECT pg_advisory_xact_lock(741983214)")
-            )
-
-        # Cria tabelas novas usando a MESMA conexão protegida pelo lock.
+        # Cria tabelas ausentes de maneira idempotente e sem rede.
         Base.metadata.create_all(bind=connection)
-
         inspector = inspect(connection)
         existing_tables = set(inspector.get_table_names())
-
-        if dialect_name == "postgresql":
-            # Defesa em profundidade no Supabase/bancos gerenciados: habilita
-            # RLS somente onde ainda está desativado.
-            unprotected = connection.execute(
-                text(
-                    "SELECT tablename FROM pg_tables "
-                    "WHERE schemaname = 'public' AND rowsecurity = false"
-                )
-            ).scalars().all()
-            for table_name in unprotected:
-                if table_name in Base.metadata.tables:
-                    connection.execute(
-                        text(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY")
-                    )
-
-            # REVOKE altera o catálogo do PostgreSQL. Fazer isso em todo startup
-            # sem verificar o estado causava 'tuple concurrently updated' no
-            # Supabase. Agora só revogamos quando o grant realmente existe,
-            # ainda sob o advisory lock acima.
-            granted_pairs = connection.execute(
-                text(
-                    "SELECT grantee, table_name "
-                    "FROM information_schema.role_table_grants "
-                    "WHERE table_schema = 'public' "
-                    "AND grantee IN ('anon', 'authenticated')"
-                )
-            ).all()
-            app_tables = set(Base.metadata.tables)
-            for role, table_name in granted_pairs:
-                if table_name in app_tables:
-                    connection.execute(
-                        text(f"REVOKE ALL ON TABLE {table_name} FROM {role}")
-                    )
 
         for table_name, columns in ADDITIVE_COLUMNS.items():
             if table_name not in existing_tables:
@@ -207,22 +159,6 @@ def ensure_schema() -> None:
                     "ON corpus_documents (content_fingerprint)"
                 )
             )
-
-        # Bancos PostgreSQL legados podem ter Classification.framing como
-        # VARCHAR(300). O conteúdo analítico deve ser TEXT.
-        if dialect_name == "postgresql" and "classifications" in existing_tables:
-            framing_type = next(
-                (
-                    column["type"]
-                    for column in inspect(connection).get_columns("classifications")
-                    if column["name"] == "framing"
-                ),
-                None,
-            )
-            if framing_type is not None and str(framing_type).upper() != "TEXT":
-                connection.execute(
-                    text("ALTER TABLE classifications ALTER COLUMN framing TYPE TEXT")
-                )
 
         if "projects" in existing_tables:
             connection.execute(text("UPDATE projects SET event_start = collection_start WHERE event_start IS NULL"))
