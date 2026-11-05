@@ -35,6 +35,18 @@ mkdir -p "$PROJECT_DIR/data"
 chmod 700 "$PROJECT_DIR/data"
 chmod 600 "$PROJECT_DIR/.env"
 
+echo "Validando configuracao exclusiva da OpenAI..."
+(cd "$PROJECT_DIR" && "$UV_PATH" run --no-sync --no-dev python -c '
+from app.config import get_settings
+settings = get_settings()
+if not settings.openai_only:
+    raise SystemExit("Defina OPENAI_ONLY=true no .env do Linux")
+if not (settings.openai_api_key or "").strip():
+    raise SystemExit("Defina OPENAI_API_KEY no .env do Linux")
+if (settings.openai_base_url or "").strip():
+    raise SystemExit("Remova OPENAI_BASE_URL para usar a API oficial da OpenAI")
+')
+
 echo "Inicializando banco SQLite e validando a tabela de login..."
 (cd "$PROJECT_DIR" && "$UV_PATH" run --no-sync --no-dev python -m app.init_db)
 
