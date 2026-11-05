@@ -219,6 +219,7 @@ def _new_state(project_id: int) -> RunState:
     return RunState(
         run_id=run_id,
         project_id=project_id,
+        message="Aguardando vaga para processar a pesquisa",
         stages={key: RunStageState(key=key, label=label) for key, label in RUN_STAGES},
     )
 
@@ -247,6 +248,45 @@ def create_run_if_none(project_id: int) -> tuple[RunState, bool]:
         _cancel_events[state.run_id] = Event()
     _persist(state)
     return state, True
+
+
+def recover_orphaned_runs() -> int:
+    """Reclassifica execucoes do processo anterior apos reinicio do servidor.
+
+    Use apenas no startup de producao com um unico Uvicorn worker. O corpo
+    parcial de cada projeto continua no banco e pode ser retomado.
+    """
+    with _lock:
+        if any(row.status in _ACTIVE_STATUSES for row in _runs.values()):
+            # Nunca invalidar execucoes ativas na memoria deste processo.
+            return 0
+    session = SessionLocal()
+    try:
+        rows = session.scalars(
+            select(ReportRun).where(
+                ReportRun.status.in_(tuple(_ACTIVE_STATUSES))
+            )
+        ).all()
+        for row in rows:
+            row.status = "FAILED"
+            row.error = "Execucao interrompida por reinicio anterior do servidor"
+            row.message = "Execucao anterior interrompida; dados parciais preservados"
+            row.finished_at = _now()
+            stages = list(row.stages or [])
+            for stage in stages:
+                if stage.get("status") == "RUNNING":
+                    stage["status"] = "FAILED"
+                    stage["detail"] = "Interrompida por reinicio anterior"
+                    stage["finished_at"] = row.finished_at
+            row.stages = stages
+        if rows:
+            session.commit()
+        return len(rows)
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 def get_run(run_id: str) -> RunState | None:
