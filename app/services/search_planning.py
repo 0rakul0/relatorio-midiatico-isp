@@ -109,9 +109,9 @@ def plan_report_with_llm(db: Session, project: Project) -> list[SearchQuery]:
 
     history = (
         previous_analyses(
-            db, project, [], limit=settings.report_history_max_versions
+            db, project, [], limit=getattr(settings, 'report_history_max_versions', 3)
         )
-        if settings.report_history_enabled
+        if getattr(settings, 'report_history_enabled', True)
         else {"status": "DISABLED", "prior_reports": []}
     )
     historical_guidance = None
