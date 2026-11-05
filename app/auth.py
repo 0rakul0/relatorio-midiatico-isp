@@ -1,6 +1,7 @@
 """Autenticacao local, independente de provedores externos.
 
-Contas sao criadas pelo administrador via `python -m app.local_users`.
+Administradores sao provisionados via `python -m app.local_users`.
+Novos usuarios podem se cadastrar no site, quando habilitado.
 Senhas usam PBKDF2-HMAC-SHA256 (salt exclusivo); tokens temporarios sao
 assinados com HMAC-SHA256 e invalidados quando a senha muda.
 """
@@ -11,15 +12,18 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
 import threading
 import time
 from dataclasses import dataclass
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -33,6 +37,7 @@ _HASH_ITERATIONS = 600_000
 _TOKEN_TTL_SECONDS = 12 * 60 * 60
 _failure_lock = threading.Lock()
 _failures: dict[str, list[float]] = {}
+_signup_attempts: dict[str, list[float]] = {}
 
 
 @dataclass(frozen=True)
@@ -46,6 +51,13 @@ class AuthUser:
 class LoginInput(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=1024)
+
+
+class SignupInput(BaseModel):
+    # Campos como is_admin, plan, id e owner_id sao proibidos no cadastro.
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=12, max_length=1024)
 
 
 def _b64(value: bytes) -> str:
@@ -152,6 +164,75 @@ def _register_failure(key: str) -> None:
         _failures[key] = [x for x in _failures.get(key, []) if now - x < 600] + [now]
         if len(_failures) > 20_000:
             _failures.clear()
+
+
+def _check_signup_rate_limit(key: str) -> None:
+    # Contabiliza todas as tentativas (inclusive as rejeitadas por email duplicado).
+    # Single worker no deploy Linux; sempre limitar rede no proxy/firewall.
+    now = time.monotonic()
+    max_attempts = get_settings().local_signup_max_per_hour
+    with _failure_lock:
+        recent = [t for t in _signup_attempts.get(key, []) if now - t < 3600]
+        if len(recent) >= max_attempts:
+            _signup_attempts[key] = recent
+            raise HTTPException(429, "Limite de cadastros atingido. Tente novamente mais tarde.")
+        _signup_attempts[key] = [*recent, now]
+        if len(_signup_attempts) > 20000:
+            _signup_attempts.clear()
+
+
+def _normalized_email(email: str) -> str:
+    value = email.strip().casefold()
+    # O SQLite usa NOCASE apenas para ASCII; nao permitir identidades com
+    # normalizacao ambigua nas versoes do cliente/banco.
+    if not value.isascii() or len(value) > 320 or not re.fullmatch(
+        r"[^\s@]{1,64}@[^\s@]+\.[^\s@]{2,}", value
+    ):
+        raise HTTPException(422, "Informe um e-mail valido")
+    return value
+
+
+@router.post("/signup", status_code=201)
+def signup(payload: SignupInput, request: Request, db: Session = Depends(get_db)):
+    settings = get_settings()
+    if settings.local_auth_bypass:
+        raise HTTPException(403, "Cadastro indisponivel no modo de desenvolvimento")
+    if not settings.local_signup_enabled:
+        raise HTTPException(403, "Novos cadastros estao desativados")
+    try:
+        _secret()
+    except RuntimeError as exc:
+        _logger.error("Cadastro local sem chave de sessao configurada: %s", exc)
+        raise HTTPException(503, "Autenticacao do servidor nao configurada") from exc
+
+    _check_signup_rate_limit(_request_key(request))
+    email = _normalized_email(payload.email)
+    existing = db.scalar(
+        select(AppUser.id).where(func.lower(func.trim(AppUser.email)) == email)
+    )
+    if existing is not None:
+        raise HTTPException(409, "Este e-mail ja possui cadastro")
+    user = AppUser(
+        id=uuid4().hex,
+        email=email,
+        password_hash=hash_password(payload.password),
+        is_admin=False,
+        plan="FREE",
+    )
+    try:
+        db.add(user)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "Este e-mail ja possui cadastro") from exc
+
+    return {
+        "access_token": _sign_token(user),
+        "token_type": "bearer",
+        "expires_in": _TOKEN_TTL_SECONDS,
+        "email": user.email,
+        "plan": user.plan,
+    }
 
 
 @router.post("/login")
