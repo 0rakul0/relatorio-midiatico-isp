@@ -175,12 +175,11 @@ def collect_public_opinion(db: Session, project: Project) -> dict:
             "methodology_note": METHODOLOGY_NOTE,
         }
 
-    # Reprocessamos a camada para o projeto corrente para evitar manter uma
-    # extracao antiga quando as regras/schema forem refinados.
-    db.execute(delete(PublicOpinionSurvey).where(PublicOpinionSurvey.project_id == project.id))
-    db.flush()
-
+    # Nao executar DELETE/flush antes das requisicoes de rede e LLM.
+    # O SQLite manteria um lock de escritor por toda a extracao. Construimos
+    # os resultados em memoria e substituimos a camada numa transacao curta.
     selected = list(candidates.values())[: int(settings.public_opinion_max_documents)]
+    new_surveys: list[PublicOpinionSurvey] = []
     persisted = 0
     for row in selected:
         url = str(row.get("url") or "").strip()
@@ -254,9 +253,13 @@ def collect_public_opinion(db: Session, project: Project) -> dict:
             source_domain=urlparse(url).netloc.lower(),
             provider=str(row.get("provider") or "duckduckgo_text"),
         )
-        db.add(survey)
+        new_surveys.append(survey)
         persisted += 1
 
+    # Uma unica troca atomica, apos completar a busca e todas as LLMs.
+    # Nao ha transacao de escrita aberta durante o processamento externo.
+    db.execute(delete(PublicOpinionSurvey).where(PublicOpinionSurvey.project_id == project.id))
+    db.add_all(new_surveys)
     db.commit()
     report = public_opinion_for_report(db, project.id)
     report["queries"] = queries
