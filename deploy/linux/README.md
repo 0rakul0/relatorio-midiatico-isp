@@ -167,6 +167,46 @@ redefine a senha, preservando a conta e os projetos vinculados.
 A inicializacao agora falha explicitamente se o secret nao estiver
 configurado, em vez de disponibilizar a tela com o login quebrado.
 
+### 3.2 Cadastro de usuarios pelo navegador
+
+O administrador inicial continua sendo criado no terminal com `--admin`.
+A tela `http://IP-DO-SERVIDOR:8511/login` passa a exibir **Criar conta**
+quando `LOCAL_SIGNUP_ENABLED=true`. Novos usuarios informam email e senha
+de pelo menos 12 caracteres, confirmam a senha e entram automaticamente.
+
+```dotenv
+LOCAL_SIGNUP_ENABLED=true
+LOCAL_SIGNUP_MAX_PER_HOUR=5
+```
+
+Os cadastros sao salvos na mesma tabela `app_users` do SQLite local, com
+hash PBKDF2, identificador unico, `plan=FREE` e `is_admin=false`.
+Eles nao recebem privilegios administrativos nem acesso aos projetos
+privados de outros usuarios. O email e indexado sem diferenciar
+maiusculas/minusculas para impedir duplicidade. O administrador ja
+existente nao sofre alteracao.
+
+O plano gratuito tem limite de duas execucoes de relatorio por mes e
+orcamento estimado de US$ 1 de chamadas LLM por mes, conforme as regras
+atuais em `app/billing.py`. Esses limites reduzem o uso por conta, mas
+nao substituem controles gerais de custo da conta OpenAI.
+
+**Seguranca:** o autocadastro atual nao confirma posse do email por envio
+de mensagem. Antes de permitir acesso pela Internet, use HTTPS, firewall
+ou VPN e considere habilitar verificacao de email ou aprovacao de contas.
+O rate limit de cadastro e em memoria por IP (reinicia com o processo).
+Para bloquear novos cadastros mantendo o login das contas existentes,
+defina `LOCAL_SIGNUP_ENABLED=false` e reinicie o servico.
+
+```bash
+sudo systemctl restart relatorio-midiatico
+```
+
+Se houver emails duplicados no banco legado, a criacao do indice unico
+falhara na migracao. Corrija os duplicados com backup e revisao de IDs;
+o sistema nao junta contas automaticamente para nao perder propriedade
+de projetos.
+
 ## 4. Testar no terminal
 
 ```bash
@@ -237,8 +277,8 @@ consistente do SQLite, especialmente se houver escrita concorrente.
 - Banco externo nao e suportado; as tabelas sao inicializadas em SQLite local.
 - As contas locais sao criadas com `app.local_users`; contas remotas antigas
   nao sao importadas automaticamente.
-- A tela de login nao oferece cadastro publico: novas contas sao
-  provisionadas exclusivamente pelo terminal do servidor.
+- A tela de login pode oferecer cadastro de usuarios comuns quando
+  `LOCAL_SIGNUP_ENABLED=true`; administradores sao criados apenas pelo terminal.
 - `LOCAL_AUTH_BYPASS=true` nao funciona em `APP_ENV=production`.
 - O app depende de Internet para coleta DuckDuckGo e outros provedores
   opcionais, independentemente do banco usado.
