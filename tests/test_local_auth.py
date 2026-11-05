@@ -246,3 +246,113 @@ def test_signup_rate_limit(monkeypatch):
                 assert db.query(AppUser).count() == 2
     finally:
         engine.dispose()
+
+
+def test_signup_recovers_from_temporary_sqlite_lock(monkeypatch):
+    """A primeira escrita falha como se outra demanda estivesse gravando."""
+    import sqlite3
+
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session
+
+    client, factory, engine = _client(monkeypatch)
+    original_commit = Session.commit
+    attempts = {"count": 0}
+
+    def busy_once(self):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise OperationalError(
+                "INSERT INTO app_users", {},
+                sqlite3.OperationalError("database is locked"),
+            )
+        return original_commit(self)
+
+    monkeypatch.setattr(Session, "commit", busy_once)
+    monkeypatch.setattr("app.auth._SIGNUP_RETRY_DELAYS", (0, 0))
+    try:
+        with client:
+            response = client.post(
+                "/auth/signup",
+                json={"email": "busy@example.org", "password": "a-long-password-123"},
+            )
+            assert response.status_code == 201, response.text
+            assert attempts["count"] == 2
+            with factory() as db:
+                user = db.scalar(
+                    __import__("sqlalchemy").select(AppUser).where(
+                        AppUser.email == "busy@example.org"
+                    )
+                )
+                assert user is not None
+                assert user.is_admin is False
+                assert user.plan == "FREE"
+    finally:
+        engine.dispose()
+
+
+def test_signup_reports_busy_as_retryable_503_not_500(monkeypatch):
+    import sqlite3
+
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session
+
+    client, factory, engine = _client(monkeypatch)
+    attempts = {"count": 0}
+
+    def always_busy(self):
+        attempts["count"] += 1
+        raise OperationalError(
+            "INSERT INTO app_users", {},
+            sqlite3.OperationalError("database is locked"),
+        )
+
+    monkeypatch.setattr(Session, "commit", always_busy)
+    monkeypatch.setattr("app.auth._SIGNUP_RETRY_DELAYS", (0, 0))
+    try:
+        with client:
+            response = client.post(
+                "/auth/signup",
+                json={"email": "busy@example.org", "password": "a-long-password-123"},
+            )
+            assert response.status_code == 503
+            assert response.headers["Retry-After"] == "3"
+            assert "banco esta ocupado" in response.json()["detail"]
+            assert attempts["count"] == 3
+            with factory() as db:
+                assert db.query(AppUser).count() == 0
+    finally:
+        engine.dispose()
+
+
+def test_signup_retries_sqlite_lock_on_initial_read(monkeypatch):
+    import sqlite3
+
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session
+
+    client, factory, engine = _client(monkeypatch)
+    old_scalar = Session.scalar
+    attempts = {"count": 0}
+
+    def first_read_busy(self, *args, **kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise OperationalError(
+                "SELECT app_users", {},
+                sqlite3.OperationalError("database is locked"),
+            )
+        return old_scalar(self, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "scalar", first_read_busy)
+    monkeypatch.setattr("app.auth._SIGNUP_RETRY_DELAYS", (0, 0))
+    try:
+        with client:
+            response = client.post(
+                "/auth/signup",
+                json={"email": "readbusy@example.org", "password": "a-long-password-123"},
+            )
+            assert response.status_code == 201, response.text
+            assert attempts["count"] >= 2
+    finally:
+        engine.dispose()
