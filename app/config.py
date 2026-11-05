@@ -17,8 +17,8 @@ class Settings(BaseSettings):
     # Apenas desenvolvimento offline (proibido em APP_ENV=production).
     local_auth_bypass: bool = False
 
-    # Pool do SQLAlchemy. Banco gerenciado (ex.: Supabase) limita conexões;
-    # 5 + 10 comporta o app com alguns runs paralelos. SQLite ignora.
+    # Compatibilidade com configuracoes antigas. O servidor agora usa SQLite;
+    # os parametros de pool nao sao utilizados nesse backend.
     db_pool_size: int = Field(default=5, ge=1, le=50)
     db_max_overflow: int = Field(default=10, ge=0, le=100)
     db_pool_timeout: int = Field(default=30, ge=1, le=300)
@@ -267,9 +267,10 @@ class Settings(BaseSettings):
     max_youtube_results_total: int = Field(default=120, ge=1, le=1000)
     max_youtube_results_per_task: int = Field(default=5, ge=1, le=10)
 
-    # .env.local é um override não versionado para estações de desenvolvimento
-    # (por exemplo, SQLite quando o Postgres remoto não está acessível).
-    model_config = SettingsConfigDict(env_file=(".env", ".env.local"), extra="ignore")
+    # Um unico arquivo de configuracao: .env. Evita overrides invisiveis
+    # de .env.local contendo DATABASE_URL antigo de outro ambiente.
+    # Variaveis exportadas no processo ainda possuem precedencia sobre .env.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 @lru_cache
