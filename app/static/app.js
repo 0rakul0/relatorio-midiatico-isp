@@ -1224,6 +1224,9 @@ async function pollRun(){
     const run=await api(`/runs/${currentRunId}`);
     pollFailures=0;pollDelay=1000;
     renderRun(run);
+    if(run.status==='PENDING') {
+      $('#progress').textContent=run.message||'Pesquisa aguardando vaga na fila de processamento.';
+    }
     if(['COMPLETED','CANCELLED','FAILED'].includes(run.status))await finishRun(run);
     else schedulePoll(pollDelay);
   }catch(err){
