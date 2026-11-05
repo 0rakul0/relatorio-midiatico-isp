@@ -200,12 +200,10 @@ class SearchAuditObserver(SearchObserver):
         self.state.counters[self.count_key] = self.state.counters.get(self.count_key, 0) + 1
         entry = self.plan.get(query)
         if isinstance(entry, SearchQuery) and entry.executed_at is None:
-            entry.executed_at = datetime.now(timezone.utc)
+            # NUNCA flush aqui: o provedor ainda vai realizar HTTP e o
+            # flush manteria um lock de escrita do SQLite por toda a busca.
+            # executed_at so e preenchido ao concluir a tentativa.
             entry.execution_status = "ATTEMPTED"
-            try:
-                self.session.flush()
-            except Exception as exc:
-                self.state.errors.append(f"{query}: audit start failed ({exc})")
         if self.state.progress_detail:
             self.state.progress_detail(f"Executando consulta: {query[:90]}")
 
@@ -269,6 +267,9 @@ class SearchAuditObserver(SearchObserver):
         entry = self.plan.get(query)
         if not isinstance(entry, SearchQuery):
             return
+        # Commit curto por consulta: libera o escritor SQLite entre buscas e
+        # preserva os resultados ja coletados em refinamentos parciais.
+        entry.executed_at = datetime.now(timezone.utc)
         returned = self._returned.get(query, 0)
         accepted = self._accepted.get(query, 0)
         providers = self._attempts.get(query, [])
@@ -289,6 +290,9 @@ class SearchAuditObserver(SearchObserver):
             entry.execution_status = "NO_RESULTS"
         else:
             entry.execution_status = "SKIPPED"
+        # A escrita do corpus e dos SearchCalls conclui antes de aguardar
+        # o proximo resultado de rede. Nao compartilhar Session entre threads.
+        self.session.commit()
 
     def _latency(self, key: tuple[str, str, str]) -> int:
         started = self._started.pop(key, None)
