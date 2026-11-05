@@ -156,7 +156,7 @@ def test_free_plan_clamps_profile_and_features(monkeypatch):
 
 def test_run_async_allowed_when_quota_ok(monkeypatch):
     client = _client(monkeypatch, USER_A)
-    monkeypatch.setattr(main_module, "start_run", lambda project_id: {"run_id": "x"})
+    monkeypatch.setattr("app.api.runs.start_run", lambda project_id: {"run_id": "x"})
     with client:
         pid = _make_project(client, "tema ok")
         session = _session_of(client)
@@ -184,6 +184,7 @@ def test_billing_mock_and_admin_costs(monkeypatch):
         session.add(AppUser(id="user-a", email="a@x.com", plan="FREE"))
         session.commit()
         session.close()
+        app.dependency_overrides[main_module.get_current_user] = lambda: ADMIN
         hook = client.post("/billing/webhook", json={
             "user_id": "user-a", "plan": "PRO", "status": "active"})
         assert hook.status_code == 200
