@@ -7,6 +7,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     database_url: str = "sqlite+pysqlite:///./data/repercussao.db"
 
+    # No Linux com OPENAI_ONLY=true, toda LLM usa a OpenAI oficial,
+    # sem endpoint local, proxy ou fallback Ollama.
+    openai_only: bool = False
+
     # Contas locais com senhas PBKDF2 e tokens HMAC temporarios.
     # Gere a chave com: openssl rand -hex 32
     local_session_secret: str | None = None
