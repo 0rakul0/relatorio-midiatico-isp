@@ -21,7 +21,27 @@ services:
     container_name: isp-repercussao-api-prod
     restart: unless-stopped
     working_dir: /app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    # Um worker: o pipeline acompanha execucoes e cancelamentos no processo.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8511", "--workers", "1"]
     ports:
-      - "8000:8000"
-    # Sem bind mount e sem --reload: a imagem já é construída com uv sync --frozen --no-dev.
+      - "8511:8511"
+    # O .env fica fora da imagem por seguranca; o Compose deve injeta-lo.
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      LOCAL_AUTH_BYPASS: "false"
+    # Persistencia do reranker e de artefatos locais entre recriacoes da imagem.
+    volumes:
+      - ./data:/app/data
+    # Permite resolver host.docker.internal para servicos no host Linux.
+    # O servico no host ainda precisa aceitar conexoes pela interface do gateway.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8511/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    stop_grace_period: 45s
