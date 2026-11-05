@@ -705,6 +705,14 @@ Como trabalhos futuros, destacam-se: construção de um corpus de referência an
 - chave OpenAI ou endpoint compatível para as tarefas LLM
 - acesso à Internet para pesquisas externas
 
+### 7.2 Implantação Linux nativa (porta 8511)
+
+Para rodar com `uv` e manter a aplicação em funcionamento com `systemd`,
+sem Docker Compose e sem Supabase, siga o guia
+[deploy/linux/README.md](deploy/linux/README.md).
+O banco padrão é SQLite local; o administrador é criado pelo terminal.
+O serviço usa porta fixa **8511**.
+
 ### 7.2 Instalação
 
 ```bash
