@@ -1797,7 +1797,6 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "reportlab" },
     { name = "sqlalchemy" },
-    { name = "supabase" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1821,7 +1820,6 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0,<2" },
     { name = "reportlab", specifier = ">=4.0,<5" },
     { name = "sqlalchemy", specifier = ">=2.0,<3" },
-    { name = "supabase", specifier = ">=2.31.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30,<1" },
 ]
 
