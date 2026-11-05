@@ -41,19 +41,35 @@ DATABASE_URL=sqlite+pysqlite:///./data/repercussao.db
 APP_ENV=production
 LOCAL_AUTH_BYPASS=false
 LOCAL_SESSION_SECRET=COLOQUE_AQUI_O_VALOR_GERADO
-OPENAI_API_KEY=
-OPENAI_FALLBACK_BASE_URL=http://127.0.0.1:11434/v1
-OPENAI_FALLBACK_MODEL=gemma4:12b
-OPENAI_FALLBACK_API_KEY=ollama
+OPENAI_ONLY=true
+OPENAI_API_KEY=sk-SUA_CHAVE_REAL_AQUI
+OPENAI_MODEL=gpt-4.1-mini
+CORPUS_EMBEDDING_PROVIDER=openai
+CORPUS_EMBEDDING_FALLBACK_LOCAL=false
 ```
 
-Se Ollama estiver em outra maquina, configure um endereco alcançavel
-com controle de acesso; `localhost` so funciona na mesma maquina.
-Para usar apenas OpenAI, configure sua chave e remova as variaveis do
-fallback. O servidor precisa de pelo menos um modelo LLM funcional
-para as etapas semanticas.
+O servidor Linux usa somente a API oficial da OpenAI para tarefas LLM.
+Nao configure `OPENAI_BASE_URL`, `OPENAI_FALLBACK_BASE_URL`,
+`OPENAI_FALLBACK_MODEL` ou `OPENAI_FALLBACK_API_KEY` nesse servidor.
+Mesmo que sobrem variaveis antigas de fallback no ambiente,
+`OPENAI_ONLY=true` desabilita o uso desse fallback.
+O inicio em producao e bloqueado se a chave OpenAI estiver ausente.
+O DuckDuckGo continua sendo o buscador das noticias; ele nao e uma LLM.
 
-## 3. Criar o administrador
+**Criar e inspecionar o SQLite local:**
+
+```bash
+uv run --no-sync python -m app.init_db
+ls -lh data/repercussao.db
+```
+
+O arquivo e criado com a tabela `app_users` (id, email, password_hash,
+is_admin, plan, created_at), alem das tabelas do corpus. O comando nao
+remove registros existentes, e pode ser repetido. Nao ha senha padrao.
+Em Linux a pasta `data` e restrita ao usuario do servico e o banco
+recebe permissao `0600`.
+
+## 3. Criar o administrador do banco local
 
 ```bash
 uv run --no-sync python -m app.local_users create --email seu-email@exemplo.br --admin
@@ -86,7 +102,8 @@ sudo systemctl status relatorio-midiatico
 sudo journalctl -u relatorio-midiatico -f
 ```
 
-O instalador detecta o usuario, caminho absoluto do checkout e binario
+O instalador inicializa e confere o SQLite com `app.init_db`,
+detecta o usuario, caminho absoluto do checkout e binario
 `uv` ativos. Instala o servico em
 `/etc/systemd/system/relatorio-midiatico.service`, habilita o boot e
 usa `--workers 1` para preservar o estado de execucao/cancelamento.
@@ -120,7 +137,7 @@ consistente do SQLite, especialmente se houver escrita concorrente.
 
 ## Observacoes importantes
 
-- Nao ha migracao automatica de dados do Supabase para SQLite.
+- Nao ha migracao automatica de dados antigos do Supabase para SQLite.
 - Usuarios antigos do Supabase precisam de senha local criada com
   `app.local_users`. Se o banco importado preserva os IDs, o CLI
   reutiliza a conta existente pelo email, conservando projetos vinculados.
