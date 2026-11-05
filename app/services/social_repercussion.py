@@ -345,7 +345,10 @@ def collect_social_repercussion(db: Session, project: Project) -> dict:
                 refreshed_posts += 1
             pending.append((url, media_item_id, title))
 
-        db.flush()
+        # _ensure_post/_social_reuse_state podem fazer INSERT/flush.
+        # Commit ANTES de aguardar o Apify (ate 240 s) para nao bloquear
+        # outras pesquisas, cadastros e atualizacoes de status no SQLite.
+        db.commit()
         if not pending:
             platform_result[platform] = {
                 "status": "REUSED", "posts": len(rows), "comments": 0
@@ -445,6 +448,8 @@ def collect_social_repercussion(db: Session, project: Project) -> dict:
             "actor_id": actor_id,
             "post_dates_updated": metadata_dates_updated,
         }
+        # Persistir cada plataforma antes da proxima requisicao externa.
+        db.commit()
 
     db.commit()
     report = analyze_social_comments(db, project)
