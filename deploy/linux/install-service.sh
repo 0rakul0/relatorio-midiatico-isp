@@ -35,6 +35,9 @@ mkdir -p "$PROJECT_DIR/data"
 chmod 700 "$PROJECT_DIR/data"
 chmod 600 "$PROJECT_DIR/.env"
 
+echo "Inicializando banco SQLite e validando a tabela de login..."
+(cd "$PROJECT_DIR" && "$UV_PATH" run --no-sync --no-dev python -m app.init_db)
+
 sudo tee "$SERVICE_FILE" >/dev/null <<EOF
 [Unit]
 Description=ISP - Relatorio de Repercussao Midiatica (uv, porta 8511)
