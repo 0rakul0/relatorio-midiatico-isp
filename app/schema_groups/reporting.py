@@ -41,6 +41,15 @@ class StructuredMediaReportResponse(StrictLLMOutput):
     press_kit: list[PressKitOutput] = Field(max_length=10)
 
 
+class HistoricalComparisonOutput(StrictLLMOutput):
+    """Comparacao editorial das leituras, nao de fatos nem de populacoes."""
+    summary: str
+    continuities: list[str] = Field(max_length=4)
+    changes: list[str] = Field(max_length=4)
+    caveats: list[str] = Field(max_length=4)
+
+
+
 # ---------------------------------------------------------------------------
 # Final QA
 # ---------------------------------------------------------------------------
