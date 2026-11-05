@@ -1,8 +1,8 @@
 # Instalacao nativa no Linux (uv + systemd)
 
-Esta instalacao NAO usa Docker, docker-compose, Supabase ou banco hospedado.
-O banco padrao e SQLite em `data/repercussao.db`; PostgreSQL local pode
-ser usado apenas alterando `DATABASE_URL`.
+Esta instalacao usa exclusivamente SQLite local em `data/repercussao.db`.
+Nao ha suporte a banco remoto ou compatibilidade com URL PostgreSQL.
+URLs de banco externo sao recusadas antes de qualquer conexao de rede.
 
 ## 1. Dependencias e checkout
 
@@ -18,10 +18,8 @@ uv python install 3.13
 uv sync --no-dev
 ```
 
-IMPORTANTE: como a dependência de Supabase foi removida, `uv sync`
-atualiza o `uv.lock` se ele estiver desatualizado no checkout. A partir
-disso o servico usa `uv run --no-sync` para nao resolver pacotes durante
-o boot.
+O `uv.lock` contem somente as dependencias ativas do projeto. O servico
+usa `uv run --no-sync` para nao instalar pacotes durante o boot.
 
 ## 2. Credenciais e banco
 
@@ -143,6 +141,15 @@ sudo systemctl enable relatorio-midiatico
 sudo systemctl disable relatorio-midiatico
 ```
 
+**Se o inicializador recusar DATABASE_URL:** abra `.env` e substitua
+qualquer URL remota por `sqlite+pysqlite:///./data/repercussao.db`.
+Variaveis exportadas com `export DATABASE_URL=...` prevalecem sobre o .env:
+execute `unset DATABASE_URL` na sessao de instalacao, e retire essa
+exportacao de arquivos de inicializacao do shell. O arquivo `.env.local`
+nao e mais utilizado e pode ser removido com seguranca apos conferir
+que nao guarda configuracoes necessarias. Nunca publique a URL antiga,
+pois ela pode conter senhas.
+
 Acesse `http://IP-DO-SERVIDOR:8511` dentro da rede autorizada.
 Nao exponha login, token e corpus por HTTP aberto na Internet:
 para acesso remoto use HTTPS via proxy reverso ou VPN e limite
@@ -164,10 +171,9 @@ consistente do SQLite, especialmente se houver escrita concorrente.
 
 ## Observacoes importantes
 
-- Nao ha migracao automatica de dados antigos do Supabase para SQLite.
-- Usuarios antigos do Supabase precisam de senha local criada com
-  `app.local_users`. Se o banco importado preserva os IDs, o CLI
-  reutiliza a conta existente pelo email, conservando projetos vinculados.
+- Banco externo nao e suportado; as tabelas sao inicializadas em SQLite local.
+- As contas locais sao criadas com `app.local_users`; contas remotas antigas
+  nao sao importadas automaticamente.
 - A tela de login nao oferece cadastro publico: novas contas sao
   provisionadas exclusivamente pelo terminal do servidor.
 - `LOCAL_AUTH_BYPASS=true` nao funciona em `APP_ENV=production`.
