@@ -183,6 +183,14 @@ class Settings(BaseSettings):
     # 0 desliga a validade.
     corpus_reuse_max_age_days: int = Field(default=180, ge=0, le=3650)
 
+    # Memoria editorial de relatorios: somente versoes com QA aprovado,
+    # mesmo tema/edicao e mesmo proprietario. Comparacao de amostras nao
+    # equivale a tendencia na imprensa.
+    report_history_enabled: bool = True
+    report_history_max_versions: int = Field(default=3, ge=1, le=5)
+    # Desativar elimina a chamada extra de LLM, mantendo comparacao documental.
+    report_history_llm_enabled: bool = True
+
     # Memória semântica do corpus. OpenAI é tentado quando configurado; caso
     # contrário (ou se o endpoint não expuser embeddings), há fallback local
     # determinístico. Os vetores ficam em JSON para manter SQLite/PostgreSQL
