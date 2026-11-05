@@ -16,6 +16,7 @@ import app.models  # registra todos os modelos no metadata
 
 
 ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
+    "app_users": {"password_hash": "TEXT"},
     "projects": {
         "event_start": "DATE",
         "event_end": "DATE",
