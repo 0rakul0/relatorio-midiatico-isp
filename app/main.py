@@ -134,4 +134,8 @@ def login_page():
 def auth_config():
     # Compatibilidade para clientes antigos; nao expoe segredos.
     settings = get_settings()
-    return {"provider": "local", "local_auth_bypass": settings.local_auth_bypass}
+    return {
+        "provider": "local",
+        "local_auth_bypass": settings.local_auth_bypass,
+        "signup_enabled": bool(settings.local_signup_enabled and not settings.local_auth_bypass),
+    }
