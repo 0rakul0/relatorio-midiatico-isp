@@ -72,9 +72,9 @@ def _writer_grounding(db: Session, project: Project) -> dict:
     settings = get_settings()
     history = (
         previous_analyses(
-            db, project, corpus, limit=settings.report_history_max_versions
+            db, project, corpus, limit=getattr(settings, 'report_history_max_versions', 3)
         )
-        if settings.report_history_enabled
+        if getattr(settings, 'report_history_enabled', True)
         else {"status": "DISABLED", "prior_reports": []}
     )
     official_facts = db.scalars(select(OfficialFact).where(OfficialFact.project_id == project.id)).all()
@@ -213,7 +213,7 @@ def _agent_payload(db: Session, project: Project, grounding: dict) -> dict:
 def _historical_reading(result: dict, grounding: dict) -> dict:
     """Leitura adicional; nunca transforma relatos anteriores em fatos novos."""
     history = grounding.get("historical_analysis") or {}
-    if history.get("status") != "AVAILABLE" or not get_settings().report_history_llm_enabled:
+    if history.get("status") != "AVAILABLE" or not getattr(get_settings(), 'report_history_llm_enabled', True):
         return {}
     payload = {
         "current_reading": {
