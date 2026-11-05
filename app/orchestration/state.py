@@ -234,15 +234,23 @@ def create_run(project_id: int) -> RunState:
 
 
 def create_run_if_none(project_id: int) -> tuple[RunState, bool]:
+    # Nao bloquear o lock de TODOS os projetos durante I/O do SQLite:
+    # a conexao de um projeto pode estar ocupada por outra escrita.
     with _lock:
         for state in _runs.values():
             if state.project_id == project_id and state.status in _ACTIVE_STATUSES:
                 return state, False
-        persisted = _load_active_from_db(project_id)
+    persisted = _load_active_from_db(project_id)
+    with _lock:
+        # Revalidar apos o SELECT para preservar atomicidade dentro do
+        # processo quando dois requests chegam para o mesmo projeto.
+        for state in _runs.values():
+            if state.project_id == project_id and state.status in _ACTIVE_STATUSES:
+                return state, False
         if persisted is not None:
             _runs.setdefault(persisted.run_id, persisted)
             _cancel_events.setdefault(persisted.run_id, Event())
-            return persisted, False
+            return _runs[persisted.run_id], False
         state = _new_state(project_id)
         _runs[state.run_id] = state
         _cancel_events[state.run_id] = Event()
