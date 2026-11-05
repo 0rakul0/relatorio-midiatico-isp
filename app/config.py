@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     local_session_secret: str | None = None
     # Apenas desenvolvimento offline (proibido em APP_ENV=production).
     local_auth_bypass: bool = False
+    # Cadastro voluntario de contas comuns (nunca concede administrador).
+    # Desative para impedir novas inscricoes em ambientes publicos.
+    local_signup_enabled: bool = True
+    # Maximo de tentativas de cadastro por IP em uma hora (um worker).
+    local_signup_max_per_hour: int = Field(default=5, ge=1, le=50)
 
     # OpenAI is used only as the LLM. External search is DuckDuckGo only.
     openai_api_key: str | None = None
