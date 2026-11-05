@@ -69,6 +69,33 @@ remove registros existentes, e pode ser repetido. Nao ha senha padrao.
 Em Linux a pasta `data` e restrita ao usuario do servico e o banco
 recebe permissao `0600`.
 
+### 2.1 Ajuste dos orcamentos de coleta
+
+O `.env.example` tem limites separados para busca jornalistica,
+busca oficial, pesquisa factual, videos, Apify e analise LLM. O
+inventario mensal de operacoes requer:
+
+```dotenv
+MAX_MEDIA_QUERIES=24
+MAX_OFFICIAL_QUERIES=60
+ENABLE_ANNUAL_EVENT_INVENTORY=true
+MAX_ANNUAL_EVENT_INVENTORY_QUERIES=12
+ENABLE_OFFICIAL_ANNUAL_INVENTORY=true
+MAX_OFFICIAL_INVENTORY_QUERIES=60
+MAX_PRIORITY_RESULTS_PER_QUERY=8
+```
+
+Com `APIFY_API_TOKEN` vazio, deixe `APIFY_SOCIAL_ENABLED=false`.
+A descoberta publica de posts pelo DuckDuckGo continua independente
+com `SOCIAL_DISCOVERY_ENABLED=true`. O parametro valido para limitar
+as consultas por rede e `SOCIAL_DISCOVERY_QUERIES_PER_PLATFORM`
+(nao `MAX_SOCIAL_DISCOVERY_QUERIES`).
+
+**O `.env` existente nao e alterado pelo `git pull`**. Compare-o
+com `.env.example` e atualize manualmente; nao execute `cp`
+sobre suas credenciais ja configuradas. Para aplicar variaveis novas,
+reinicie: `sudo systemctl restart relatorio-midiatico`.
+
 ## 3. Criar o administrador do banco local
 
 ```bash
