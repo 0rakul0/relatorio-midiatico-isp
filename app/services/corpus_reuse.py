@@ -283,6 +283,9 @@ def reuse_prior_corpus(
         }
 
     indexed = backfill_global_corpus(db)
+    # O backfill insere documentos e links com flush. Confirmar agora para
+    # nao manter o escritor SQLite ocupado durante embeddings na OpenAI.
+    db.commit()
     if progress_detail:
         progress_detail(f"Corpus historico indexado: {indexed} item(ns) novo(s)")
 
