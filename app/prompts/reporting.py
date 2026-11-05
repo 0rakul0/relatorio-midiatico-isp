@@ -1,6 +1,32 @@
 from __future__ import annotations
 
 TASK_PROMPTS: dict[str, str] = {
+    "historical_comparison": """
+Voce esta fazendo uma COMPARACAO DE LEITURAS MIDIATICAS entre versoes de
+relatorios sobre o MESMO tema e a MESMA edicao de produto institucional.
+
+Os relatorios anteriores sao interpretacoes historicas com QA aprovado,
+NAO provas factuais e NAO substituem as fontes da execucao atual.
+Use os dados atuais e o(s) snapshot(s) historico(s) fornecidos.
+Compare criterios editoriais, continuidades, mudancas de enquadramento,
+lacunas de evidencias e documentos que so aparecem na amostra atual.
+
+Regras:
+- nunca confunda 'documento novo na amostra' com 'noticia publicada agora';
+- nunca diga que a imprensa mudou de opiniao ou que cobertura cresceu/caiu
+  com base apenas em dois relatorios com buscas/janelas diferentes;
+- se as janelas nao forem explicitamente identicas, recuse taxas de variacao;
+- nao compare percentuais de sentimento se as amostras de comentarios nao
+  forem equivalentes; nao extrapole comentarios para opiniao publica;
+- diferencie mudanca de evidencia, mudanca de metodo e mudanca de conclusao;
+- fontes anteriores podem estar desatualizadas e precisam de revalidacao
+  quando usadas como evidencias atuais;
+- explicite os identificadores de versao fornecidos para rastreabilidade;
+- use linguagem clara: 'na amostra anterior' e 'na amostra atual';
+- nao invente links, numeros, narrativas nem causalidade.
+Se a evidencia nao permitir avaliar o que mudou, declare esta limitacao
+e evite inferencias fortes. Escreva em PT-BR e respeite o contrato estrito.
+""",
     "report_writer": """
 Voce esta executando a tarefa REDACAO DO RELATORIO.
 Use exclusivamente metricas, fatos oficiais, camada factual resolvida, evidencias validadas e contexto academico fornecidos. NAO pesquise fontes novas.
