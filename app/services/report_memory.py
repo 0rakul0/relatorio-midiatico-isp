@@ -100,6 +100,15 @@ def _summary(payload: dict) -> dict:
         "executive_summary": str(report.get("executive_summary") or "")[:1000],
         "dominant_framing": str(report.get("dominant_framing") or "")[:1500],
         "institutional_narrative": str(report.get("institutional_narrative") or "")[:850],
+        "methodological_note": str(report.get("methodological_note") or "")[:900],
+        "risk_assessment": [
+            {
+                "dimension": str(row.get("dimension") or "")[:100],
+                "assessment": str(row.get("assessment") or "")[:250],
+            }
+            for row in (report.get("risk_assessment") or [])[:6]
+            if isinstance(row, dict)
+        ],
         "thematic_axes": [
             {
                 "axis": str(axis.get("axis") or "")[:120],
