@@ -14,7 +14,7 @@ from app.api.runs import router as runs_router
 from app.api.facts import router as facts_router
 from app.api.project_reports import router as project_reports_router
 from app.api.reports import router as reports_router
-from app.auth import router as auth_router
+from app.auth import router as auth_router, get_current_user
 from app.billing import router as billing_router
 from app.config import get_settings
 from app.database import SessionLocal
