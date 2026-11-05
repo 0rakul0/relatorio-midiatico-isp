@@ -12,6 +12,7 @@ from app.pdf_report import build_pdf
 from app.report_fingerprint import content_hash, request_fingerprint
 from app.report_qa import run_report_qa
 from app.schemas import StructuredMediaReportResponse
+from app.schema_groups.reporting import HistoricalComparisonOutput
 from app.services.academic_research import academic_papers_for_project
 from app.services.execution_profile import execution_flags
 from app.services.project_profile import project_payload
@@ -20,6 +21,7 @@ from app.services.word_cloud import word_cloud_for_project
 from app.services.social_repercussion import social_repercussion_for_report
 from app.services.public_opinion import public_opinion_for_report
 from app.services.cache import hydrate_cached_report
+from app.services.report_memory import previous_analyses
 
 
 YOUTUBE_COLLECTION_EDITORIAL_LABELS = {
@@ -67,6 +69,7 @@ def _writer_grounding(db: Session, project: Project) -> dict:
     """Dados de fundamentação compartilhados por redação e revisão."""
     data = metrics(db, project.id)
     corpus = corpus_for_project(db, project.id)
+    history = previous_analyses(db, project, corpus)
     official_facts = db.scalars(select(OfficialFact).where(OfficialFact.project_id == project.id)).all()
     execution_profile, flags = execution_flags(project)
     fact_events = fact_events_for_main_report(db, project.id) if flags["enable_fact_layer"] else []
@@ -114,6 +117,7 @@ def _writer_grounding(db: Session, project: Project) -> dict:
     return {
         "metrics": data,
         "corpus": corpus,
+        "historical_analysis": history,
         "official_facts": official_facts,
         "flags": flags,
         "fact_events": fact_events,
@@ -199,6 +203,39 @@ def _agent_payload(db: Session, project: Project, grounding: dict) -> dict:
     }
 
 
+def _historical_reading(result: dict, grounding: dict) -> dict:
+    """Leitura adicional; nunca transforma relatos anteriores em fatos novos."""
+    history = grounding.get("historical_analysis") or {}
+    if history.get("status") != "AVAILABLE":
+        return {}
+    payload = {
+        "current_reading": {
+            "executive_summary": result.get("executive_summary"),
+            "dominant_framing": result.get("dominant_framing"),
+            "institutional_narrative": result.get("institutional_narrative"),
+            "thematic_axes": result.get("thematic_axes") or [],
+        },
+        "current_metrics": {
+            "valid_items": int((grounding.get("metrics") or {}).get("valid_items") or 0),
+            "unique_vehicles": int((grounding.get("metrics") or {}).get("unique_vehicles") or 0),
+        },
+        "historical_snapshots": history.get("prior_reports") or [],
+        "comparison_basis": history.get("comparison_basis") or {},
+    }
+    try:
+        return get_report_agent().run(
+            task="historical_comparison",
+            payload=payload,
+            response_model=HistoricalComparisonOutput,
+            schema_name="historical_comparison_v1",
+            max_output_tokens=3500,
+        )
+    except RuntimeError:
+        # A memória documental e as métricas auditáveis continuam persistidas.
+        # Uma falha de síntese nunca impede a produção do relatório.
+        return {}
+
+
 def _save_report(db: Session, project: Project, result: dict, grounding: dict) -> dict:
     corpus = corpus_for_project(db, project.id)
     traditional, social = split_corpus(corpus)
@@ -215,6 +252,10 @@ def _save_report(db: Session, project: Project, result: dict, grounding: dict) -
         "social_repercussion": grounding["social_repercussion"],
         "public_opinion": grounding["public_opinion"],
         "search_recovery": grounding["search_recovery"],
+        "historical_analysis": {
+            **(grounding.get("historical_analysis") or {}),
+            "interpretation": _historical_reading(result, grounding),
+        },
         "word_cloud": word_cloud_for_project(db, project.id),
         "project": project_payload(project, for_report=True),
     }
