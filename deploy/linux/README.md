@@ -207,6 +207,44 @@ falhara na migracao. Corrija os duplicados com backup e revisao de IDs;
 o sistema nao junta contas automaticamente para nao perder propriedade
 de projetos.
 
+### 3.3 Pesquisas de usuarios em paralelo
+
+O servidor usa SQLite local com WAL, `uvicorn --workers 1` e um executor
+de tarefas com capacidade configuravel. O worker Uvicorn atende requests
+HTTP rapidamente; o processamento de relatorio ocorre em threads isoladas
+com `SessionLocal` propria, sem bloquear os demais usuarios.
+
+```dotenv
+MAX_CONCURRENT_REPORTS=3
+MAX_QUEUED_REPORTS=12
+```
+
+Ate tres projetos distintos rodam simultaneamente; os seguintes ficam
+com status `PENDING` e mensagem de espera no painel. Cada projeto pode
+ter apenas uma execucao ativa, independentemente do usuario e do tipo de
+tarefa (pesquisa, retomada ou refinamento). Se todas as vagas, inclusive as
+de espera, estiverem ocupadas, a API devolve HTTP 503 com `Retry-After`,
+sem iniciar um registro de execucao ficticio.
+
+A coleta web confirma as escritas de cada consulta antes de aguardar a
+proxima resposta. Os modulos de opiniao publica, redes sociais e extracao
+factual tambem evitam transacoes de escrita durante HTTP/LLM. Isso reduz
+`database is locked`, mas SQLite continua permitindo apenas um escritor
+por vez: nao e um banco para escala ilimitada.
+
+O executor e sua fila ficam no processo Python; NAO aumente
+`uvicorn --workers` acima de 1 com SQLite, pois filas e cancelamentos
+ficariam separados entre processos. Depois de um reinicio, execucoes
+pendentes/do processo anterior sao marcadas como interrompidas, e dados
+ja coletados continuam salvos para retomada. Atualize e reinicie somente
+quando as demandas ativas tiverem terminado.
+
+Para diagnosticar concorrencia:
+```bash
+sudo journalctl -u relatorio-midiatico -f -o short-iso
+curl -fsS http://127.0.0.1:8511/health
+```
+
 ## 4. Testar no terminal
 
 ```bash
