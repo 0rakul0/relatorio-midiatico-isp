@@ -51,6 +51,17 @@ if make_url(settings.database_url).get_backend_name() != "sqlite":
         "O arquivo .env.local nao e mais utilizado. Nenhuma conexao remota foi realizada."
     )
 print("Banco SQLite local validado (" + source + ").")
+if settings.app_env.casefold() != "production":
+    raise SystemExit("Defina APP_ENV=production no .env do servidor Linux")
+if settings.local_auth_bypass:
+    raise SystemExit("Defina LOCAL_AUTH_BYPASS=false no .env")
+if len((settings.local_session_secret or "").strip().encode("utf-8")) < 32:
+    raise SystemExit(
+        "LOCAL_SESSION_SECRET ausente ou curta demais. Gere uma chave com "
+        "openssl rand -hex 32, salve o valor em .env e execute novamente. "
+        "Nao envie a chave nem imprima seu valor."
+    )
+print("Assinatura do login local configurada (segredo nao exibido).")
 if not settings.openai_only:
     raise SystemExit("Defina OPENAI_ONLY=true no .env do Linux")
 if not (settings.openai_api_key or "").strip():
