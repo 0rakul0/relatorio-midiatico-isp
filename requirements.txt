@@ -12,4 +12,5 @@ langchain-core>=1.6,<2
 langchain-openai>=1.6,<2
 pypdf>=5.0,<6
 reportlab>=4.0,<5
+supabase>=2.31.0
 pytest>=8.0,<9
