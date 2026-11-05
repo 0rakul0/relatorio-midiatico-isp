@@ -6,26 +6,73 @@
   <title>Entrar — Relatório de Repercussão Midiática</title>
   <link rel="stylesheet" href="/static/styles.css?v=3">
   <style>
-    .login-wrap { max-width: 420px; margin: 8vh auto; padding: 0 24px; }
+    .login-wrap { max-width: 440px; margin: 6vh auto; padding: 0 20px; }
     .login-card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 30px; box-shadow: 0 2px 8px #1232460a; }
-    .login-card h1 { font-size: 22px; margin: 0 0 4px; color: var(--navy); }
+    .login-card h1 { font-size: 23px; margin: 0 0 9px; color: var(--navy); }
+    .login-card .field + .field { margin-top: 13px; }
+    .login-card .actions { margin-top: 18px; }
+    .login-card .login-hint { margin-bottom: 22px; }
+    .login-tabs { display: flex; gap: 8px; padding: 4px; margin: 18px 0 22px; background: #edf3f8; border-radius: 9px; }
+    .login-tabs button { flex: 1; padding: 10px; background: transparent; color: #35546b; }
+    .login-tabs button[aria-pressed="true"] { background: #fff; color: #12395e; box-shadow: 0 1px 5px #12324618; }
+    .login-card .auth-message { min-height: 20px; margin: 13px 0 0; }
+    .login-card .auth-message.error { color: #b42318; }
+    .login-card .auth-message.success { color: #126a42; }
+    .signup-help { font-size: 12px; color: var(--muted); margin: 7px 0 0; }
+    .login-card input { box-sizing: border-box; }
   </style>
 </head>
 <body>
-<div class="login-wrap">
-  <div class="login-card">
-    <div class="kicker">ISP · Inteligência de comunicação</div>
-    <h1>Entrar</h1>
-    <p class="note">Acesse para gerar e consultar relatórios. Sua conta é criada pelo administrador do servidor.</p>
-    <div class="field"><label for="login-email">E-mail</label><input id="login-email" type="email" autocomplete="username"></div>
-    <div class="field" style="margin-top:10px"><label for="login-pass">Senha</label><input id="login-pass" type="password" autocomplete="current-password"></div>
-    <div class="actions">
-      <button id="login-go" type="button">Entrar</button>
+  <main class="login-wrap">
+    <div class="login-card">
+      <div class="kicker">ISP · Inteligência de comunicação</div>
+      <div class="login-tabs" aria-label="Acesso à plataforma">
+        <button type="button" id="mode-login" aria-pressed="true" aria-controls="login-view">Entrar</button>
+        <button type="button" id="mode-signup" class="hidden" aria-pressed="false" aria-controls="signup-view">Criar conta</button>
+      </div>
+
+      <section id="login-view" aria-label="Entrar na plataforma">
+        <h1>Entrar</h1>
+        <p class="note login-hint">Acesse para gerar e consultar seus relatórios.</p>
+        <form id="login-form">
+          <div class="field">
+            <label for="login-email">E-mail</label>
+            <input id="login-email" type="email" autocomplete="username" maxlength="320" required>
+          </div>
+          <div class="field">
+            <label for="login-pass">Senha</label>
+            <input id="login-pass" type="password" autocomplete="current-password" required>
+          </div>
+          <div class="actions"><button id="login-go" type="submit">Entrar</button></div>
+        </form>
+        <p class="note auth-message" id="login-msg" role="status" aria-live="polite"></p>
+      </section>
+
+      <section id="signup-view" class="hidden" aria-label="Criar conta de usuário">
+        <h1>Criar conta</h1>
+        <p class="note login-hint">Cadastre-se para acessar seu próprio espaço de relatórios.</p>
+        <form id="signup-form">
+          <div class="field">
+            <label for="signup-email">E-mail</label>
+            <input id="signup-email" type="email" autocomplete="email" maxlength="320" required>
+          </div>
+          <div class="field">
+            <label for="signup-pass">Senha</label>
+            <input id="signup-pass" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required>
+            <p class="signup-help">Use pelo menos 12 caracteres.</p>
+          </div>
+          <div class="field">
+            <label for="signup-confirm">Confirmar senha</label>
+            <input id="signup-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required>
+          </div>
+          <div class="actions"><button id="signup-go" type="submit">Criar minha conta</button></div>
+        </form>
+        <p class="note auth-message" id="signup-msg" role="status" aria-live="polite"></p>
+        <p class="signup-help">O cadastro cria uma conta de usuário comum. Não é necessário informar dados bancários.</p>
+      </section>
     </div>
-    <p class="note" id="login-msg" style="margin:12px 0 0"></p>
-  </div>
-</div>
-<script src="/static/auth.js?v=4"></script>
-<script src="/static/login.js?v=4"></script>
+  </main>
+  <script src="/static/auth.js?v=5"></script>
+  <script src="/static/login.js?v=5"></script>
 </body>
 </html>
