@@ -53,7 +53,23 @@ def _is_retryable_openai_error(exc: Exception) -> bool:
 
 def _is_reasoning_model(model: str) -> bool:
     name = (model or "").strip().lower()
-    return name.startswith(("gpt-5", "o1", "o3", "o4"))
+    return name.startswith(("gpt-5", "gpt-6", "o1", "o3", "o4"))
+
+
+def tool_decision_kwargs(model: str) -> dict[str, str]:
+    """Options for tool calls through Chat Completions.
+
+    GPT-6 Luna/Sol reject function tools when reasoning is enabled (including
+    their implicit default). Chat Completions requires an EXPLICIT 'none'.
+    Keep the user's configured reasoning effort for regular/structured calls.
+    Other GPT-6 models that don't support 'none' need Responses for tools.
+    """
+    name = (model or "").strip().lower()
+    if name in {"gpt-6-luna", "gpt-6-sol"} or name.startswith(
+        ("gpt-6-luna-", "gpt-6-sol-")
+    ):
+        return {"reasoning_effort": "none"}
+    return {}
 
 
 def _requires_default_temperature(model: str) -> bool:
