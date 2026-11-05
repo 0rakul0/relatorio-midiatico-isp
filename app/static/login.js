@@ -1,35 +1,38 @@
-// Tela de login: autentica e vai para o index.
-const $ = s => document.querySelector(s);
+// Login local; cadastro de usuarios e feito pelo administrador no terminal.
+const $ = selector => document.querySelector(selector);
 
 async function doLogin() {
-  const email = $('#login-email').value.trim(), password = $('#login-pass').value;
-  if (!email || !password) { $('#login-msg').textContent = 'Preencha e-mail e senha.'; return; }
+  const email = $('#login-email').value.trim();
+  const password = $('#login-pass').value;
+  if (!email || !password) {
+    $('#login-msg').textContent = 'Preencha e-mail e senha.';
+    return;
+  }
+  $('#login-go').disabled = true;
   $('#login-msg').textContent = 'Entrando…';
   try {
-    const d = await goTrue('token?grant_type=password', { email, password });
-    saveAuth({ access_token: d.access_token, refresh_token: d.refresh_token, email: d.user?.email || email, expires_at: Date.now() + (d.expires_in || 3600) * 1000 });
+    const response = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.detail || `Login HTTP ${response.status}`);
+    saveAuth({
+      access_token: data.access_token,
+      email: data.email || email,
+      expires_at: Date.now() + (data.expires_in || 43200) * 1000,
+    });
     window.location.href = '/';
-  } catch (e) { $('#login-msg').textContent = `Erro: ${e.message}`; }
+  } catch (error) {
+    $('#login-msg').textContent = `Erro: ${error.message}`;
+  } finally {
+    $('#login-go').disabled = false;
+  }
 }
 
-async function doSignup() {
-  const email = $('#login-email').value.trim(), password = $('#login-pass').value;
-  if (!email || !password) { $('#login-msg').textContent = 'Preencha e-mail e senha.'; return; }
-  if (password.length < 6) { $('#login-msg').textContent = 'A senha precisa de ao menos 6 caracteres.'; return; }
-  $('#login-msg').textContent = 'Criando conta…';
-  try {
-    const d = await goTrue('signup', { email, password });
-    if (d?.session?.access_token) {
-      saveAuth({ access_token: d.session.access_token, refresh_token: d.session.refresh_token, email, expires_at: Date.now() + (d.session.expires_in || 3600) * 1000 });
-      window.location.href = '/';
-    } else {
-      $('#login-msg').textContent = 'Conta criada. Se pedirem confirmação, verifique seu e-mail e entre.';
-    }
-  } catch (e) { $('#login-msg').textContent = `Erro: ${e.message}`; }
-}
-
-// Em modo local, cria a sessão de desenvolvimento e pula esta tela.
 bootstrapAuth().then(session => { if (session) window.location.href = '/'; });
 $('#login-go').onclick = doLogin;
-$('#login-signup').onclick = doSignup;
-$('#login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+$('#login-pass').addEventListener('keydown', event => {
+  if (event.key === 'Enter') doLogin();
+});
