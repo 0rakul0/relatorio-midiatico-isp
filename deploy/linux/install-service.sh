@@ -35,10 +35,22 @@ mkdir -p "$PROJECT_DIR/data"
 chmod 700 "$PROJECT_DIR/data"
 chmod 600 "$PROJECT_DIR/.env"
 
-echo "Validando configuracao exclusiva da OpenAI..."
+echo "Validando SQLite local e configuracao exclusiva da OpenAI..."
 (cd "$PROJECT_DIR" && "$UV_PATH" run --no-sync --no-dev python -c '
+import os
+from pathlib import Path
+from sqlalchemy.engine import make_url
 from app.config import get_settings
 settings = get_settings()
+source = "variavel exportada do ambiente" if "DATABASE_URL" in os.environ else "arquivo .env (ou padrao)"
+if make_url(settings.database_url).get_backend_name() != "sqlite":
+    raise SystemExit(
+        "ERRO: o banco configurado nao e SQLite (origem: " + source + ").\\n"
+        "Corrija o arquivo .env para DATABASE_URL=sqlite+pysqlite:///./data/repercussao.db\\n"
+        "Se DATABASE_URL estiver exportado no shell, execute unset DATABASE_URL.\\n"
+        "O arquivo .env.local nao e mais utilizado. Nenhuma conexao remota foi realizada."
+    )
+print("Banco SQLite local validado (" + source + ").")
 if not settings.openai_only:
     raise SystemExit("Defina OPENAI_ONLY=true no .env do Linux")
 if not (settings.openai_api_key or "").strip():
