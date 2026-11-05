@@ -24,6 +24,8 @@ logger = logging.getLogger("app.llm")
 
 def _fallback_is_configured() -> bool:
     settings = get_settings()
+    if getattr(settings, "openai_only", False):
+        return False
     return bool(
         (settings.openai_fallback_base_url or "").strip()
         and (settings.openai_fallback_model or "").strip()
@@ -63,6 +65,11 @@ def _requires_default_temperature(model: str) -> bool:
 def create_chat_model(*, max_output_tokens: int = 50000):
     settings = get_settings()
 
+    if getattr(settings, "openai_only", False) and not settings.openai_api_key:
+        raise RuntimeError("OPENAI_ONLY=true exige OPENAI_API_KEY configurada")
+    if getattr(settings, "openai_only", False) and (settings.openai_base_url or "").strip():
+        raise RuntimeError("OPENAI_ONLY=true exige a API oficial; remova OPENAI_BASE_URL")
+
     fallback_model: ChatOpenAI | None = _build_fallback_model(
         max_output_tokens=max_output_tokens
     )
@@ -89,7 +96,7 @@ def create_chat_model(*, max_output_tokens: int = 50000):
     }
     if not _requires_default_temperature(settings.openai_model):
         base_kwargs["temperature"] = 0
-    if settings.openai_base_url:
+    if settings.openai_base_url and not getattr(settings, "openai_only", False):
         base_kwargs["base_url"] = settings.openai_base_url
 
     effort = (settings.openai_reasoning_effort or "").strip().lower()
@@ -106,6 +113,8 @@ def create_chat_model(*, max_output_tokens: int = 50000):
 
 def _build_fallback_model(*, max_output_tokens: int):
     settings = get_settings()
+    if getattr(settings, "openai_only", False):
+        return None
     fallback_base = (settings.openai_fallback_base_url or "").strip()
     fallback_model = (settings.openai_fallback_model or "").strip()
     if not fallback_base or not fallback_model:
