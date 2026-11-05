@@ -388,6 +388,31 @@ function render(result){
   const socialPostInventory=socialPerception.post_inventory||[];
   const wordCloud=result.word_cloud||{};
   const academicPapers=result.academic_papers||[];
+  const history=result.historical_analysis||{};
+  const earlier=(history.prior_reports||[])[0];
+  const comparisonBasis=history.comparison_basis||{};
+  const comparisonReading=history.interpretation||{};
+  const historyList=(heading,items)=>(items||[]).length
+    ? `<h3>${esc(heading)}</h3><ul>${items.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`
+    : '';
+  const historySection=history.status==='AVAILABLE'&&earlier?`
+    <h2>Evolução das leituras midiáticas</h2>
+    <p class="related-intro">Comparação com análise anterior aprovada do projeto ${esc(earlier.project_id)},
+    versão ${esc(earlier.version_no)}, realizada em ${esc(earlier.created_at||'data não informada')}.
+    As conclusões antigas são interpretações históricas, não fontes factuais independentes.</p>
+    ${table(['Indicador','Amostras documentais'],[
+      ['Documentos com URL no relatório anterior',comparisonBasis.previous_corpus_items_with_url||0],
+      ['Documentos com URL no relatório atual',comparisonBasis.current_corpus_items_with_url||0],
+      ['Documentos presentes nas duas amostras',comparisonBasis.shared_document_count||0],
+      ['Documentos exclusivos da amostra atual',comparisonBasis.new_to_current_sample_count||0],
+      ['Documentos anteriores ausentes da amostra atual',comparisonBasis.absent_from_current_sample_count||0]
+    ])}
+    <p class="note">${esc(comparisonBasis.interpretation||'Amostras distintas não demonstram tendência de cobertura.')}</p>
+    ${comparisonReading.summary?`<h3>Leitura comparativa</h3><p>${esc(comparisonReading.summary)}</p>`:''}
+    ${historyList('Continuidades',comparisonReading.continuities)}
+    ${historyList('Diferenças observadas',comparisonReading.changes)}
+    ${historyList('Ressalvas de comparabilidade',comparisonReading.caveats)}
+  `:'';
   const academicSection=academicPapers.length?`<h2>Literatura científica relacionada</h2>
     <p class="related-intro">Estes trabalhos foram recuperados em bases científicas como SciELO, OpenAlex, Crossref, Semantic Scholar e arXiv para contextualização científica. Eles não são contados como repercussão midiática e não confirmam automaticamente fatos noticiados.</p>
     ${table(['Ano','Autores','Artigo','Relação com o tema','Fonte'],academicPapers.map(x=>[
@@ -615,6 +640,7 @@ function render(result){
     <h2>IV. Recorte de Maior Rendimento Jornalístico</h2><p>${esc(d.highest_yield)}</p>
     <h2>V. Camada Institucional e Disputa de Narrativa</h2><p>${esc(d.institutional_narrative)}</p>
     <h2>VI. Avaliação: Alcance, Profundidade e Riscos</h2>${table(['Dimensão','Avaliação','Evidência'],risks)}
+    ${historySection}
     <h2>VII. Recomendações e Kit de Imprensa</h2><ul>${(d.recommendations||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul>${table(['Produto','Finalidade'],kit)}
     <h2>VIII. Síntese</h2><p>${esc(d.synthesis)}</p>
     <h2>Anexo A - Nota Metodológica</h2><p>${esc(d.methodological_note)}</p>
