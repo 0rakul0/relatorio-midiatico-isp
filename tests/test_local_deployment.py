@@ -25,11 +25,25 @@ def test_init_db_creates_local_auth_tables_and_preserves_existing_file(tmp_path)
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert {"id", "email", "password_hash", "is_admin", "plan", "created_at"} <= columns
         assert {"app_users", "projects", "chat_conversations", "media_items"} <= tables
+        index_names = {
+            row[1] for row in conn.execute("PRAGMA index_list(app_users)")
+        }
+        assert "uq_app_users_email_nocase" in index_names
+        # O indice UNIQUE do SQLite impede identidades repetidas apesar de
+        # diferencas de caixa (incluindo contas antigas criadas no terminal).
         conn.execute(
             "INSERT INTO app_users (id, email, plan, is_admin, password_hash) VALUES (?, ?, ?, ?, ?)",
             ("existing", "tester@example.org", "FREE", 0, "hashed"),
         )
         conn.commit()
+        import pytest
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO app_users (id, email, plan, is_admin, password_hash) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("duplicate", "TESTER@EXAMPLE.ORG", "FREE", 0, "fake"),
+            )
+        conn.rollback()
 
     again = subprocess.run(cmd, cwd=cwd, env=env, text=True, capture_output=True, timeout=60)
     assert again.returncode == 0, again.stdout + again.stderr
