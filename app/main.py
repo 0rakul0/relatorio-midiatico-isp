@@ -14,6 +14,7 @@ from app.api.runs import router as runs_router
 from app.api.facts import router as facts_router
 from app.api.project_reports import router as project_reports_router
 from app.api.reports import router as reports_router
+from app.auth import router as auth_router
 from app.billing import router as billing_router
 from app.config import get_settings
 from app.database import SessionLocal
@@ -30,6 +31,11 @@ async def lifespan(app: FastAPI):
     ensure_schema()
 
     settings = get_settings()
+    if settings.app_env.casefold() == 'production':
+        if settings.local_auth_bypass:
+            raise RuntimeError('LOCAL_AUTH_BYPASS nao pode ser usado em producao')
+        if len((settings.local_session_secret or '').encode('utf-8')) < 32:
+            raise RuntimeError('Configure LOCAL_SESSION_SECRET (openssl rand -hex 32) no .env')
     if settings.corpus_metadata_repair_on_startup:
         try:
             with SessionLocal() as db:
@@ -48,6 +54,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ISP Repercussão Midiática", version="0.3.4", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+app.include_router(auth_router)
 app.include_router(billing_router)
 app.include_router(costs_router)
 app.include_router(chat_router)
@@ -109,10 +116,6 @@ def login_page():
 
 @app.get("/auth/config", include_in_schema=False)
 def auth_config():
-    # Chave publishable é pública por desenho (vai para o browser).
+    # Compatibilidade para clientes antigos; nao expoe segredos.
     settings = get_settings()
-    return {
-        "supabase_url": settings.supabase_url,
-        "supabase_key": settings.supabase_key,
-        "local_auth_bypass": settings.local_auth_bypass,
-    }
+    return {"provider": "local", "local_auth_bypass": settings.local_auth_bypass}
