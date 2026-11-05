@@ -137,21 +137,32 @@ def previous_analyses(
     Para projetos legados sem owner, a memoria fica limitada ao proprio
     projeto, evitando leitura cruzada de informacoes privadas.
     """
-    stmt = (
-        select(Project, ReportVersion)
-        .join(ReportVersion, ReportVersion.project_id == Project.id)
-        .where(ReportVersion.qa_status == "APPROVED")
-        .order_by(ReportVersion.created_at.desc(), ReportVersion.id.desc())
-        .limit(400)
-    )
+    project_stmt = select(Project).order_by(Project.id.desc()).limit(1000)
     if project.owner_id:
-        stmt = stmt.where(Project.owner_id == project.owner_id)
+        project_stmt = project_stmt.where(Project.owner_id == project.owner_id)
     else:
-        stmt = stmt.where(Project.id == project.id)
+        project_stmt = project_stmt.where(Project.id == project.id)
+    candidates = {
+        row.id: row for row in db.scalars(project_stmt).all()
+        if same_topic(project, row)
+    }
+    if not candidates:
+        return {"status": "NO_PRIOR_APPROVED_REPORT", "prior_reports": []}
+
+    # Filtra primeiro projetos leves; so depois carrega payloads historicos
+    # potencialmente grandes. Nao traz centenas de outros temas para memoria.
+    stmt = (
+        select(ReportVersion)
+        .where(
+            ReportVersion.qa_status == "APPROVED",
+            ReportVersion.project_id.in_(list(candidates)),
+        )
+        .order_by(ReportVersion.created_at.desc(), ReportVersion.id.desc())
+        .limit(max(1, min(limit, 5)))
+    )
     matches: list[dict] = []
-    for old_project, version in db.execute(stmt).all():
-        if not same_topic(project, old_project):
-            continue
+    for version in db.scalars(stmt).all():
+        old_project = candidates[version.project_id]
         body = version.body
         if not isinstance(body, dict) or not isinstance(body.get("report"), dict):
             continue
