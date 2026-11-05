@@ -122,7 +122,7 @@ Essa relação é persistida para permitir inspeção posterior.
 
 ### 3.1 Visão geral
 
-A aplicação é implementada em Python 3.12, FastAPI, SQLAlchemy e Pydantic. PostgreSQL é o banco principal, com suporte a SQLite para desenvolvimento. O **DuckDuckGo é a camada principal de descoberta externa**: os resultados retornados são persistidos e classificados deterministicamente conforme a origem da mídia. URLs de portais e páginas tradicionais seguem para hidratação Web; URLs do YouTube seguem para o tratamento especializado de vídeo; URLs públicas de Instagram, Facebook, TikTok e X seguem para a camada de **repercussão social**.
+A aplicação é implementada em Python 3.13, FastAPI, SQLAlchemy e Pydantic, com SQLite local como único banco de dados. O **DuckDuckGo é a camada principal de descoberta externa**: os resultados retornados são persistidos e classificados deterministicamente conforme a origem da mídia. URLs de portais e páginas tradicionais seguem para hidratação Web; URLs do YouTube seguem para o tratamento especializado de vídeo; URLs públicas de Instagram, Facebook, TikTok e X seguem para a camada de **repercussão social**.
 
 O Apify não funciona como mecanismo paralelo de descoberta. Ele atua como **enriquecedor de URLs sociais previamente encontradas pelo DuckDuckGo**. A camada social executa consultas dedicadas por plataforma, priorizando termos curtos extraídos do perfil do tema em vez de reproduzir literalmente a pergunta do usuário. Se a primeira rodada não encontrar posts elegíveis, uma segunda rodada de recuperação amplia os termos antes de concluir `NO_POSTS`.
 
@@ -701,74 +701,43 @@ Como trabalhos futuros, destacam-se: construção de um corpus de referência an
 ### 7.1 Requisitos
 
 - Python 3.12+
-- PostgreSQL recomendado; SQLite suportado para desenvolvimento
-- chave OpenAI ou endpoint compatível para as tarefas LLM
+- SQLite local para contas, notícias e relatórios
+- chave da API OpenAI para tarefas LLM
 - acesso à Internet para pesquisas externas
 
 ### 7.2 Implantação Linux nativa (porta 8511)
 
 Para rodar com `uv` e manter a aplicação em funcionamento com `systemd`,
-sem Docker Compose e sem Supabase, siga o guia
+utilizando exclusivamente SQLite local e OpenAI, siga o guia
 [deploy/linux/README.md](deploy/linux/README.md).
 O banco padrão é SQLite local; o administrador é criado pelo terminal.
 O serviço usa porta fixa **8511**.
 
-### 7.2 Instalação
+### 7.3 Configuração local
 
 ```bash
-git clone https://github.com/0rakul0/relatorio-midiatico-isp.git
-cd relatorio-midiatico-isp
-
-python -m venv .venv
+uv python install 3.13
+uv sync --no-dev
+cp .env.example .env
+# Configure OPENAI_API_KEY e gere LOCAL_SESSION_SECRET com openssl rand -hex 32
+uv run python -m app.init_db
+uv run python -m app.local_users create --email seu-email@instituicao.br --admin
 ```
 
-Windows:
-
-```powershell
-.venv\Scripts\activate
-pip install -e .
-```
-
-Linux/macOS:
-
-```bash
-source .venv/bin/activate
-pip install -e .
-```
-
-### 7.3 Configuração mínima
-
-Exemplo de `.env`:
+Exemplo do `.env` (nunca inclua credenciais reais no Git):
 
 ```env
-DATABASE_URL=postgresql+psycopg://relatorio:relatorio@localhost:5432/repercussao
-
-OPENAI_API_KEY=...
-OPENAI_MODEL=gpt-5-mini
-
-DUCKDUCKGO_REGION=br-pt
-
-# Opcional: repercussão social
-APIFY_API_TOKEN=
-APIFY_SOCIAL_ENABLED=true
-APIFY_INSTAGRAM_COMMENTS_ACTOR_ID=apify/instagram-comment-scraper
-APIFY_FACEBOOK_COMMENTS_ACTOR_ID=apify/facebook-comments-scraper
-APIFY_TIKTOK_COMMENTS_ACTOR_ID=clockworks/tiktok-comments-scraper
-# X usa Actor comunitário e pode ser substituído por outro:
-APIFY_X_COMMENTS_ACTOR_ID=scraper_one/x-post-replies-scraper
-
-ENABLE_CORPUS_REUSE=true
-CORPUS_EMBEDDING_MODEL=text-embedding-3-small
-RERANKER_AUTO_TRAIN=true
+DATABASE_URL=sqlite+pysqlite:///./data/repercussao.db
+APP_ENV=production
+LOCAL_AUTH_BYPASS=false
+LOCAL_SESSION_SECRET=
+OPENAI_ONLY=true
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4.1-mini
 ```
 
-Fallback local compatível com OpenAI:
-
-```env
-OPENAI_FALLBACK_BASE_URL=http://localhost:11434/v1
-OPENAI_FALLBACK_MODEL=gemma4:12b
-OPENAI_FALLBACK_API_KEY=ollama
-```
+Um `DATABASE_URL` apontando para banco remoto é recusado antes de tentar conectar.
+O projeto lê `.env` e variáveis exportadas, mas não usa `.env.local`.
 
 ### 7.4 Execução
 
