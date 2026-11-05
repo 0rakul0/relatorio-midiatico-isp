@@ -135,6 +135,14 @@ A estrategia de busca deve ser compacta:
 - quando corpus historico reutilizavel for fornecido, planeje apenas as lacunas:
   evite repetir cobertura/portais que ja estejam bem representados e use a busca
   nova para complementar ou atualizar o que falta.
+- historical_planning_guidance e uma leitura anterior APROVADA do mesmo tema/
+  mesma edicao. Use seus riscos e limitacoes metodologicas para escolher
+  angulos que ainda precisem de confirmacao (por exemplo, localizar a fonte
+  primaria ou validar referencias a edicao correta), SEM assumir que as
+  conclusoes antigas sao fatos comprovados e SEM ultrapassar os limites de buscas.
+- nao confunda Dossie Mulher 2025 com Dossie Mulher 2026; comparacao de
+  versoes anteriores nao justifica incluir noticias de outra edicao como
+  repercussao da edicao atual.
 
 Os presets/overrides explicitos do usuario serao aplicados pelo codigo depois da
 sua resposta. Sua decisao deve refletir a metodologia mais enxuta que ainda
