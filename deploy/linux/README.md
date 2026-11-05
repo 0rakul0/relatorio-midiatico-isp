@@ -94,6 +94,35 @@ com `.env.example` e atualize manualmente; nao execute `cp`
 sobre suas credenciais ja configuradas. Para aplicar variaveis novas,
 reinicie: `sudo systemctl restart relatorio-midiatico`.
 
+### 2.2 Memoria editorial entre relatorios
+
+A aplicacao recupera ate tres versoes **QA aprovadas** de relatorios
+anteriores sobre o mesmo tema e a mesma edicao, no mesmo usuario.
+A memoria distingue leituras anteriores das fontes e fatos validados agora.
+
+```dotenv
+REPORT_HISTORY_ENABLED=true
+REPORT_HISTORY_MAX_VERSIONS=3
+REPORT_HISTORY_LLM_ENABLED=true
+```
+
+Quando houver historico, o planejador recebe os riscos metodologicos
+anteriores para orientar a busca por evidencias ausentes, sem tratar
+conclusoes antigas como fatos. A redacao gera uma leitura comparativa
+separada das secoes factuais, salva o snapshot na versao do relatorio
+e exibe a comparacao na web e no PDF.
+
+A comparacao mostra documentos em comum, exclusivos de cada amostra,
+continuidade e mudancas de enquadramentos, com referencia ao numero
+da versao anterior. Janelas diferentes nao permitem estimar variacao
+percentual ou tendencia de cobertura. Versoes rejeitadas pelo QA
+nao sao usadas como linha de base.
+
+Para economizar na OpenAI, use
+`REPORT_HISTORY_LLM_ENABLED=false`, que mantem os indicadores
+documentais comparativos, sem sintetizar as narrativas pela LLM.
+A primeira execucao sem historico aprovado permanece inalterada.
+
 ## 3. Criar o administrador do banco local
 
 ```bash
