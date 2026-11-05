@@ -11,7 +11,7 @@ services:
       - "8000:8000"
     volumes:
       - .:/app
-    # Banco: Supabase via DATABASE_URL no .env (sem postgres local).
+    # Banco SQLite local: DATABASE_URL no .env.
 
   api-prod:
     profiles: ["prod"]
