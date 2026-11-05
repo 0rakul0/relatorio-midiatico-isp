@@ -9,13 +9,14 @@ apenas chama ``start_run``; ela não conhece threads nem rollback.
 from __future__ import annotations
 
 import logging
-from threading import Thread
 
 from app.cost_tracker import cost_context, set_cost_operation
 from app.database import SessionLocal
 from app.models import GeneratedReport, Project, ReportRun
+from app.orchestration.scheduler import get_scheduler
 from app.orchestration.state import (
     RUN_STAGES,
+    active_run_for_project,
     RunCancelled,
     check_cancelled,
     create_run,
@@ -78,25 +79,47 @@ def _run_project_worker(run_id: str, project_id: int) -> None:
         db.close()
 
 
-def start_run(project_id: int) -> dict:
-    """Inicia uma execução assíncrona e devolve o snapshot do run.
+def _submit_run(
+    project_id: int,
+    worker,
+    *,
+    prepare=None,
+) -> dict:
+    """Uma execucao ativa por projeto; projetos distintos usam slots em paralelo."""
+    existing = active_run_for_project(project_id)
+    if existing:
+        return existing
 
-    A checagem de execução ativa e a criação do run são atômicas. Se já houver
-    execução ativa (neste processo ou persistida por outro worker), devolve o
-    snapshot dela sem iniciar outra.
-    """
-    state, created = create_run_if_none(project_id)
-    if not created:
-        return run_snapshot(state.run_id) or {}
+    scheduler = get_scheduler()
+    scheduler.reserve()
+    state = None
+    try:
+        # A reserva ocorre antes da criacao: quando a fila esta cheia, nao
+        # geramos ReportRun ficticio nem consumimos a cota do usuario.
+        state, created = create_run_if_none(project_id)
+        if not created:
+            scheduler.release()
+            return run_snapshot(state.run_id) or {}
+        if prepare is not None:
+            prepare(state.run_id)
+    except Exception as exc:
+        scheduler.release()
+        if state is not None:
+            mark_run_failed(state.run_id, str(exc))
+        raise
 
-    thread = Thread(
-        target=_run_project_worker,
-        args=(state.run_id, project_id),
-        name=f"report-run-{state.run_id[:8]}",
-        daemon=True,
-    )
-    thread.start()
+    try:
+        scheduler.submit_reserved(worker, state.run_id, project_id)
+    except Exception as exc:
+        # submit_reserved libera a reserva caso a pool nao aceite a tarefa.
+        mark_run_failed(state.run_id, str(exc))
+        raise
     return run_snapshot(state.run_id) or {}
+
+
+def start_run(project_id: int) -> dict:
+    """Inicia ou enfileira uma pesquisa sem bloquear outras contas."""
+    return _submit_run(project_id, _run_project_worker)
 
 
 def _resume_report_worker(run_id: str, project_id: int) -> None:
@@ -158,39 +181,19 @@ def _resume_report_worker(run_id: str, project_id: int) -> None:
 
 
 def resume_run(project_id: int) -> dict:
-    """Cria um novo run que reaproveita todas as etapas anteriores à redação."""
-    # Um processo morto pode ter deixado ReportRun como RUNNING. Encerramos
-    # esse registro antes de criar a retomada, pois não há thread após reboot.
-    db = SessionLocal()
-    try:
-        stale = db.query(ReportRun).filter(
-            ReportRun.project_id == project_id,
-            ReportRun.status.in_(("PENDING", "RUNNING")),
-        ).all()
-        for row in stale:
-            row.status = "FAILED"
-            row.message = "Execução anterior interrompida; substituída por retomada"
-        db.commit()
-    finally:
-        db.close()
+    """Retoma somente o relatorio sem interromper outro run ativo."""
+    def prepare(run_id: str) -> None:
+        # Etapas anteriores ja sao preservadas; apenas redacao/QA reexecutam.
+        for key, _label in RUN_STAGES:
+            if key in {"report", "qa"}:
+                break
+            update_stage(
+                run_id, key, "SKIPPED", "Reaproveitado da execucao anterior"
+            )
 
-    state = create_run(project_id)
-    # As etapas 1..9 já produziram dados persistentes. Na nova execução elas
-    # aparecem como recuperadas, sem repetir busca, validação ou classificação.
-    for key, _label in RUN_STAGES:
-        if key in {"report", "qa"}:
-            break
-        update_stage(state.run_id, key, "SKIPPED", "Reaproveitado da execução anterior")
-    thread = Thread(
-        target=_resume_report_worker,
-        args=(state.run_id, project_id),
-        name=f"report-resume-{state.run_id[:8]}",
-        daemon=True,
+    return _submit_run(
+        project_id, _resume_report_worker, prepare=prepare
     )
-    thread.start()
-    return run_snapshot(state.run_id) or {}
-
-
 
 def _refine_qa_worker(run_id: str, project_id: int) -> None:
     mark_run_started(run_id)
@@ -226,29 +229,19 @@ def _refine_qa_worker(run_id: str, project_id: int) -> None:
 
 
 def start_qa_refinement(project_id: int) -> dict:
-    state = create_run(project_id)
-    active = {
-        "validation",
-        "facts_pass_2",
-        "fact_resolution_2",
-        "classification",
-        "gap_fill",
-        "report",
-        "qa",
-    }
-    for key, _label in RUN_STAGES:
-        if key not in active:
-            update_stage(
-                state.run_id,
-                key,
-                "SKIPPED",
-                "Preservado do relatório histórico",
-            )
-    thread = Thread(
-        target=_refine_qa_worker,
-        args=(state.run_id, project_id),
-        name=f"qa-refine-{state.run_id[:8]}",
-        daemon=True,
+    """Refina em paralelo com outros projetos, nunca com ele proprio."""
+    def prepare(run_id: str) -> None:
+        active = {
+            "validation", "facts_pass_2", "fact_resolution_2",
+            "classification", "gap_fill", "report", "qa",
+        }
+        for key, _label in RUN_STAGES:
+            if key not in active:
+                update_stage(
+                    run_id, key, "SKIPPED",
+                    "Preservado do relatorio historico",
+                )
+
+    return _submit_run(
+        project_id, _refine_qa_worker, prepare=prepare
     )
-    thread.start()
-    return run_snapshot(state.run_id) or {}
