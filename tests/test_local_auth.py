@@ -19,6 +19,8 @@ def _client(monkeypatch):
             local_auth_bypass=False,
             local_session_secret="test-only-secret-not-for-production-" * 2,
             app_env="production",
+            local_signup_enabled=True,
+            local_signup_max_per_hour=5,
         ),
     )
     engine = create_engine(
@@ -30,6 +32,7 @@ def _client(monkeypatch):
     factory = sessionmaker(bind=engine)
     api = FastAPI()
     api.include_router(router)
+    monkeypatch.setattr("app.auth._signup_attempts", {})
 
     def override_db():
         with factory() as db:
@@ -93,10 +96,153 @@ def test_local_login_requires_password_and_expires_after_change(monkeypatch):
         engine.dispose()
 
 
-def test_no_public_signup(monkeypatch):
-    client, _, engine = _client(monkeypatch)
+def test_signup_creates_free_user_and_preserves_admin(monkeypatch):
+    from app.auth import verify_password
+
+    client, factory, engine = _client(monkeypatch)
+    try:
+        with factory() as db:
+            db.add(
+                AppUser(
+                    id="owner", email="admin@example.org", is_admin=True,
+                    plan="INSTITUCIONAL", password_hash=hash_password("admin-password-123"),
+                )
+            )
+            db.commit()
+
+        with client:
+            created = client.post(
+                "/auth/signup",
+                json={"email": " New.User@Example.org ", "password": "a-long-password-123"},
+            )
+            assert created.status_code == 201, created.text
+            payload = created.json()
+            assert payload["email"] == "new.user@example.org"
+            assert payload["plan"] == "FREE"
+            assert "access_token" in payload
+            current = client.get(
+                "/auth/me",
+                headers={"Authorization": f"Bearer {payload['access_token']}"},
+            )
+            assert current.status_code == 200
+            assert current.json()["is_admin"] is False
+            assert current.json()["plan"] == "FREE"
+            assert current.json()["email"] == "new.user@example.org"
+
+            regular_login = client.post(
+                "/auth/login",
+                json={"email": "new.user@example.org", "password": "a-long-password-123"},
+            )
+            assert regular_login.status_code == 200
+
+            with factory() as db:
+                admin = db.get(AppUser, "owner")
+                assert admin.is_admin is True
+                assert admin.plan == "INSTITUCIONAL"
+                registered = db.scalar(
+                    __import__("sqlalchemy").select(AppUser).where(
+                        AppUser.email == "new.user@example.org"
+                    )
+                )
+                assert registered is not None
+                assert registered.id != admin.id
+                assert verify_password("a-long-password-123", registered.password_hash)
+                assert registered.password_hash != "a-long-password-123"
+
+            duplicate = client.post(
+                "/auth/signup",
+                json={"email": "NEW.USER@example.org", "password": "another-password-123"},
+            )
+            assert duplicate.status_code == 409
+            duplicate_admin = client.post(
+                "/auth/signup",
+                json={"email": "ADMIN@example.org", "password": "another-password-123"},
+            )
+            assert duplicate_admin.status_code == 409
+            assert "access_token" not in duplicate_admin.json()
+    finally:
+        engine.dispose()
+
+
+def test_signup_rejects_role_injection_and_weak_password(monkeypatch):
+    client, factory, engine = _client(monkeypatch)
     try:
         with client:
-            assert client.post("/auth/signup", json={}).status_code == 404
+            weak = client.post(
+                "/auth/signup", json={"email": "test@example.org", "password": "short"}
+            )
+            assert weak.status_code == 422
+            elevated = client.post(
+                "/auth/signup",
+                json={
+                    "email": "test@example.org", "password": "long-password-123",
+                    "is_admin": True, "plan": "INSTITUCIONAL",
+                },
+            )
+            assert elevated.status_code == 422
+            with factory() as db:
+                assert db.query(AppUser).count() == 0
+    finally:
+        engine.dispose()
+
+
+def test_signup_can_be_disabled(monkeypatch):
+    from types import SimpleNamespace
+
+    client, _, engine = _client(monkeypatch)
+    monkeypatch.setattr(
+        "app.auth.get_settings",
+        lambda: SimpleNamespace(
+            local_auth_bypass=False,
+            local_signup_enabled=False,
+            local_signup_max_per_hour=5,
+            local_session_secret="test-only-secret-not-for-production-" * 2,
+            app_env="production",
+        ),
+    )
+    try:
+        with client:
+            forbidden = client.post(
+                "/auth/signup",
+                json={"email": "new@example.org", "password": "a-long-password-123"},
+            )
+            assert forbidden.status_code == 403
+            assert client.post(
+                "/auth/login",
+                json={"email": "new@example.org", "password": "a-long-password-123"},
+            ).status_code == 401
+    finally:
+        engine.dispose()
+
+
+def test_signup_rate_limit(monkeypatch):
+    from types import SimpleNamespace
+
+    client, factory, engine = _client(monkeypatch)
+    monkeypatch.setattr(
+        "app.auth.get_settings",
+        lambda: SimpleNamespace(
+            local_auth_bypass=False,
+            local_signup_enabled=True,
+            local_signup_max_per_hour=2,
+            local_session_secret="test-only-secret-not-for-production-" * 2,
+            app_env="production",
+        ),
+    )
+    try:
+        with client:
+            for n in range(2):
+                ok = client.post(
+                    "/auth/signup",
+                    json={"email": f"user{n}@example.org", "password": "long-password-123"},
+                )
+                assert ok.status_code == 201, ok.text
+            limited = client.post(
+                "/auth/signup",
+                json={"email": "third@example.org", "password": "long-password-123"},
+            )
+            assert limited.status_code == 429
+            with factory() as db:
+                assert db.query(AppUser).count() == 2
     finally:
         engine.dispose()
