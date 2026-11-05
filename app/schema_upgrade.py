@@ -146,6 +146,18 @@ def ensure_schema() -> None:
                 )
                 present.add(column_name)
 
+        if "app_users" in existing_tables:
+            # Evita cadastro concorrente com email duplicado, inclusive
+            # quando as letras maiusculas diferem. Nao altera contas existentes.
+            # Se houver duplicatas legadas, a migracao sinaliza o problema:
+            # nao faz merge automatico de usuarios/projetos privados.
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_app_users_email_nocase "
+                    "ON app_users (email COLLATE NOCASE)"
+                )
+            )
+
         if "corpus_documents" in existing_tables:
             connection.execute(
                 text(
