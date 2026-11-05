@@ -20,6 +20,7 @@ from pydantic import BaseModel, ValidationError
 from app.config import get_settings
 from app.llm import create_chat_model, record_llm_usage, tool_decision_kwargs, usage_counts
 from app.prompts.report_agent import BASE_PROMPT, TASK_PROMPTS
+from app.schema_groups.search import BULK_SEARCH_MAX_QUERIES
 
 ResponseModelT = TypeVar("ResponseModelT", bound=BaseModel)
 
@@ -199,26 +200,54 @@ class ReportAgent:
                     "para executar o plano aprovado"
                 )
 
-            try:
-                observation = tool.invoke({"queries": queries})
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Falha ao executar a ferramenta obrigatoria '{tool_name}': {exc}"
-                ) from exc
+            # O plano pode reunir consultas por midia, fontes oficiais e
+            # inventario mensal. O Pydantic limita apenas CADA chamada da
+            # ferramenta a 50 consultas. Executa todos os lotes, na ordem,
+            # sem descartar meses, alterar prioridades ou esconder falhas.
+            batch_count = (len(queries) + BULK_SEARCH_MAX_QUERIES - 1) // BULK_SEARCH_MAX_QUERIES
+            errors_count = 0
+            processed_count = 0
+            for batch_index, start in enumerate(
+                range(0, len(queries), BULK_SEARCH_MAX_QUERIES), start=1
+            ):
+                batch = queries[start : start + BULK_SEARCH_MAX_QUERIES]
+                try:
+                    observation = tool.invoke({"queries": batch})
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Falha ao executar a ferramenta obrigatoria '{tool_name}' "
+                        f"(lote {batch_index}/{batch_count}, consultas "
+                        f"{start + 1}-{start + len(batch)} de {len(queries)}): {exc}"
+                    ) from exc
 
-            result_rows = []
-            if isinstance(observation, dict):
-                result_rows = list(observation.get("results") or [])
-            errors = [
-                row for row in result_rows
-                if str(row.get("status") or "").upper() in {"ERROR", "SKIPPED"}
-            ]
-            if errors:
+                if not isinstance(observation, dict):
+                    raise RuntimeError(
+                        f"Resposta invalida de '{tool_name}' no lote "
+                        f"{batch_index}/{batch_count}: esperado objeto com results"
+                    )
+                result_rows = observation.get("results")
+                if not isinstance(result_rows, list) or len(result_rows) != len(batch):
+                    raise RuntimeError(
+                        f"Resposta incompleta de '{tool_name}' no lote "
+                        f"{batch_index}/{batch_count}: esperado(s) {len(batch)} "
+                        f"resultado(s), recebido(s) "
+                        f"{len(result_rows) if isinstance(result_rows, list) else 0}"
+                    )
+                errors_count += sum(
+                    1 for row in result_rows
+                    if isinstance(row, dict)
+                    and str(row.get("status") or "").upper() in {"ERROR", "SKIPPED"}
+                )
+                if observation.get("cancelled"):
+                    partial = True
+                processed_count += len(result_rows)
+
+            if errors_count:
                 partial = True
-
             summaries.append(
-                f"{tool_name}: {len(queries)} consulta(s) executada(s)"
-                + (f", {len(errors)} com erro/skip" if errors else "")
+                f"{tool_name}: {processed_count}/{len(queries)} consulta(s) processada(s) "
+                f"em {batch_count} lote(s) de ate {BULK_SEARCH_MAX_QUERIES}"
+                + (f", {errors_count} com erro/skip" if errors_count else "")
             )
 
         result = response_model(
