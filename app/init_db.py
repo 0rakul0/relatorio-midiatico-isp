@@ -54,6 +54,8 @@ def initialize_database() -> dict[str, object]:
 
 
 def main() -> None:
+    if os.name == 'posix':
+        os.umask(0o077)
     state = initialize_database()
     print(f"Banco inicializado: {state['database']}")
     print(f"Tabelas: {state['tables']} | Usuarios: {state['users']} | Administradores: {state['admins']}")
