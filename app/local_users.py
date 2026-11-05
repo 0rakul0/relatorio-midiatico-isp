@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from app.auth import hash_password
 from app.database import SessionLocal
 from app.models import AppUser
-from app.schema_upgrade import ensure_schema
+from app.init_db import initialize_database
 
 
 def main() -> None:
@@ -41,7 +41,7 @@ def main() -> None:
     except ValueError as exc:
         parser.error(str(exc))
 
-    ensure_schema()
+    initialize_database()
     with SessionLocal() as db:
         row = db.scalar(select(AppUser).where(func.lower(AppUser.email) == email))
         if row is None:
