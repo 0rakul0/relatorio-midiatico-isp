@@ -171,6 +171,7 @@ def test_prompt_registry_keeps_all_expected_tasks():
         "academic_research",
         "classification",
         "report_writer",
+        "historical_comparison",
         "report_reviser",
         "gap_planner",
         "collector",
