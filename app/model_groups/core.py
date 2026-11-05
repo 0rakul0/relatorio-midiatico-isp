@@ -10,7 +10,7 @@ class Project(Base):
     __tablename__ = "projects"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    # Dono (auth.uid do Supabase). NULL = legado, visível só para admin.
+    # Dono (id local de app_users). NULL = legado, visivel so para admin.
     owner_id: Mapped[str | None] = mapped_column(
         ForeignKey("app_users.id", ondelete="SET NULL"), nullable=True, index=True
     )
