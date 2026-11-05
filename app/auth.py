@@ -197,7 +197,7 @@ _SIGNUP_RETRY_DELAYS = (0.25, 0.75)
 
 
 def _is_sqlite_busy(exc: OperationalError) -> bool:
-    """Identifica apenas SQLITΕ_BUSY/SQLITE_LOCKED, inclusive codigos estendidos."""
+    """Identifica apenas SQLITE_BUSY/SQLITE_LOCKED, inclusive codigos estendidos."""
     original = exc.orig
     if not isinstance(original, sqlite3.OperationalError):
         return False
