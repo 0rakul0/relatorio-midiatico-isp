@@ -1,10 +1,38 @@
+import os
+from pathlib import Path
+
 from sqlalchemy import create_engine, event
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import get_settings
 
 
 _database_url = get_settings().database_url
+
+
+def local_sqlite_path() -> Path | None:
+    """Retorna caminho SQLite real ou None para bancos remotos/em memoria."""
+    url = make_url(_database_url)
+    if not url.get_backend_name().startswith("sqlite"):
+        return None
+    database = url.database
+    if not database or database == ":memory:" or database.startswith("file:"):
+        return None
+    return Path(database).expanduser().resolve()
+
+
+def prepare_local_database_directory() -> None:
+    """Garante que o SQLite tenha pasta antes da primeira conexao."""
+    path = local_sqlite_path()
+    if path is None:
+        return
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if os.name == "posix" and path.parent.name == "data":
+        path.parent.chmod(0o700)
+
+
+prepare_local_database_directory()
 
 
 def _engine_kwargs() -> dict:
