@@ -29,11 +29,16 @@ class AgentSearchResponse(StrictLLMOutput):
     status: Literal["OK", "NO_RESULTS", "ERROR"]
     results: list[AgentSearchHit] = Field(default_factory=list, max_length=10)
 
+# Limite de cada INVOCACAO da ferramenta, nao da quantidade total de
+# consultas planejadas. O collector divide o plano em lotes desse tamanho.
+BULK_SEARCH_MAX_QUERIES = 50
+
+
 class AgentBulkSearchArgs(BaseModel):
     queries: list[str] = Field(
         min_length=1,
-        max_length=50,
-        description="Already-approved queries to execute in bulk without rewriting them",
+        max_length=BULK_SEARCH_MAX_QUERIES,
+        description="Already-approved queries for one batch; the collector handles larger plans",
     )
 
 class AgentBulkQueryResult(StrictLLMOutput):
@@ -46,7 +51,7 @@ class AgentBulkQueryResult(StrictLLMOutput):
     hits: list[AgentSearchHit] = Field(default_factory=list, max_length=10)
 
 class AgentBulkSearchResponse(StrictLLMOutput):
-    results: list[AgentBulkQueryResult] = Field(default_factory=list, max_length=50)
+    results: list[AgentBulkQueryResult] = Field(default_factory=list, max_length=BULK_SEARCH_MAX_QUERIES)
     cancelled: bool = False
 
 class CollectorExecutionResponse(StrictLLMOutput):
