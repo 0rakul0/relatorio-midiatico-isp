@@ -66,3 +66,24 @@ def test_openai_only_disables_ollama_even_if_old_fallback_vars_exist(monkeypatch
     import pytest
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         llm_module.create_chat_model(max_output_tokens=200)
+
+
+def test_remote_database_url_is_refused_without_attempting_connection():
+    env = dict(os.environ)
+    env["DATABASE_URL"] = "postgresql+psycopg://127.0.0.1:6543/repercussao"
+    result = subprocess.run(
+        [sys.executable, "-c", "import app.database"],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=15,
+    )
+    assert result.returncode != 0
+    assert "SQLite local" in (result.stderr + result.stdout)
+    assert "ConnectionTimeout" not in (result.stderr + result.stdout)
+
+
+def test_settings_load_only_dotenv():
+    from app.config import Settings
+    assert Settings.model_config.get("env_file") == ".env"
