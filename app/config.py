@@ -17,12 +17,6 @@ class Settings(BaseSettings):
     # Apenas desenvolvimento offline (proibido em APP_ENV=production).
     local_auth_bypass: bool = False
 
-    # Compatibilidade com configuracoes antigas. O servidor agora usa SQLite;
-    # os parametros de pool nao sao utilizados nesse backend.
-    db_pool_size: int = Field(default=5, ge=1, le=50)
-    db_max_overflow: int = Field(default=10, ge=0, le=100)
-    db_pool_timeout: int = Field(default=30, ge=1, le=300)
-
     # OpenAI is used only as the LLM. External search is DuckDuckGo only.
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
