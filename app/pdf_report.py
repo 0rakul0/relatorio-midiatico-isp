@@ -18,6 +18,7 @@ from app.reports.pdf.operations import add_operations_section
 from app.reports.pdf.facts import add_fact_section
 from app.reports.pdf.academic import add_academic_section
 from app.reports.pdf.annexes import add_audit_annexes
+from app.reports.pdf.history import add_historical_comparison_section
 from app.reports.pdf.layout import (
     LeftAccentParagraph,
     create_document,
@@ -553,6 +554,19 @@ def build_pdf(data: dict) -> bytes:
                     small,
                 )
             )
+
+    # Mantém a comparação editorial separada da evidência factual atual.
+    # Sem histórico aprovado não acrescenta páginas nem títulos vazios.
+    historical = data.get("historical_analysis") or {}
+    if historical.get("status") == "AVAILABLE" and historical.get("prior_reports"):
+        add_part("EVOLUÇÃO DAS LEITURAS MIDIÁTICAS")
+        add_historical_comparison_section(
+            story,
+            historical,
+            heading=heading,
+            body=body,
+            small=small,
+        )
 
     if fact_layer_enabled and facts:
         add_part("VERIFICAÇÃO FACTUAL")
