@@ -7,7 +7,7 @@ from app.database import Base
 
 
 class AppUser(Base):
-    """Identidade local espelhada do Supabase Auth (id = auth.uid)."""
+    """Usuario local, com senha protegida por hash e identidade persistente."""
 
     __tablename__ = "app_users"
 
@@ -15,6 +15,7 @@ class AppUser(Base):
     email: Mapped[str] = mapped_column(String(320), default="")
     plan: Mapped[str] = mapped_column(String(30), default="FREE")
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
