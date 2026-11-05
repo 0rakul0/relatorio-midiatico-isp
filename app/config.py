@@ -71,6 +71,12 @@ class Settings(BaseSettings):
     # Optional agent-tool rounds. Collector normally uses one bulk call per medium.
     max_agent_tool_rounds: int = Field(default=3, ge=1, le=10)
 
+    # Multiplos usuarios podem pesquisar em paralelo; cada projeto possui
+    # no maximo uma execucao ativa. Demandas adicionais entram em fila.
+    # Com SQLite/WAL, manter concorrencia moderada limita disputa de escrita.
+    max_concurrent_reports: int = Field(default=3, ge=1, le=12)
+    max_queued_reports: int = Field(default=12, ge=0, le=200)
+
     # As consultas externas são I/O-bound e podem ser executadas em paralelo.
     # A persistência/auditoria continua sequencial na thread principal para não
     # compartilhar a mesma Session do SQLAlchemy entre threads.
