@@ -69,7 +69,14 @@ def _writer_grounding(db: Session, project: Project) -> dict:
     """Dados de fundamentação compartilhados por redação e revisão."""
     data = metrics(db, project.id)
     corpus = corpus_for_project(db, project.id)
-    history = previous_analyses(db, project, corpus)
+    settings = get_settings()
+    history = (
+        previous_analyses(
+            db, project, corpus, limit=settings.report_history_max_versions
+        )
+        if settings.report_history_enabled
+        else {"status": "DISABLED", "prior_reports": []}
+    )
     official_facts = db.scalars(select(OfficialFact).where(OfficialFact.project_id == project.id)).all()
     execution_profile, flags = execution_flags(project)
     fact_events = fact_events_for_main_report(db, project.id) if flags["enable_fact_layer"] else []
@@ -206,7 +213,7 @@ def _agent_payload(db: Session, project: Project, grounding: dict) -> dict:
 def _historical_reading(result: dict, grounding: dict) -> dict:
     """Leitura adicional; nunca transforma relatos anteriores em fatos novos."""
     history = grounding.get("historical_analysis") or {}
-    if history.get("status") != "AVAILABLE":
+    if history.get("status") != "AVAILABLE" or not get_settings().report_history_llm_enabled:
         return {}
     payload = {
         "current_reading": {
