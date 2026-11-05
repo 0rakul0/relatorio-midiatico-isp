@@ -25,6 +25,7 @@ from app.services.execution_profile import (
     sanitize_execution_plan,
 )
 from app.services.project_profile import project_payload
+from app.services.report_memory import previous_analyses
 from app.search.inventory import (
     PT_MONTHS as _PT_MONTHS,
     annual_event_inventory_queries,
@@ -106,8 +107,29 @@ def plan_report_with_llm(db: Session, project: Project) -> list[SearchQuery]:
         select(OfficialFact).where(OfficialFact.project_id == project.id)
     ).all()
 
+    history = previous_analyses(db, project, [])
+    historical_guidance = None
+    if history.get("status") == "AVAILABLE":
+        earlier = history["prior_reports"][0]
+        reading = earlier.get("reading") or {}
+        historical_guidance = {
+            "report_reference": {
+                "project_id": earlier.get("project_id"),
+                "version_no": earlier.get("version_no"),
+                "created_at": earlier.get("created_at"),
+            },
+            "previous_dominant_framing": reading.get("dominant_framing"),
+            "previous_methodological_limitations": reading.get("methodological_note"),
+            "previous_risk_assessment": reading.get("risk_assessment") or [],
+            "purpose": (
+                "Usar somente para identificar lacunas a verificar na coleta atual. "
+                "Conclusoes antigas nao sao fontes factuais nem substituem busca atual."
+            ),
+        }
+
     payload = {
         "project": project_payload(project),
+        "historical_planning_guidance": historical_guidance,
         "topic_profile": project.topic_profile,
         "requested_execution_profile": project.execution_profile or "AUTO",
         "perfil": execution_profile_guidance(project),
