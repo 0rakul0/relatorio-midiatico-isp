@@ -177,7 +177,7 @@ def checkout(
 
 
 @router.post("/webhook")
-def webhook(payload: WebhookIn, db: Session = Depends(get_db)):
+def webhook(payload: WebhookIn, db: Session = Depends(get_db), admin: AuthUser = Depends(require_admin)):
     # MOCK: o webhook real valida assinatura MP e resolve o usuário pelo
     # preapproval_id. Aqui aceitamos user_email/user_id direto (só dev).
     logger.warning("billing MOCK: webhook %s -> %s", payload.plan, payload.user_email or payload.user_id)
