@@ -221,7 +221,9 @@ def _ensure_document_embeddings(
             document.embedding = vector
             document.embedding_model = model_name
             document.embedded_at = now
-        db.flush()
+        # Confirmar vetores antes de criar embedding da consulta (HTTP).
+        # SQLite admite um unico escritor; flush aberto bloquearia usuarios.
+        db.commit()
         return model_name
     return desired
 
