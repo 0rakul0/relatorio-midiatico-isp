@@ -18,7 +18,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ValidationError
 
 from app.config import get_settings
-from app.llm import create_chat_model, record_llm_usage, usage_counts
+from app.llm import create_chat_model, record_llm_usage, tool_decision_kwargs, usage_counts
 from app.prompts.report_agent import BASE_PROMPT, TASK_PROMPTS
 
 ResponseModelT = TypeVar("ResponseModelT", bound=BaseModel)
@@ -90,9 +90,14 @@ class ReportAgent:
         ]
 
         if tool_list:
-            bound_llm = llm.bind_tools(tool_list)
-            tool_map = {tool.name: tool for tool in tool_list}
+            # GPT-6 Luna/Sol em /v1/chat/completions exigem o valor explicito
+            # reasoning_effort="none" para function tools. Nao alterar o llm
+            # original: o esforco configurado continua na finalizacao JSON.
             settings = get_settings()
+            bound_llm = llm.bind_tools(
+                tool_list, **tool_decision_kwargs(settings.openai_model)
+            )
+            tool_map = {tool.name: tool for tool in tool_list}
             rounds = max(
                 0,
                 int(
