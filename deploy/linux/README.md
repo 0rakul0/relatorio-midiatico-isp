@@ -104,6 +104,40 @@ A senha sera solicitada interativamente (minimo 12 caracteres), nao
 fica no historico do shell e e armazenada apenas como hash. O mesmo
 comando pode redefinir a senha, preservando o ID e os projetos do usuario.
 
+### 3.1 Diagnostico do login
+
+Se o navegador exibir `Autenticacao do servidor nao configurada`, o
+servidor nao recebeu uma `LOCAL_SESSION_SECRET` valida. **Isso nao indica
+senha incorreta.** A chave serve para assinar as sessoes e nao e a senha
+da conta no SQLite.
+
+```bash
+cd ~/relatorio-midiatico-isp
+openssl rand -hex 32
+nano .env
+```
+
+Copie os 64 caracteres gerados para `LOCAL_SESSION_SECRET` no `.env`.
+Nao compartilhe a chave em tickets, prints ou chats; nao sobrescreva
+outras variaveis. Mantenha `APP_ENV=production` e
+`LOCAL_AUTH_BYPASS=false`. Se a chave antiga ja estava correta, preserve-a:
+alterar a chave invalida sessoes anteriores.
+
+```bash
+uv run --no-sync python -m app.check_auth --email seu-email@exemplo.br
+sudo systemctl restart relatorio-midiatico
+sudo systemctl status relatorio-midiatico
+```
+
+O diagnostico verifica a configuracao, a existencia da conta e o hash
+da senha **sem revelar chaves, senhas ou tokens**. Se o usuario nao
+existir no SQLite configurado, crie-o com `app.local_users create`.
+Se o usuario existir mas a senha estiver incorreta, o mesmo comando
+redefine a senha, preservando a conta e os projetos vinculados.
+
+A inicializacao agora falha explicitamente se o secret nao estiver
+configurado, em vez de disponibilizar a tela com o login quebrado.
+
 ## 4. Testar no terminal
 
 ```bash
