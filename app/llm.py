@@ -54,6 +54,12 @@ def _is_reasoning_model(model: str) -> bool:
     return name.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
+def _requires_default_temperature(model: str) -> bool:
+    """Modelos que rejeitam qualquer temperature diferente do padrão da API."""
+    name = (model or "").strip().lower()
+    return name.startswith("gpt-6-luna")
+
+
 def create_chat_model(*, max_output_tokens: int = 50000):
     settings = get_settings()
 
@@ -79,9 +85,10 @@ def create_chat_model(*, max_output_tokens: int = 50000):
     base_kwargs: dict = {
         "api_key": settings.openai_api_key,
         "model": settings.openai_model,
-        "temperature": 0,
         "max_completion_tokens": max_output_tokens,
     }
+    if not _requires_default_temperature(settings.openai_model):
+        base_kwargs["temperature"] = 0
     if settings.openai_base_url:
         base_kwargs["base_url"] = settings.openai_base_url
 
