@@ -1,4 +1,4 @@
-// Autenticacao local: login + autocadastro no SQLite, sem Supabase.
+// Autenticacao local: login e autocadastro no SQLite.
 const $ = selector => document.querySelector(selector);
 const loginGo = $('#login-go');
 const signupGo = $('#signup-go');
