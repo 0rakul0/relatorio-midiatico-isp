@@ -26,21 +26,32 @@ logger = logging.getLogger("app.main")
 
 
 
+def validate_startup_configuration(settings) -> None:
+    """Falhar antes de servir login se a assinatura de sessoes nao estiver pronta."""
+    if settings.app_env.casefold() == "production" and settings.local_auth_bypass:
+        raise RuntimeError("LOCAL_AUTH_BYPASS nao pode ser usado em producao")
+    # A mesma regra vale em desenvolvimento quando o bypass esta desligado:
+    # nao deixar a API aceitar requisicoes que responderiam 503 ao login.
+    if not settings.local_auth_bypass and len(
+        (settings.local_session_secret or "").strip().encode("utf-8")
+    ) < 32:
+        raise RuntimeError(
+            "Autenticacao local indisponivel: configure LOCAL_SESSION_SECRET "
+            "com pelo menos 32 caracteres aleatorios no .env. "
+            "Gere uma chave persistente com: openssl rand -hex 32"
+        )
+    if settings.openai_only and settings.app_env.casefold() == "production":
+        if not (settings.openai_api_key or "").strip():
+            raise RuntimeError("OPENAI_ONLY=true: configure OPENAI_API_KEY no .env")
+        if (settings.openai_base_url or "").strip():
+            raise RuntimeError("OPENAI_ONLY=true: remova OPENAI_BASE_URL para usar a API oficial")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    ensure_schema()
-
     settings = get_settings()
-    if settings.app_env.casefold() == 'production':
-        if settings.local_auth_bypass:
-            raise RuntimeError('LOCAL_AUTH_BYPASS nao pode ser usado em producao')
-        if len((settings.local_session_secret or '').encode('utf-8')) < 32:
-            raise RuntimeError('Configure LOCAL_SESSION_SECRET (openssl rand -hex 32) no .env')
-        if settings.openai_only:
-            if not (settings.openai_api_key or '').strip():
-                raise RuntimeError('OPENAI_ONLY=true: configure OPENAI_API_KEY no .env')
-            if (settings.openai_base_url or '').strip():
-                raise RuntimeError('OPENAI_ONLY=true: remova OPENAI_BASE_URL para usar a API oficial')
+    validate_startup_configuration(settings)
+    ensure_schema()
     if settings.corpus_metadata_repair_on_startup:
         try:
             with SessionLocal() as db:
