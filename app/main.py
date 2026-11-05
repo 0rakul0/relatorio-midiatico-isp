@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 import logging
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.chat import router as chat_router
@@ -18,6 +18,8 @@ from app.auth import router as auth_router, get_current_user
 from app.billing import router as billing_router
 from app.config import get_settings
 from app.database import SessionLocal
+from app.orchestration.scheduler import RunQueueFull
+from app.orchestration.state import recover_orphaned_runs
 from app.schema_upgrade import ensure_schema
 from app.services.corpus_metadata import repair_corpus_metadata
 
@@ -52,6 +54,10 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     validate_startup_configuration(settings)
     ensure_schema()
+    if settings.app_env.casefold() == 'production':
+        recovered = recover_orphaned_runs()
+        if recovered:
+            logger.warning('Recuperadas %s execucoes interrompidas de processo anterior', recovered)
     if settings.corpus_metadata_repair_on_startup:
         try:
             with SessionLocal() as db:
@@ -69,6 +75,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ISP Repercussão Midiática", version="0.3.4", lifespan=lifespan)
+
+
+@app.exception_handler(RunQueueFull)
+async def run_queue_full_handler(request, exc: RunQueueFull):
+    return JSONResponse(
+        status_code=503,
+        content={"detail": str(exc)},
+        headers={"Retry-After": "10"},
+    )
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(auth_router)
 app.include_router(billing_router)
@@ -102,6 +117,11 @@ def health():
             "max_youtube_results_per_task": settings.max_youtube_results_per_task,
             "web_search_provider": "duckduckgo",
             "youtube_search_provider": "duckduckgo_videos",
+        },
+        "parallel_reports": {
+            "max_active": settings.max_concurrent_reports,
+            "max_waiting": settings.max_queued_reports,
+            "sqlite_mode": "WAL",
         },
         "agent": {
             "name": "ReportAgent",
