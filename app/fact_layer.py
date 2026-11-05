@@ -421,6 +421,10 @@ def extract_project_facts(
             continue
 
         processed += 1
+        # A fonte anterior pode ter gerado FactEvent/FactAssertion via flush.
+        # Encerrar a escrita ANTES da proxima chamada LLM evita monopolizar
+        # o SQLite por dezenas de extracoes em sequencia.
+        db.commit()
         try:
             extracted_events = extract_fact_events_from_item(project, item)
         except RuntimeError as exc:
