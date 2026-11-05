@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import secrets
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -23,7 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -192,6 +193,22 @@ def _normalized_email(email: str) -> str:
     return value
 
 
+_SIGNUP_RETRY_DELAYS = (0.25, 0.75)
+
+
+def _is_sqlite_busy(exc: OperationalError) -> bool:
+    """Identifica apenas SQLITΕ_BUSY/SQLITE_LOCKED, inclusive codigos estendidos."""
+    original = exc.orig
+    if not isinstance(original, sqlite3.OperationalError):
+        return False
+    code = getattr(original, "sqlite_errorcode", None)
+    if isinstance(code, int):
+        return (code & 0xFF) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+    # Versoes antigas do sqlite3 nao expunham sqlite_errorcode.
+    message = str(original).casefold()
+    return "database is locked" in message or "database table is locked" in message
+
+
 @router.post("/signup", status_code=201)
 def signup(payload: SignupInput, request: Request, db: Session = Depends(get_db)):
     settings = get_settings()
@@ -207,25 +224,51 @@ def signup(payload: SignupInput, request: Request, db: Session = Depends(get_db)
 
     _check_signup_rate_limit(_request_key(request))
     email = _normalized_email(payload.email)
-    existing = db.scalar(
-        select(AppUser.id).where(func.lower(func.trim(AppUser.email)) == email)
-    )
-    if existing is not None:
-        raise HTTPException(409, "Este e-mail ja possui cadastro")
+    # Hash antes da primeira leitura no SQLite: nao deixar uma transacao
+    # aberta durante o PBKDF2, que pode levar centenas de milissegundos.
+    encoded_password = hash_password(payload.password)
     user = AppUser(
         id=uuid4().hex,
         email=email,
-        password_hash=hash_password(payload.password),
+        password_hash=encoded_password,
         is_admin=False,
         plan="FREE",
     )
-    try:
-        db.add(user)
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(409, "Este e-mail ja possui cadastro") from exc
-
+    for attempt in range(len(_SIGNUP_RETRY_DELAYS) + 1):
+        try:
+            existing = db.scalar(
+                select(AppUser.id).where(func.lower(func.trim(AppUser.email)) == email)
+            )
+            if existing is not None:
+                raise HTTPException(409, "Este e-mail ja possui cadastro")
+            db.add(user)
+            db.commit()
+            break
+        except IntegrityError as exc:
+            db.rollback()
+            # A protecao UNIQUE tambem impede emails duplicados quando
+            # duas pessoas se registram ao mesmo tempo.
+            raise HTTPException(409, "Este e-mail ja possui cadastro") from exc
+        except OperationalError as exc:
+            db.rollback()
+            if not _is_sqlite_busy(exc):
+                raise
+            # SQLAlchemy nao permite reutilizar a Session sem rollback.
+            # O ORM mantem o mesmo identificador para novas tentativas.
+            if attempt == len(_SIGNUP_RETRY_DELAYS):
+                _logger.warning(
+                    "Cadastro indisponivel por concorrencia de escrita SQLite "
+                    "apos %s tentativa(s); solicite nova tentativa mais tarde",
+                    attempt + 1,
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="O banco esta ocupado processando outra demanda. "
+                           "Tente criar a conta novamente em instantes.",
+                    headers={"Retry-After": "3"},
+                ) from exc
+            time.sleep(_SIGNUP_RETRY_DELAYS[attempt])
+    # A resposta so e emitida depois do commit confirmado.
     return {
         "access_token": _sign_token(user),
         "token_type": "bearer",
