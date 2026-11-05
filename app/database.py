@@ -10,6 +10,16 @@ from app.config import get_settings
 
 _database_url = get_settings().database_url
 
+# Somente SQLite. URLs remotas antigas falham ANTES de qualquer conexao
+# e sem imprimir credenciais.
+if make_url(_database_url).get_backend_name() != "sqlite":
+    raise RuntimeError(
+        "Banco externo nao permitido: este projeto utiliza apenas SQLite local. "
+        "Em .env configure DATABASE_URL=sqlite+pysqlite:///./data/repercussao.db. "
+        "Remova DATABASE_URL exportado no shell/systemd. "
+        "O arquivo .env.local nao e utilizado."
+    )
+
 
 def local_sqlite_path() -> Path | None:
     """Retorna caminho SQLite real ou None para bancos remotos/em memoria."""
@@ -36,28 +46,14 @@ prepare_local_database_directory()
 
 
 def _engine_kwargs() -> dict:
-    if _database_url.startswith("sqlite"):
-        # SQLite aceita uma única escrita por vez. O timeout do driver se soma
-        # ao PRAGMA busy_timeout abaixo e evita falhas imediatas sob concorrência.
-        # check_same_thread=False é necessário porque o pipeline usa workers de
-        # I/O e a telemetria de custo possui um gravador assíncrono próprio.
-        return {
-            "connect_args": {
-                "timeout": 30,
-                "check_same_thread": False,
-            }
-        }
-    settings = get_settings()
+    # O pipeline paralelo faz leituras em varias threads; o SQLite serializa
+    # escritas com WAL e busy_timeout.
     return {
-        "pool_size": settings.db_pool_size,
-        "max_overflow": settings.db_max_overflow,
-        "pool_timeout": settings.db_pool_timeout,
-        # Pooler (Supavisor/pgbouncer) multiplexa sessoes: prepared
-        # statements server-side colidem ("_pg3_0 already exists").
-        # Desliga o prepare do psycopg; custo irrelevante p/ a carga.
-        "connect_args": {"prepare_threshold": None},
+        "connect_args": {
+            "timeout": 30,
+            "check_same_thread": False,
+        }
     }
-
 
 engine = create_engine(_database_url, pool_pre_ping=True, **_engine_kwargs())
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
