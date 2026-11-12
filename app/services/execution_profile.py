@@ -19,8 +19,8 @@ EXECUTION_PROFILE_DEFAULTS = {
         "enable_fact_resolution": False,
         "enable_nominal_followup": False,
         "enable_second_fact_pass": False,
-        "enable_classification": False,
-        "enable_report_writer": False,
+        "enable_classification": True,
+        "enable_report_writer": True,
         "enable_qa": True,
     },
     "MIDIATICO_SIMPLES": {
@@ -247,7 +247,7 @@ def sanitize_execution_plan(project: Project, raw: dict[str, Any] | None) -> dic
     if selected == "MANCHETES_CAPA":
         for name in processes:
             processes[name] = _decision(
-                name in {"web_collection", "media_validation", "qa"},
+                name in {"web_collection", "media_validation", "classification", "report_writer", "qa"},
                 "Perfil estrito de manchetes de capa: somente coleta, validacao e QA."
             )
 
