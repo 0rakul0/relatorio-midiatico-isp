@@ -1,0 +1,30 @@
+name: Institutional QA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  institutional-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . pytest
+      - name: Compile institutional modules
+        run: |
+          python -m compileall -q app/api/institutional_presence.py app/services/search_planning.py app/pdf_report.py
+      - name: Run institutional regression tests
+        run: |
+          python -m pytest -q tests/test_institutional_presence.py
+      - name: Run full test suite
+        run: |
+          python -m pytest -q
