@@ -1257,18 +1257,25 @@ async function loadInstitutionalCandidates(projectId){
   }catch(err){panel.classList.add('hidden');console.warn('Institutional candidate audit unavailable:',err)}
 }
 
+$('#execution-profile').addEventListener('change',()=>{
+  const cover=$('#execution-profile').value==='MANCHETES_CAPA';
+  if(cover){$('#institutional-presence').checked=true;$('#institutional-options').classList.add('hidden');}
+  else $('#institutional-options').classList.toggle('hidden',!$('#institutional-presence').checked);
+});
+
 $('#institutional-presence').addEventListener('change',()=>$('#institutional-options').classList.toggle('hidden',!$('#institutional-presence').checked));
 
 $('#report-form').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#submit'),progress=$('#progress');btn.disabled=true;progress.classList.remove('hidden');$('#run-tracker').classList.add('hidden');$('#research-audit').classList.add('hidden');researchAuditKey=null;executionPreviewLastLoadedAt=0;executionPreviewLoading=false;try{
   progress.textContent='Preparando projeto…';
   const payload={topic:$('#topic').value.trim(),execution_profile:$('#execution-profile').value||'AUTO'};
-  payload.institutional_presence=$('#institutional-presence').checked;
+  const coverOnly=payload.execution_profile==='MANCHETES_CAPA';
+  payload.institutional_presence=coverOnly||$('#institutional-presence').checked;
   if(payload.institutional_presence){
     payload.institutional_products=$('#institutional-products').value.split(',').map(x=>x.trim()).filter(Boolean);
-    payload.institutional_indirect=$('#institutional-indirect').checked;
+    payload.institutional_indirect=!coverOnly&&$('#institutional-indirect').checked;
     payload.institutional_front_pages=$('#institutional-front').checked;
-    payload.institutional_inside_pages=$('#institutional-inside').checked;
-    payload.institutional_digital=$('#institutional-digital').checked;
+    payload.institutional_inside_pages=!coverOnly&&$('#institutional-inside').checked;
+    payload.institutional_digital=!coverOnly&&$('#institutional-digital').checked;
   }
   if(selectedGeography().length)payload.geographic_scopes=selectedGeography();
   for(const [id,key] of [['collection-start','collection_start'],['collection-end','collection_end'],['event-start','event_start'],['event-end','event_end']]){if($(`#${id}`).value)payload[key]=$(`#${id}`).value}
