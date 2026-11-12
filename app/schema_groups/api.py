@@ -23,6 +23,7 @@ class ProjectCreate(BaseModel):
         "MIDIATICO_COM_FATOS",
         "MIDIATICO_CIENTIFICO",
         "COMPLETO_NOMINAL",
+        "MANCHETES_CAPA",
     ] = "AUTO"
     institutional_presence: bool = False
     institutional_products: list[str] = Field(default_factory=list, max_length=30)
