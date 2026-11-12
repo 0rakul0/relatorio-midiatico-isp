@@ -222,6 +222,13 @@ def sanitize_execution_plan(project: Project, raw: dict[str, Any] | None) -> dic
             False, "Pesquisa institucional restrita a jornais e portais: redes sociais desativadas."
         )
 
+    if (project.execution_options or {}).get("institutional_presence"):
+        for name in ("academic_research", "fact_extraction", "fact_resolution",
+                     "nominal_followup", "second_fact_pass"):
+            processes[name] = _decision(
+                False, "Modo presenca institucional: somente imprensa e verificacao de fontes."
+            )
+
     # Logical dependencies.
     if not processes["fact_extraction"]["enabled"]:
         processes["fact_resolution"] = _decision(False, "Sem extracao factual, nao ha fatos para consolidar.")
@@ -255,6 +262,15 @@ def sanitize_execution_plan(project: Project, raw: dict[str, Any] | None) -> dic
             processes[name] = _decision(False, reason)
     if not processes["nominal_followup"]["enabled"]:
         processes["second_fact_pass"] = _decision(False, "Sem busca nominal, nao ha segunda passagem factual.")
+
+    # Apply the scope once more after explicit overrides and dependencies.
+    if (project.execution_options or {}).get("institutional_presence"):
+        for name in ("youtube_collection", "social_repercussion", "academic_research",
+                     "fact_extraction", "fact_resolution", "nominal_followup",
+                     "second_fact_pass"):
+            processes[name] = _decision(
+                False, "Escopo institucional exclusivo de jornais e portais."
+            )
 
     fact_fields = []
     if isinstance(raw, dict):
