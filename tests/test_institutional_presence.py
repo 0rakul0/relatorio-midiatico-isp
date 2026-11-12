@@ -99,3 +99,14 @@ def test_empty_products_produce_default_press_queries():
     queries = institutional_search_queries(project)
     assert any("Dossiê Mulher" in query for query in queries)
     assert all("youtube" not in query.lower() for query in queries)
+
+def test_cover_queries_are_restricted_to_newspaper_archives():
+    from app.api.institutional_presence import institutional_cover_queries
+    project = SimpleNamespace(
+        collection_start="2025-01-01", collection_end="2025-12-31"
+    )
+    queries = institutional_cover_queries(project)
+    assert len(queries) == 6
+    assert all(("capa" in q or "primeira página" in q) for q in queries)
+    assert all("2025" in q for q in queries)
+    assert not any("tiktok" in q.lower() or "youtube" in q.lower() for q in queries)
