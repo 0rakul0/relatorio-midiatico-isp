@@ -231,6 +231,25 @@ def _persist_strategy_queries(
             created.append(row)
             media_added += 1
 
+    # Independent institutional discovery: preserve the general report pipeline,
+    # but search specifically for institutional appearances in press sources.
+    if (project.execution_options or {}).get("institutional_presence"):
+        from app.api.institutional_presence import institutional_search_queries
+        for query in institutional_search_queries(project):
+            if media_added >= settings.max_media_queries:
+                break
+            row = _add_query(
+                db, project, existing,
+                query=query,
+                kind="institutional_press",
+                purpose="MEDIA_REPERCUSSION",
+                rationale="Presenca do ISP na imprensa; verificar pagina e fonte.",
+                priority=1,
+            )
+            if row:
+                created.append(row)
+                media_added += 1
+
     # Redes sociais nao recebem consultas de descoberta proprias. O DuckDuckGo
     # executa o plano midiatico principal; URLs sociais encontradas nessa mesma
     # descoberta sao classificadas e enriquecidas posteriormente pelo Apify.
