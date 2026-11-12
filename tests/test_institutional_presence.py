@@ -129,3 +129,26 @@ def test_front_page_preset_blocks_unrelated_modules():
         assert processes[name]["enabled"] is False
     assert processes["report_writer"]["enabled"] is True
     assert processes["qa"]["enabled"] is True
+
+def test_cover_pdf_excludes_social_and_public_opinion():
+    from app.pdf_report import build_pdf
+    data = {
+        "report": {"title": "Teste"},
+        "project": {
+            "execution_profile": "MANCHETES_CAPA",
+            "collection_start": "2025-01-01",
+            "collection_end": "2025-12-31",
+        },
+        "metrics": {},
+        "social_repercussion": {"post_inventory": [{"platform": "tiktok"}]},
+        "public_opinion": {"surveys": [{"title": "Pesquisa"}]},
+        "institutional_findings": [],
+    }
+    pdf = build_pdf(data)
+    assert pdf.startswith(b"%PDF")
+    from io import BytesIO
+    from pypdf import PdfReader
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages)
+    assert "Nenhuma manchete de capa" in text
+    assert "TikTok" not in text
+    assert "Pesquisa de opinião" not in text
