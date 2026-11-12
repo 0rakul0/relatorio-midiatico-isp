@@ -73,6 +73,27 @@ DEFAULT_ISP_PRODUCTS = (
 )
 
 
+def institutional_cover_queries(project) -> list[str]:
+    """Search only for primary newspaper cover evidence, not general articles."""
+    from datetime import date
+    start = getattr(project, "collection_start", None)
+    end = getattr(project, "collection_end", None)
+    if not start or not end:
+        return []
+    start_year = int(str(start)[:4])
+    end_year = int(str(end)[:4])
+    if end_year < start_year or end_year - start_year > 20:
+        return []
+    queries = []
+    for year in range(start_year, end_year + 1):
+        for newspaper in ("O Globo", "Extra", "O Dia"):
+            queries.append(
+                f'"{newspaper}" "capa" "Instituto de Segurança Pública" {year}'
+            )
+            queries.append(f'"{newspaper}" "primeira página" "ISP" {year}')
+    return queries
+
+
 def institutional_search_queries(project) -> list[str]:
     """Focused newspaper searches; no video, social or opinion research."""
     options = project.execution_options or {}
