@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 import re
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, insert
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -156,7 +156,10 @@ def sync_media_item_to_corpus(
         )
     )
     if link is None:
-        db.add(ProjectCorpusLink(
+        # A second worker can create the same association between SELECT and
+        # INSERT. Let the database arbitrate the unique (project, document)
+        # pair, then reuse the winner. This also makes retries idempotent.
+        values = dict(
             project_id=item.project_id,
             document_id=document.id,
             media_item_id=item.id,
@@ -169,8 +172,31 @@ def sync_media_item_to_corpus(
             reranker_score=reranker_score,
             created_at=now,
             updated_at=now,
-        ))
-    else:
+        )
+        dialect = db.get_bind().dialect.name
+        if dialect == "sqlite":
+            from sqlalchemy.dialects.sqlite import insert as dialect_insert
+        elif dialect == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert as dialect_insert
+        else:
+            dialect_insert = None
+        if dialect_insert is not None:
+            stmt = dialect_insert(ProjectCorpusLink).values(**values)
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=["project_id", "document_id"]
+            )
+            db.execute(stmt)
+            link = db.scalar(
+                select(ProjectCorpusLink).where(
+                    ProjectCorpusLink.project_id == item.project_id,
+                    ProjectCorpusLink.document_id == document.id,
+                )
+            )
+        else:
+            # Preserve existing behavior on unsupported dialects.
+            link = ProjectCorpusLink(**values)
+            db.add(link)
+    if link is not None:
         link.media_item_id = item.id
         link.updated_at = now
         link.relation_status = item.status or link.relation_status
