@@ -295,9 +295,13 @@ def sanitize_execution_plan(project: Project, raw: dict[str, Any] | None) -> dic
             )
 
     if selected == "MANCHETES_CAPA":
+        # Final hard gate: no planner suggestion or API override may enable
+        # an unrelated specialist. Keep the report writer enabled so the
+        # dedicated cover report can be exported.
+        allowed = {"web_collection", "media_validation", "classification", "report_writer", "qa"}
         for name in processes:
             processes[name] = _decision(
-                name in {"web_collection", "media_validation", "qa"},
+                name in allowed,
                 "Bloqueio definitivo do perfil Manchetes de capa."
             )
 
