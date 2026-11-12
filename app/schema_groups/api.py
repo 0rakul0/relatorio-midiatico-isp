@@ -24,6 +24,12 @@ class ProjectCreate(BaseModel):
         "MIDIATICO_CIENTIFICO",
         "COMPLETO_NOMINAL",
     ] = "AUTO"
+    institutional_presence: bool = False
+    institutional_products: list[str] = Field(default_factory=list, max_length=30)
+    institutional_indirect: bool = True
+    institutional_front_pages: bool = True
+    institutional_inside_pages: bool = True
+    institutional_digital: bool = True
     enable_fact_layer: bool | None = None
     enable_nominal_followup: bool | None = None
     enable_academic_research: bool | None = None
