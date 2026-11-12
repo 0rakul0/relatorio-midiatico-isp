@@ -103,6 +103,75 @@ def institutional_plan(project_id: int, payload: InstitutionalRequest,
         raise HTTPException(422, "Selecione pelo menos um criterio.")
     return plan_for_project(project, payload.criteria, payload.products)
 
+def corpus_candidates(db: Session, project, *, limit: int = 500) -> dict:
+    """Inspect reusable project corpus without inventing archive/page evidence."""
+    import re
+    from sqlalchemy import select
+    from app.models import CorpusDocument, ProjectCorpusLink
+
+    options = project.execution_options or {}
+    products = [str(p).strip() for p in options.get("institutional_products", [])
+                if str(p).strip()]
+    institution = (project.institution or "").strip()
+    terms = list(dict.fromkeys([institution] + products))
+    if "instituto de segurança pública" in institution.casefold():
+        terms.append("ISP")
+    if not terms:
+        return {"total_scanned": 0, "candidates": [], "coverage": "NO_TERMS"}
+
+    stmt = (select(CorpusDocument)
+            .join(ProjectCorpusLink, ProjectCorpusLink.document_id == CorpusDocument.id)
+            .where(ProjectCorpusLink.project_id == project.id)
+            .order_by(CorpusDocument.published_at.desc())
+            .limit(min(limit, 2000)))
+    documents = db.scalars(stmt).all()
+    candidates = []
+    for doc in documents:
+        if project.has_custom_date_window:
+            if doc.published_at is None:
+                continue
+            if not (project.collection_start <= doc.published_at <= project.collection_end):
+                continue
+        content = " ".join(str(v or "") for v in
+                           (doc.title, doc.snippet, doc.content))
+        matched = [term for term in terms if re.search(
+            r"(?<!\\w)" + re.escape(term) + r"(?!\\w)", content, re.IGNORECASE)]
+        if not matched:
+            continue
+        candidates.append({
+            "document_id": doc.id,
+            "title": doc.title,
+            "url": doc.url,
+            "published_at": doc.published_at.isoformat() if doc.published_at else None,
+            "source": doc.source_name or doc.domain,
+            "matched_terms": matched,
+            "classification": "candidate_text_match",
+            "verification_status": "REVIEW_REQUIRED",
+            "editorial_location": "UNKNOWN",
+        })
+    return {
+        "total_scanned": len(documents),
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+        "coverage": "PROJECT_LINKED_CORPUS_ONLY",
+        "limitations": [
+            "No print archive completeness is asserted.",
+            "A textual match is not documentary proof of indirect use.",
+            "Front page and inside page require independent page evidence.",
+        ],
+    }
+
+
+@router.get("/projects/{project_id}/candidates")
+def project_candidates(project_id: int, limit: int = 500,
+                       db: Session = Depends(get_db),
+                       user: AuthUser = Depends(get_current_user)):
+    project = project_or_404(db, user, project_id)
+    if not (project.execution_options or {}).get("institutional_presence"):
+        raise HTTPException(409, "Investigacao institucional nao ativada neste projeto.")
+    return corpus_candidates(db, project, limit=limit)
+
+
 @router.post("/validate")
 def validate_findings(items: list[InstitutionalFinding]):
     counts = Counter(evidence_status(item) for item in items)
