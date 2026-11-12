@@ -140,7 +140,8 @@ def plan_report_with_llm(db: Session, project: Project) -> list[SearchQuery]:
         "Nao exigir o nome da instituicao em todas as materias; usar o corpus "
         "existente antes de buscas novas e registrar lacunas de acervos. "
         "A busca em capas e paginas internas depende da disponibilidade dos acervos. "
-        "Nao tratar coincidencia numerica como prova de uso de dados."
+        "Nao tratar coincidencia numerica como prova de uso de dados. "
+        "Nao pesquisar opiniao publica, repercussao social, comentarios ou YouTube."
         if institutional_options.get("institutional_presence") else ""
     )
     payload = {
