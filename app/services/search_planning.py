@@ -133,7 +133,26 @@ def plan_report_with_llm(db: Session, project: Project) -> list[SearchQuery]:
             ),
         }
 
+    institutional_options = project.execution_options or {}
+    institutional_guidance = (
+        "Pesquisa institucional complementar ativa: identificar mencoes explicitas, "
+        "produtos institucionais e usos indiretos SOMENTE com evidencia documental. "
+        "Nao exigir o nome da instituicao em todas as materias; usar o corpus "
+        "existente antes de buscas novas e registrar lacunas de acervos. "
+        "A busca em capas e paginas internas depende da disponibilidade dos acervos. "
+        "Nao tratar coincidencia numerica como prova de uso de dados."
+        if institutional_options.get("institutional_presence") else ""
+    )
     payload = {
+        "institutional_investigation": {
+            "enabled": bool(institutional_options.get("institutional_presence")),
+            "products": institutional_options.get("institutional_products") or [],
+            "verify_indirect": institutional_options.get("institutional_indirect", True),
+            "front_pages": institutional_options.get("institutional_front_pages", True),
+            "inside_pages": institutional_options.get("institutional_inside_pages", True),
+            "digital": institutional_options.get("institutional_digital", True),
+            "guidance": institutional_guidance,
+        },
         "project": project_payload(project),
         "historical_planning_guidance": historical_guidance,
         "topic_profile": project.topic_profile,
@@ -173,7 +192,7 @@ def plan_report_with_llm(db: Session, project: Project) -> list[SearchQuery]:
         result = get_report_agent().run(
             task="report_planner",
             payload=payload,
-            extra_instructions="INSTRUCOES DO PERFIL DE EXECUCAO (precedencia sobre decisoes opcionais do planejador):\n" + execution_profile_guidance(project),
+            extra_instructions="INSTRUCOES DO PERFIL DE EXECUCAO (precedencia sobre decisoes opcionais do planejador):\n" + execution_profile_guidance(project) + "\n" + institutional_guidance,
             schema_name="report_plan_v1",
             response_model=ReportPlanResponse,
             max_output_tokens=3800,
