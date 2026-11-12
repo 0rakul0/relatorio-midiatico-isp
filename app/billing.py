@@ -38,7 +38,7 @@ PLANS: dict[str, dict] = {
     "PRO": {
         "reports_per_month": 20,
         "llm_usd_per_month": 10.0,
-        "profiles": ["AUTO", "MIDIATICO_SIMPLES", "MIDIATICO_COM_FATOS", "COMPLETO_NOMINAL"],
+        "profiles": ["AUTO", "MIDIATICO_SIMPLES", "MIDIATICO_COM_FATOS", "COMPLETO_NOMINAL", "MANCHETES_CAPA"],
         "youtube": True,
         "fact_layer": True,
         "nominal_followup": True,
