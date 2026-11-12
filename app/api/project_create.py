@@ -108,12 +108,14 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db), user: 
         }.items()
         if value is not None
     }
-    execution_options["institutional_presence"] = payload.institutional_presence
+    cover_only = payload.execution_profile == "MANCHETES_CAPA"
+    execution_options["cover_only"] = cover_only
+    execution_options["institutional_presence"] = payload.institutional_presence or cover_only
     execution_options["institutional_products"] = payload.institutional_products
-    execution_options["institutional_indirect"] = payload.institutional_indirect
+    execution_options["institutional_indirect"] = False if cover_only else payload.institutional_indirect
     execution_options["institutional_front_pages"] = payload.institutional_front_pages
-    execution_options["institutional_inside_pages"] = payload.institutional_inside_pages
-    execution_options["institutional_digital"] = payload.institutional_digital
+    execution_options["institutional_inside_pages"] = False if cover_only else payload.institutional_inside_pages
+    execution_options["institutional_digital"] = False if cover_only else payload.institutional_digital
     execution_options["collection_window_source"] = collection_window_source
     execution_options["event_window_source"] = event_window_source
     execution_options["temporal_mode"] = (
