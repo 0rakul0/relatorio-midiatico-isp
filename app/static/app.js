@@ -1241,6 +1241,20 @@ async function pollRun(){
 
 async function loadHistory(){try{const rows=await api('/reports/history');const box=$('#history-list');if(!rows.length){box.innerHTML='<span class="note">Nenhum relatório salvo.</span>';return}box.innerHTML='';rows.forEach(row=>{const wrap=document.createElement('div');wrap.className='history-entry';const open=document.createElement('button');open.className='history-item';open.innerHTML=`<strong>${esc(row.topic)}</strong><span>${esc(row.generated_at||'')} · QA ${esc(row.qa_status||'PENDING')}</span>`;open.onclick=async()=>{const d=await api(`/reports/history/${row.id}`);currentProjectId=row.id;render(d.report)};const actions=document.createElement('div');actions.className='history-actions';const refine=document.createElement('button');refine.className='history-refine';refine.textContent=row.qa_status==='APPROVED'?'✓':'Refinar';refine.title=row.qa_status==='APPROVED'?'QA já aprovado':'Refinar a pesquisa a partir dos achados CRITICAL/HIGH do QA';refine.disabled=row.qa_status==='APPROVED';refine.onclick=async()=>{if(!confirm('Refinar este relatório usando os achados bloqueadores do QA? Novas buscas e chamadas de LLM podem gerar custo.'))return;try{currentProjectId=row.id;refine.disabled=true;let response;try{response=await api(`/reports/history/${row.id}/refine`,{method:'POST'})}catch(primaryError){if(primaryError.status!==404)throw primaryError;try{response=await api(`/projects/${row.id}/refine-qa-async`,{method:'POST'})}catch(legacyError){if(legacyError.status!==404)throw legacyError;let health={};try{health=await api(`/health?_=${Date.now()}`)}catch(_healthError){}throw new Error(`A API carregada não registrou as rotas de refinamento. Backend: ${health.version||'versão desconhecida'}. Arquivo esperado: app.main. Reinicie o processo que realmente ocupa a porta 8000.`)}}currentRunId=response.run.run_id;renderRun(response.run);$('#run-tracker').classList.remove('hidden');$('#progress').classList.remove('hidden');$('#progress').textContent='Refinando a pesquisa a partir dos achados do QA.';pollFailures=0;pollDelay=1000;schedulePoll(1000);await pollRun()}catch(e){alert(e.message);refine.disabled=false}};const del=document.createElement('button');del.className='danger history-delete';del.textContent='×';del.onclick=async()=>{if(!confirm('Excluir esta versão e seus dados associados?'))return;await api(`/reports/history/${row.id}`,{method:'DELETE'});loadHistory()};actions.append(refine,del);wrap.append(open,actions);box.appendChild(wrap)})}catch(e){$('#history-list').textContent=e.message}}
 
+async function loadInstitutionalCandidates(projectId){
+  const panel=$('#institutional-results');
+  if(!panel||!projectId)return;
+  try{
+    const data=await api(`/api/institutional/projects/${projectId}/candidates`);
+    panel.classList.remove('hidden');
+    $('#institutional-results-summary').textContent=
+      `${data.candidate_count} candidatos textuais em ${data.total_scanned} documentos consultados. Sem confirmação automática de uso indireto ou posição editorial.`;
+    $('#institutional-results-items').innerHTML=(data.candidates||[]).slice(0,30).map(x=>
+      `<p><strong>${esc(x.title||'Sem título')}</strong> — ${esc(x.source||'Fonte desconhecida')} (${esc(x.published_at||'sem data')})<br><small>Termos: ${esc((x.matched_terms||[]).join(', '))} · revisão necessária</small><br><a href="${esc(x.url||'#')}" target="_blank" rel="noopener noreferrer">Abrir fonte</a></p>`
+    ).join('')||'<p>Nenhuma correspondência textual encontrada no corpus associado.</p>';
+  }catch(err){panel.classList.add('hidden');console.warn('Institutional candidate audit unavailable:',err)}
+}
+
 $('#institutional-presence').addEventListener('change',()=>$('#institutional-options').classList.toggle('hidden',!$('#institutional-presence').checked));
 
 $('#report-form').addEventListener('submit',async e=>{e.preventDefault();const btn=$('#submit'),progress=$('#progress');btn.disabled=true;progress.classList.remove('hidden');$('#run-tracker').classList.add('hidden');$('#research-audit').classList.add('hidden');researchAuditKey=null;executionPreviewLastLoadedAt=0;executionPreviewLoading=false;try{
@@ -1257,6 +1271,8 @@ $('#report-form').addEventListener('submit',async e=>{e.preventDefault();const b
   if(selectedGeography().length)payload.geographic_scopes=selectedGeography();
   for(const [id,key] of [['collection-start','collection_start'],['collection-end','collection_end'],['event-start','event_start'],['event-end','event_end']]){if($(`#${id}`).value)payload[key]=$(`#${id}`).value}
   const created=await api('/projects',{method:'POST',body:JSON.stringify(payload)});currentProjectId=created.id;
+  if(payload.institutional_presence)loadInstitutionalCandidates(created.id);
+  else $('#institutional-results').classList.add('hidden');
   const started=await api(`/projects/${created.id}/run-async`,{method:'POST'});currentRunId=started.run.run_id;renderRun(started.run);progress.textContent='Relatório em processamento.';
   if(pollTimer)clearInterval(pollTimer);pollFailures=0;pollDelay=1000;schedulePoll(1000);await pollRun();
 }catch(err){progress.textContent=`Erro: ${err.message}`;btn.disabled=false;$('#stop-report').classList.add('hidden')}});
