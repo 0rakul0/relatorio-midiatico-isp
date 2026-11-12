@@ -152,3 +152,53 @@ def test_cover_pdf_excludes_social_and_public_opinion():
     assert "Nenhuma manchete de capa" in text
     assert "TikTok" not in text
     assert "Pesquisa de opinião" not in text
+
+def test_cover_pdf_shows_verified_monthly_indicators_and_source_link():
+    from io import BytesIO
+    from pypdf import PdfReader
+    from app.pdf_report import build_pdf
+    data = {
+        "report": {},
+        "project": {
+            "execution_profile": "MANCHETES_CAPA",
+            "collection_start": "2025-01-01",
+            "collection_end": "2025-12-31",
+        },
+        "institutional_findings": [
+            {
+                "publication": "Jornal Exemplo",
+                "publication_date": "2025-04-12",
+                "title": "Instituto de Segurança Pública citado na capa",
+                "location": "front_page",
+                "classification": "explicit",
+                "confirmed": True,
+                "evidence": [{
+                    "document_page": 1,
+                    "url": "https://example.org/capa-2025-04-12.pdf",
+                    "source_type": "newspaper_archive",
+                }],
+            },
+            {
+                "publication": "Jornal Exemplo",
+                "publication_date": "2025-04-13",
+                "title": "Notícia digital que não é capa",
+                "location": "digital",
+                "classification": "explicit",
+                "confirmed": True,
+                "evidence": [{
+                    "document_page": 1,
+                    "url": "https://example.org/digital",
+                }],
+            },
+        ],
+        "social_repercussion": {"post_inventory": [{"platform": "TikTok"}]},
+    }
+    pdf = build_pdf(data)
+    reader = PdfReader(BytesIO(pdf))
+    content = "\n".join(page.extract_text() or "" for page in reader.pages)
+    assert "Jornal Exemplo" in content
+    assert "2025-04-12" in content
+    assert "Notícia digital que não é capa" not in content
+    assert "TikTok" not in content
+    assert "Menções explícitas" in content
+    assert reader.pages[0].get("/Annots")
