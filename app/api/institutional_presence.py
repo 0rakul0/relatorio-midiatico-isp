@@ -56,7 +56,7 @@ class InstitutionalReportInput(BaseModel):
 def evidence_status(item: InstitutionalFinding) -> str:
     if item.classification not in {"explicit", "product", "indirect"}:
         return "review"
-    if item.classification == "indirect" and not item.evidence:
+    if not item.evidence:
         return "review"
     return "confirmed" if item.confirmed else "review"
 
