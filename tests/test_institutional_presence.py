@@ -70,3 +70,32 @@ def test_indirect_match_never_auto_confirms():
         excerpt, "https://example.org/official.pdf",
     )
     assert result["status"] == "EVIDENCE_MATCH_REVIEW_REQUIRED"
+
+def test_press_only_execution_plan():
+    from app.services.execution_profile import sanitize_execution_plan
+    project = SimpleNamespace(
+        execution_options={"institutional_presence": True,
+                           "enable_academic_research": True,
+                           "enable_fact_layer": True},
+        execution_profile="AUTO",
+        topic_profile={},
+        project_type="AUTO",
+    )
+    plan = sanitize_execution_plan(project, None)
+    processes = plan["processes"]
+    for name in ("youtube_collection", "social_repercussion",
+                 "academic_research", "fact_extraction",
+                 "fact_resolution", "nominal_followup"):
+        assert processes[name]["enabled"] is False
+
+
+def test_empty_products_produce_default_press_queries():
+    from app.api.institutional_presence import institutional_search_queries
+    project = SimpleNamespace(
+        institution="Instituto de Segurança Pública",
+        execution_options={"institutional_presence": True,
+                           "institutional_products": []},
+    )
+    queries = institutional_search_queries(project)
+    assert any("Dossiê Mulher" in query for query in queries)
+    assert all("youtube" not in query.lower() for query in queries)
