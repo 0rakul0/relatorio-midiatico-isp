@@ -45,3 +45,28 @@ def test_unrecognized_classification_stays_in_review():
         )],
     )
     assert evidence_status(item) == "review"
+
+def test_archive_page_occurrence_is_pending_review():
+    from app.api.institutional_presence import ArchiveBatch, ArchivePage, extract_archive_matches
+    batch = ArchiveBatch(
+        products=["Dossiê Mulher"],
+        pages=[ArchivePage(
+            publication="Jornal de teste", edition_date="2025-06-01",
+            page_number=1, source_url="https://example.org/edition.pdf",
+            text="Na edição deste jornal, o Dossiê Mulher foi citado em uma matéria sobre dados.",
+        )],
+    )
+    result = extract_archive_matches(batch)
+    assert result["pages_processed"] == 1
+    assert any(x["editorial_location"] == "front_page" for x in result["matches"])
+    assert all(x["status"] == "REVIEW_REQUIRED" for x in result["matches"])
+
+
+def test_indirect_match_never_auto_confirms():
+    from app.api.institutional_presence import verify_indirect_citation
+    excerpt = "O documento apresenta indicadores de violência contra mulheres no estado."
+    result = verify_indirect_citation(
+        "Segundo a pesquisa: " + excerpt,
+        excerpt, "https://example.org/official.pdf",
+    )
+    assert result["status"] == "EVIDENCE_MATCH_REVIEW_REQUIRED"
