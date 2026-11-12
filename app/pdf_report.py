@@ -197,6 +197,57 @@ def build_pdf(data: dict) -> bytes:
         )
         return True
 
+    institutional_options = project.get("execution_options") or {}
+    if institutional_options.get("institutional_presence"):
+        story.append(Paragraph("Monitoramento da presença institucional", heading))
+        story.append(Paragraph(
+            "Este recorte é complementar à repercussão midiática geral. "
+            "Os registros abaixo são candidatos para auditoria de atribuição; "
+            "não constituem comprovação automática de uso indireto de dados.", body))
+        institution = _text(project.get("institution") or "")
+        products = [
+            _text(p).strip() for p in
+            (institutional_options.get("institutional_products") or [])
+            if _text(p).strip()
+        ]
+        story.append(Paragraph(
+            "Instituição: " + escape(institution) +
+            ". Produtos informados: " +
+            escape(", ".join(products) if products else "nenhum especificado") +
+            ". Período: " + escape(collection_label) + ".", small))
+        import re
+        terms = [institution] + products
+        # Siglas curtas exigem fronteiras de palavra; não inferir uso indireto.
+        if "instituto de segurança pública" in institution.casefold():
+            terms.append("ISP")
+        candidates = []
+        for item in corpus:
+            content = " ".join(_text(item.get(k) or "") for k in
+                               ("title", "snippet", "content", "summary"))
+            matches = [
+                term for term in terms if term and
+                re.search(r"(?<!\\w)" + re.escape(term) + r"(?!\\w)",
+                          content, flags=re.IGNORECASE)
+            ]
+            if matches:
+                candidates.append((item, matches))
+        story.append(Paragraph(
+            f"{len(candidates)} registro(s) com correspondência textual "
+            "no corpus deduplicado. Não foram contadas automaticamente "
+            "capas, páginas internas nem utilizações indiretas sem evidência.", body))
+        for item, matches in candidates[:60]:
+            story.append(Paragraph(
+                escape(_text(item.get("title") or "Publicação sem título")),
+                small))
+            story.append(Paragraph(
+                "Termos: " + escape(", ".join(matches)) +
+                " | Fonte: " + escape(_text(item.get("url") or "não informada")),
+                small))
+        if len(candidates) > 60:
+            story.append(Paragraph(
+                f"Exibidos os primeiros 60 de {len(candidates)} registros; "
+                "o restante permanece no corpus do projeto.", small))
+
     part_number = 0
 
     def add_part(name: str) -> None:
