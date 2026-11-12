@@ -110,3 +110,22 @@ def test_cover_queries_are_restricted_to_newspaper_archives():
     assert all(("capa" in q or "primeira página" in q) for q in queries)
     assert all("2025" in q for q in queries)
     assert not any("tiktok" in q.lower() or "youtube" in q.lower() for q in queries)
+
+def test_front_page_preset_blocks_unrelated_modules():
+    from app.services.execution_profile import sanitize_execution_plan
+    project = SimpleNamespace(
+        execution_profile="MANCHETES_CAPA",
+        execution_options={"cover_only": True, "institutional_presence": True,
+                           "enable_academic_research": True, "enable_fact_layer": True},
+        topic_profile={}, project_type="AUTO",
+    )
+    processes = sanitize_execution_plan(project, {
+        "processes": {"social_repercussion": {"enabled": True},
+                      "youtube_collection": {"enabled": True}}
+    })["processes"]
+    for name in ("youtube_collection", "social_repercussion",
+                 "academic_research", "fact_extraction", "fact_resolution",
+                 "nominal_followup", "second_fact_pass"):
+        assert processes[name]["enabled"] is False
+    assert processes["report_writer"]["enabled"] is True
+    assert processes["qa"]["enabled"] is True
