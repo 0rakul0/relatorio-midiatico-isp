@@ -350,16 +350,17 @@ def build_pdf(data: dict) -> bytes:
                 )
             )
 
-        add_public_opinion_section(
-            story,
+        if not institutional_options.get("institutional_presence"):
+            add_public_opinion_section(
+                story,
             report=report,
             public_opinion=public_opinion,
             heading=heading,
             body=body,
             small=small,
         )
-        add_social_section(
-            story,
+            add_social_section(
+                story,
             social_repercussion=social_repercussion,
             heading=heading,
             body=body,
