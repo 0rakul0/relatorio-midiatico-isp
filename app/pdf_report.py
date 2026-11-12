@@ -32,6 +32,94 @@ from app.utils.rendering import (
 )
 
 
+def _build_cover_headlines_pdf(data: dict) -> bytes:
+    """Strict evidence-only report: never infer front pages from digital URLs."""
+    from collections import Counter
+    from datetime import date
+    from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib import colors
+
+    project = data["project"]
+    styles = pdf_styles()
+    story = [
+        Paragraph("PRESENÇA DO ISP EM MANCHETES DE CAPA", styles["title"]),
+        Paragraph(
+            escape(_window_label(project.get("collection_start"),
+                                 project.get("collection_end"),
+                                 empty="Período não informado")),
+            styles["subtitle"],
+        ),
+    ]
+    # Only page-1 documentary findings qualify. Ordinary corpus articles,
+    # social posts and unverified search hits are deliberately excluded.
+    raw = data.get("institutional_findings") or data.get("cover_findings") or []
+    confirmed = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        location = str(item.get("location") or item.get("editorial_location") or "").lower()
+        evidence = item.get("evidence") or []
+        verified = item.get("confirmed") is True
+        page_one = any(
+            isinstance(ev, dict) and ev.get("document_page") == 1 and ev.get("url")
+            for ev in evidence
+        )
+        if not (verified and page_one and location in {"front_page", "capa"}):
+            continue
+        date_value = str(item.get("publication_date") or "")[:10]
+        try:
+            date.fromisoformat(date_value)
+        except ValueError:
+            continue
+        confirmed.append(item)
+    by_month = Counter(str(row["publication_date"])[:7] for row in confirmed)
+    story.append(Paragraph(
+        f"{len(confirmed)} manchete(s) de capa comprovada(s) documentalmente.",
+        styles["body"],
+    ))
+    story.append(Spacer(1, 12))
+    story.append(Paragraph("Série temporal mensal", styles["heading"]))
+    if by_month:
+        rows = [["Mês", "Manchetes confirmadas"]]
+        rows.extend([[month, str(count)] for month, count in sorted(by_month.items())])
+        table = Table(rows, colWidths=[230, 230], repeatRows=1)
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e9f1f6")),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ]))
+        story.append(table)
+    else:
+        story.append(Paragraph(
+            "Nenhuma manchete de capa foi comprovada nos dados disponíveis. "
+            "Isso não significa ausência de publicações: a cobertura dos acervos "
+            "ainda precisa ser verificada.",
+            styles["body"],
+        ))
+    story.append(Spacer(1, 12))
+    story.append(Paragraph("Evidências de capa", styles["heading"]))
+    for item in confirmed:
+        ev = next(e for e in item["evidence"] if e.get("document_page") == 1 and e.get("url"))
+        description = (
+            f'{item.get("publication_date", "N/D")} | '
+            f'{item.get("publication", "Jornal não identificado")} | '
+            f'{item.get("title", "Manchete sem título")} | '
+            f'{ev["url"]}'
+        )
+        story.append(Paragraph(escape(description), styles["body"]))
+    story.append(Spacer(1, 12))
+    story.append(Paragraph(
+        "Critério: apenas manchetes explicitamente atribuídas ao ISP, "
+        "com evidência da primeira página e confirmação documental. "
+        "Notícias digitais, páginas internas e redes sociais não entram na contagem.",
+        styles["small"],
+    ))
+    buffer = BytesIO()
+    document = create_document(buffer)
+    document.build(story, onFirstPage=page_number, onLaterPages=page_number)
+    return buffer.getvalue()
+
+
 def build_pdf(data: dict) -> bytes:
     """Cria o PDF a partir do relatório persistido, sem chamar LLM novamente."""
     from reportlab.lib import colors
@@ -41,6 +129,8 @@ def build_pdf(data: dict) -> bytes:
 
     report = data["report"]
     project = data["project"]
+    if str(project.get("execution_profile") or "").upper() == "MANCHETES_CAPA" or (project.get("execution_options") or {}).get("cover_only"):
+        return _build_cover_headlines_pdf(data)
     metrics = dict(data["metrics"])
     corpus = _deduplicated_corpus(
         data.get("corpus", []),
