@@ -324,6 +324,24 @@ def validate_findings(items: list[InstitutionalFinding]):
                   for item in items],
     }
 
+@router.post("/cover-report.pdf")
+def institutional_cover_pdf(payload: InstitutionalReportInput):
+    """Generate the dedicated cover report from audited structured findings."""
+    from app.pdf_report import build_pdf
+    findings = [item.model_dump(mode="json") for item in payload.findings]
+    result = build_pdf({
+        "report": {},
+        "project": {
+            "execution_profile": "MANCHETES_CAPA",
+            "collection_start": None,
+            "collection_end": None,
+        },
+        "institutional_findings": findings,
+    })
+    return Response(content=result, media_type="application/pdf",
+                    headers={"Content-Disposition": 'attachment; filename="presenca-isp-capas.pdf"'})
+
+
 @router.post("/report.pdf")
 def institutional_pdf(payload: InstitutionalReportInput):
     from reportlab.lib import colors
