@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.chat import router as chat_router
+from app.api.institutional_presence import router as institutional_router
 from app.api.costs import router as costs_router
 from app.api.projects import router as projects_router
 from app.api.project_search import router as project_search_router
@@ -89,6 +90,7 @@ app.include_router(auth_router)
 app.include_router(billing_router)
 app.include_router(costs_router)
 app.include_router(chat_router)
+app.include_router(institutional_router)
 app.include_router(reports_router)
 app.include_router(projects_router)
 app.include_router(project_search_router)
