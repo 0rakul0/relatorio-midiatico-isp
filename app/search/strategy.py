@@ -53,23 +53,6 @@ def _sanitize_strategy(
     enable_fact_layer: bool,
 ) -> dict[str, Any]:
     settings = get_settings()
-    # Dedicated cover-headline inventory. Never mix generic media queries,
-    # video/social discovery or indirect data usage into this run.
-    if (project.execution_options or {}).get("institutional_presence"):
-        from app.api.institutional_presence import institutional_cover_queries
-        for query in institutional_cover_queries(project):
-            row = _add_query(
-                db, project, existing, query=query,
-                kind="institutional_front_page",
-                purpose="MEDIA_REPERCUSSION",
-                rationale="Localizar edicao/capa; confirmar manchete na pagina 1.",
-                priority=1,
-            )
-            if row:
-                created.append(row)
-        db.commit()
-        return created
-
     scout = MediaScout(project.topic, project.topic_profile)
     fallback = scout.fallback_search_strategy(
         max_complementary=settings.max_complementary_queries
@@ -194,6 +177,21 @@ def _persist_strategy_queries(
 
     existing = _existing_queries(db, project.id)
     created: list[SearchQuery] = []
+
+    if str(project.execution_profile or "").upper() == "MANCHETES_CAPA":
+        from app.api.institutional_presence import institutional_cover_queries
+        for query in institutional_cover_queries(project):
+            row = _add_query(
+                db, project, existing, query=query,
+                kind="institutional_front_page",
+                purpose="MEDIA_REPERCUSSION",
+                rationale="Candidato: exige prova documental da capa e manchete.",
+                priority=1,
+            )
+            if row:
+                created.append(row)
+        db.commit()
+        return created
 
     scout = MediaScout(project.topic, project.topic_profile)
     media_tasks = _media_task_order(
