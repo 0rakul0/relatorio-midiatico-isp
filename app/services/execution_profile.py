@@ -9,6 +9,20 @@ from app.models import Project
 # Explicit profiles remain user-controlled presets. AUTO is resolved by the
 # report planner and persisted in Project.execution_plan.
 EXECUTION_PROFILE_DEFAULTS = {
+    "MANCHETES_CAPA": {
+        "enable_web_collection": True,
+        "enable_youtube": False,
+        "enable_social_repercussion": False,
+        "enable_academic_research": False,
+        "enable_media_validation": True,
+        "enable_fact_layer": False,
+        "enable_fact_resolution": False,
+        "enable_nominal_followup": False,
+        "enable_second_fact_pass": False,
+        "enable_classification": False,
+        "enable_report_writer": False,
+        "enable_qa": True,
+    },
     "MIDIATICO_SIMPLES": {
         "enable_web_collection": True,
         "enable_youtube": True,
@@ -68,6 +82,7 @@ EXECUTION_PROFILE_DEFAULTS = {
 }
 
 EXECUTION_PROFILE_GUIDANCE = {
+    "MANCHETES_CAPA": "Somente manchetes da primeira pagina de jornais com evidencia da capa. Nao pesquisar redes sociais, videos, opiniao publica ou artigos digitais isolados.",
     "AUTO": "Planeje etapas pela pertinencia ao tema. Para tema geral de natureza social, considere literatura cientifica.",
     "MIDIATICO_SIMPLES": "Priorize cobertura jornalistica e percepcao social, sem levantamento nominal.",
     "MIDIATICO_COM_FATOS": "Priorize noticias e verificacao de fatos individualizaveis e seus contextos.",
@@ -229,6 +244,13 @@ def sanitize_execution_plan(project: Project, raw: dict[str, Any] | None) -> dic
                 False, "Modo presenca institucional: somente imprensa e verificacao de fontes."
             )
 
+    if selected == "MANCHETES_CAPA":
+        for name in processes:
+            processes[name] = _decision(
+                name in {"web_collection", "media_validation", "qa"},
+                "Perfil estrito de manchetes de capa: somente coleta, validacao e QA."
+            )
+
     # Logical dependencies.
     if not processes["fact_extraction"]["enabled"]:
         processes["fact_resolution"] = _decision(False, "Sem extracao factual, nao ha fatos para consolidar.")
@@ -270,6 +292,13 @@ def sanitize_execution_plan(project: Project, raw: dict[str, Any] | None) -> dic
                      "second_fact_pass"):
             processes[name] = _decision(
                 False, "Escopo institucional exclusivo de jornais e portais."
+            )
+
+    if selected == "MANCHETES_CAPA":
+        for name in processes:
+            processes[name] = _decision(
+                name in {"web_collection", "media_validation", "qa"},
+                "Bloqueio definitivo do perfil Manchetes de capa."
             )
 
     fact_fields = []
