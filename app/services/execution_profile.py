@@ -211,6 +211,17 @@ def sanitize_execution_plan(project: Project, raw: dict[str, Any] | None) -> dic
     ):
         processes[process_name]["enabled"] = True
 
+    # Institutional press-only research excludes video and social platforms.
+    # Enforce after structural defaults and profile presets so the LLM cannot
+    # accidentally re-enable unrelated media collection.
+    if (project.execution_options or {}).get("institutional_presence"):
+        processes["youtube_collection"] = _decision(
+            False, "Pesquisa institucional restrita a jornais e portais: YouTube desativado."
+        )
+        processes["social_repercussion"] = _decision(
+            False, "Pesquisa institucional restrita a jornais e portais: redes sociais desativadas."
+        )
+
     # Logical dependencies.
     if not processes["fact_extraction"]["enabled"]:
         processes["fact_resolution"] = _decision(False, "Sem extracao factual, nao ha fatos para consolidar.")
