@@ -33,87 +33,166 @@ from app.utils.rendering import (
 
 
 def _build_cover_headlines_pdf(data: dict) -> bytes:
-    """Strict evidence-only report: never infer front pages from digital URLs."""
+    """Evidence-only institutional front-page report, with historical indicators."""
     from collections import Counter
     from datetime import date
-    from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+    from urllib.parse import urlparse
     from reportlab.lib import colors
+    from reportlab.graphics.shapes import Drawing, Rect, String, Line
+    from reportlab.platypus import Paragraph, Spacer, Table, TableStyle, KeepTogether
 
     project = data["project"]
     styles = pdf_styles()
-    story = [
-        Paragraph("PRESENÇA DO ISP EM MANCHETES DE CAPA", styles["title"]),
-        Paragraph(
-            escape(_window_label(project.get("collection_start"),
-                                 project.get("collection_end"),
-                                 empty="Período não informado")),
-            styles["subtitle"],
-        ),
-    ]
-    # Only page-1 documentary findings qualify. Ordinary corpus articles,
-    # social posts and unverified search hits are deliberately excluded.
     raw = data.get("institutional_findings") or data.get("cover_findings") or []
     confirmed = []
+    seen = set()
     for item in raw:
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or item.get("confirmed") is not True:
             continue
         location = str(item.get("location") or item.get("editorial_location") or "").lower()
-        evidence = item.get("evidence") or []
-        verified = item.get("confirmed") is True
-        page_one = any(
-            isinstance(ev, dict) and ev.get("document_page") == 1 and ev.get("url")
-            for ev in evidence
-        )
-        if not (verified and page_one and location in {"front_page", "capa"}):
+        if location not in {"front_page", "capa"}:
             continue
-        date_value = str(item.get("publication_date") or "")[:10]
+        evidence = [
+            ev for ev in (item.get("evidence") or [])
+            if isinstance(ev, dict) and ev.get("document_page") == 1
+            and str(ev.get("url") or "").startswith(("https://", "http://"))
+        ]
+        if not evidence:
+            continue
+        day = str(item.get("publication_date") or "")[:10]
         try:
-            date.fromisoformat(date_value)
+            date.fromisoformat(day)
         except ValueError:
             continue
-        confirmed.append(item)
-    by_month = Counter(str(row["publication_date"])[:7] for row in confirmed)
-    story.append(Paragraph(
-        f"{len(confirmed)} manchete(s) de capa comprovada(s) documentalmente.",
-        styles["body"],
-    ))
-    story.append(Spacer(1, 12))
-    story.append(Paragraph("Série temporal mensal", styles["heading"]))
-    if by_month:
-        rows = [["Mês", "Manchetes confirmadas"]]
-        rows.extend([[month, str(count)] for month, count in sorted(by_month.items())])
-        table = Table(rows, colWidths=[230, 230], repeatRows=1)
+        classification = str(item.get("classification") or "").lower()
+        if classification not in {"explicit", "product", "indirect"}:
+            continue
+        if classification == "indirect" and not any(
+            str(ev.get("source_type") or "").lower() in
+            {"official_document", "official_data", "documentary_crosscheck"}
+            for ev in evidence
+        ):
+            continue
+        key = (str(item.get("publication") or "").casefold(), day,
+               str(item.get("title") or "").casefold(), evidence[0]["url"])
+        if key in seen:
+            continue
+        seen.add(key)
+        confirmed.append({**item, "_cover_evidence": evidence[0],
+                          "_classification": classification})
+    confirmed.sort(key=lambda row: (str(row["publication_date"]), str(row.get("publication") or "")))
+    counts = Counter(row["_classification"] for row in confirmed)
+    papers = Counter(str(row.get("publication") or "Não identificado") for row in confirmed)
+    products = Counter(str(row.get("product")) for row in confirmed if row.get("product"))
+    monthly = {}
+    for row in confirmed:
+        month = str(row["publication_date"])[:7]
+        bucket = monthly.setdefault(month, {"explicit": 0, "product": 0, "indirect": 0})
+        bucket[row["_classification"]] += 1
+
+    def p(value, style="body"):
+        return Paragraph(escape(str(value)), styles[style])
+
+    story = [
+        p("INSTITUTO DE SEGURANÇA PÚBLICA", "small"),
+        p("Presença do ISP em manchetes de capa", "title"),
+        p("Monitoramento histórico de citações, produtos e uso de dados", "subtitle"),
+        p(_window_label(project.get("collection_start"), project.get("collection_end"),
+                        empty="Período não informado"), "small"),
+        Spacer(1, 18),
+        p("Resumo executivo", "heading"),
+    ]
+    cards = [
+        ("Capas verificadas", len(confirmed)),
+        ("Jornais", len(papers)),
+        ("Menções explícitas", counts["explicit"]),
+        ("Produtos ISP", counts["product"]),
+        ("Usos indiretos comprovados", counts["indirect"]),
+    ]
+    cells = [Paragraph(
+        f'<font color="#183b65" size="17"><b>{value}</b></font><br/>'
+        f'<font color="#455569" size="8">{escape(label)}</font>', styles["body"]
+    ) for label, value in cards]
+    summary = Table([cells[:3], cells[3:] + [""]], colWidths=[170, 170, 170])
+    summary.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f1f5fa")),
+        ("TOPPADDING", (0, 0), (-1, -1), 14),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 14),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    story.extend([summary, Spacer(1, 16), p("Evolução histórica da presença em capas", "heading")])
+    if monthly:
+        months = sorted(monthly)
+        width, height = 510, 220
+        chart = Drawing(width, height)
+        left, bottom, plot_h, bar_w = 43, 43, 140, min(34, 370 / max(len(months), 1) * .65)
+        maximum = max(sum(monthly[m].values()) for m in months) or 1
+        colors_by_kind = {"explicit": "#305a9a", "product": "#b68b45", "indirect": "#408447"}
+        chart.add(Line(left, bottom, 492, bottom, strokeColor=colors.HexColor("#a9b5c5")))
+        for i, month in enumerate(months):
+            x = left + (i + .5) * (445 / len(months))
+            y = bottom
+            for kind in ("explicit", "product", "indirect"):
+                amount = monthly[month][kind]
+                h = amount / maximum * plot_h
+                if h:
+                    chart.add(Rect(x - bar_w / 2, y, bar_w, h,
+                                   fillColor=colors.HexColor(colors_by_kind[kind]),
+                                   strokeColor=None))
+                y += h
+            if len(months) <= 18 or i % max(1, len(months)//12) == 0:
+                chart.add(String(x, bottom - 13, month[2:], fontSize=7, textAnchor="middle"))
+        chart.add(String(left, bottom + plot_h + 9, f"Máximo mensal: {maximum}", fontSize=8))
+        for i, (kind, label) in enumerate([
+            ("explicit", "Diretas"), ("product", "Produtos"), ("indirect", "Indiretas comprovadas")
+        ]):
+            x = 52 + i * 145
+            chart.add(Rect(x, 9, 9, 9, fillColor=colors.HexColor(colors_by_kind[kind]), strokeColor=None))
+            chart.add(String(x + 14, 10, label, fontSize=8))
+        story.append(chart)
+        story.append(p("Categorias exclusivas por manchete; uma capa pode conter mais de uma manchete.", "small"))
+    else:
+        story.append(p(
+            "Não há manchetes de capa documentalmente confirmadas no conjunto fornecido. "
+            "Isso não significa ausência de cobertura: é necessário verificar os acervos.", "body"))
+    story.extend([Spacer(1, 14), p("Ranking de jornais", "heading")])
+    if papers:
+        rows = [[p("Jornal", "small"), p("Manchetes", "small")]]
+        rows += [[p(name), str(n)] for name, n in papers.most_common()]
+        table = Table(rows, colWidths=[370, 140], repeatRows=1)
         table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e9f1f6")),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e7eef7")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
         ]))
         story.append(table)
     else:
-        story.append(Paragraph(
-            "Nenhuma manchete de capa foi comprovada nos dados disponíveis. "
-            "Isso não significa ausência de publicações: a cobertura dos acervos "
-            "ainda precisa ser verificada.",
-            styles["body"],
-        ))
-    story.append(Spacer(1, 12))
-    story.append(Paragraph("Evidências de capa", styles["heading"]))
+        story.append(p("Nenhum jornal com capa comprovada.", "body"))
+    story.extend([Spacer(1, 14), p("Produtos institucionais", "heading")])
+    story.append(p(", ".join(f"{name}: {n}" for name, n in products.most_common())
+                   if products else "Nenhum produto identificado em capas verificadas."))
+    story.extend([Spacer(1, 14), p("Manchetes e evidências documentais", "heading")])
     for item in confirmed:
-        ev = next(e for e in item["evidence"] if e.get("document_page") == 1 and e.get("url"))
-        description = (
-            f'{item.get("publication_date", "N/D")} | '
-            f'{item.get("publication", "Jornal não identificado")} | '
-            f'{item.get("title", "Manchete sem título")} | '
-            f'{ev["url"]}'
-        )
-        story.append(Paragraph(escape(description), styles["body"]))
-    story.append(Spacer(1, 12))
-    story.append(Paragraph(
-        "Critério: apenas manchetes explicitamente atribuídas ao ISP, "
-        "com evidência da primeira página e confirmação documental. "
-        "Notícias digitais, páginas internas e redes sociais não entram na contagem.",
-        styles["small"],
-    ))
+        url = str(item["_cover_evidence"]["url"])
+        safe_url = escape(url, {'"': '&quot;'})
+        title = escape(str(item.get("title") or "Sem título"))
+        label = f'{item["publication_date"]} | {item.get("publication") or "Jornal"} | {item["_classification"]}'
+        story.append(KeepTogether([
+            p(label, "small"),
+            Paragraph(f'<link href="{safe_url}" color="#245c9b">{title}</link>', styles["body"]),
+            Spacer(1, 9),
+        ]))
+    story.extend([
+        Spacer(1, 14), p("Metodologia e limitações", "heading"),
+        p("A contagem inclui somente manchetes verificadas na página 1, com URL "
+          "documental, data e classificação validada. Menções indiretas exigem "
+          "evidência documental oficial adicional. Resultados de busca, notícias "
+          "digitais e publicações em redes sociais não entram nos indicadores."),
+        p("A falta de evidências não demonstra ausência de manchetes. "
+          "A cobertura dos acervos e das edições não foi medida automaticamente.", "small"),
+    ])
     buffer = BytesIO()
     document = create_document(buffer)
     document.build(story, onFirstPage=page_number, onLaterPages=page_number)
