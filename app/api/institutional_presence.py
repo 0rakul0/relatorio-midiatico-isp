@@ -296,6 +296,52 @@ def institutional_pdf(payload: InstitutionalReportInput):
         f"Confirmadas: {len(confirmed)}. Pendentes de revisao: {len(review)}. "
         "Os totais representam somente o material fornecido e validado, "
         "nao o universo completo de publicacoes.", body))
+    from collections import defaultdict
+    by_year = Counter(x.publication_date[:4] for x in confirmed)
+    by_location = Counter(x.location for x in confirmed)
+    by_kind = Counter(x.classification for x in confirmed)
+    by_publication = Counter(x.publication for x in confirmed)
+    story.append(Paragraph("Indicadores editoriais", base["Heading2"]))
+    for label, counts in [
+        ("Por tipo de evidencia", by_kind),
+        ("Por posicao editorial", by_location),
+        ("Por veiculo", by_publication),
+    ]:
+        story.append(Paragraph(escape(label), base["Heading3"]))
+        if counts:
+            rows = [[Paragraph("Categoria", base["Normal"]), Paragraph("Ocorrencias", base["Normal"])]]
+            rows += [[Paragraph(escape(str(k)), base["Normal"]), str(v)]
+                     for k, v in counts.most_common(20)]
+            table = Table(rows, colWidths=[350, 130], repeatRows=1, hAlign="LEFT")
+            table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eaf1f6")),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.6, colors.HexColor("#8ba6b8")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ]))
+            story.append(table)
+        else:
+            story.append(Paragraph("Sem registros confirmados.", body))
+    story.append(Paragraph("Serie historica de aparicoes confirmadas", base["Heading2"]))
+    if by_year:
+        from reportlab.graphics.shapes import Drawing
+        from reportlab.graphics.charts.barcharts import VerticalBarChart
+        years = sorted(by_year)
+        chart = VerticalBarChart()
+        chart.x = 45
+        chart.y = 35
+        chart.height = 125
+        chart.width = 410
+        chart.data = [[by_year[y] for y in years]]
+        chart.categoryAxis.categoryNames = years
+        chart.valueAxis.valueMin = 0
+        chart.valueAxis.valueMax = max(by_year.values()) + 1
+        chart.valueAxis.valueStep = max(1, (max(by_year.values()) + 3) // 4)
+        drawing = Drawing(500, 180)
+        drawing.add(chart)
+        story.append(drawing)
+    else:
+        story.append(Paragraph("Sem datas confirmadas para gerar serie historica.", body))
     story.append(Paragraph("Aparicoes confirmadas", base["Heading2"]))
     for item in confirmed:
         story.append(Paragraph(escape(item.title), base["Heading3"]))
