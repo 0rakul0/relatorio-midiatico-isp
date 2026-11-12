@@ -60,9 +60,43 @@ def evidence_status(item: InstitutionalFinding) -> str:
         return "review"
     return "confirmed" if item.confirmed else "review"
 
+# Initial discovery vocabulary, not a claim that this is a complete
+# or current official product catalogue. Expand only from verified sources.
+DEFAULT_ISP_PRODUCTS = (
+    "Dossiê Mulher",
+    "ISP Dados",
+    "ISP Cidades",
+    "Dossiê Criança e Adolescente",
+    "Dossiê Pessoa Idosa",
+    "Dossiê LGBT+",
+    "Mapa do Crime",
+)
+
+
+def institutional_search_queries(project) -> list[str]:
+    """Focused newspaper searches; no video, social or opinion research."""
+    options = project.execution_options or {}
+    if not options.get("institutional_presence"):
+        return []
+    institution = (project.institution or "Instituto de Segurança Pública").strip()
+    products = [str(x).strip() for x in
+                (options.get("institutional_products") or DEFAULT_ISP_PRODUCTS)
+                if str(x).strip()]
+    # Broad queries also capture explicit mentions not tied to a known product.
+    queries = [
+        f'"{institution}" jornal reportagem',
+        '"ISP-RJ" jornal dados segurança',
+        '"Instituto de Segurança Pública" capa jornal',
+    ]
+    queries.extend(f'"{product}" jornal dados' for product in products[:20])
+    return list(dict.fromkeys(queries))
+
+
 def plan_for_project(project, criteria: InstitutionalCriteria, products: list[str]) -> dict:
     institution = (project.institution or "Instituto de Seguranca Publica").strip()
     queries = []
+    if not products:
+        products = list(DEFAULT_ISP_PRODUCTS)
     if criteria.explicit_mentions:
         queries += [f'"{institution}" imprensa', '"ISP" "seguranca publica" jornal']
     if criteria.institutional_products:
