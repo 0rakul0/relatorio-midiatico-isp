@@ -172,6 +172,92 @@ def project_candidates(project_id: int, limit: int = 500,
     return corpus_candidates(db, project, limit=limit)
 
 
+class ArchivePage(BaseModel):
+    publication: str = Field(min_length=2)
+    edition_date: str = Field(min_length=10, max_length=10)
+    page_number: int = Field(ge=1)
+    source_url: HttpUrl
+    text: str = Field(min_length=30, max_length=300000)
+    edition_id: str | None = None
+
+
+class ArchiveBatch(BaseModel):
+    institution: str = "Instituto de Segurança Pública"
+    products: list[str] = Field(default_factory=list, max_length=30)
+    pages: list[ArchivePage] = Field(min_length=1, max_length=200)
+
+
+def extract_archive_matches(payload: ArchiveBatch) -> dict:
+    """Deterministic extraction from supplied page text; no inferred provenance."""
+    import re
+    terms = list(dict.fromkeys(
+        [payload.institution] + payload.products +
+        (["ISP"] if "instituto de segurança pública" in payload.institution.casefold() else [])
+    ))
+    matches = []
+    for page in payload.pages:
+        for term in terms:
+            if not term.strip():
+                continue
+            pattern = re.compile(r"(?<!\\w)" + re.escape(term) + r"(?!\\w)", re.I)
+            for match in list(pattern.finditer(page.text))[:20]:
+                excerpt = page.text[max(0, match.start()-110):min(len(page.text), match.end()+110)]
+                matches.append({
+                    "publication": page.publication,
+                    "edition_date": page.edition_date,
+                    "edition_id": page.edition_id,
+                    "page_number": page.page_number,
+                    "editorial_location": "front_page" if page.page_number == 1 else "inside_page",
+                    "source_url": str(page.source_url),
+                    "matched_term": term,
+                    "excerpt": excerpt,
+                    "status": "REVIEW_REQUIRED",
+                    "note": "Page number and supplied text are not independently verified.",
+                })
+    return {
+        "pages_processed": len(payload.pages),
+        "textual_occurrences": len(matches),
+        "matches": matches,
+        "limitations": "No automated proof of indirect data usage; check archive authenticity and edition pagination.",
+    }
+
+
+@router.post("/archive/pages/analyze")
+def analyze_archive_pages(payload: ArchiveBatch):
+    return extract_archive_matches(payload)
+
+
+def verify_indirect_citation(article_text: str, official_excerpt: str,
+                             official_source_url: str) -> dict:
+    """Conservative deterministic precheck, not an attribution verdict."""
+    import re
+    if not official_source_url.startswith(("https://", "http://")):
+        return {"status": "REVIEW_REQUIRED", "reason": "Missing source URL"}
+    normalize = lambda s: " ".join(re.findall(r"\\w+", s.casefold()))
+    quote = normalize(official_excerpt)
+    article = normalize(article_text)
+    if len(quote) < 45 or quote not in article:
+        return {"status": "REVIEW_REQUIRED", "reason": "Exact long excerpt not found"}
+    return {
+        "status": "EVIDENCE_MATCH_REVIEW_REQUIRED",
+        "reason": "Long excerpt matches, but independent source attribution and publication chronology still require verification.",
+        "source_url": official_source_url,
+    }
+
+
+class IndirectEvidenceCheck(BaseModel):
+    article_text: str = Field(min_length=1, max_length=300000)
+    official_excerpt: str = Field(min_length=1, max_length=10000)
+    official_source_url: HttpUrl
+
+
+@router.post("/indirect/check")
+def check_indirect_evidence(payload: IndirectEvidenceCheck):
+    return verify_indirect_citation(
+        payload.article_text, payload.official_excerpt, str(payload.official_source_url)
+    )
+
+
 @router.post("/validate")
 def validate_findings(items: list[InstitutionalFinding]):
     counts = Counter(evidence_status(item) for item in items)
