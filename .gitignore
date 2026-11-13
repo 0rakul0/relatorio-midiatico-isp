@@ -16,3 +16,6 @@ tmp/
 /repercussao.db-shm
 /repercussao.db-wal
 /.agents
+
+# Private reproducibility archives (full collected corpus)
+/data/reproducibility/
