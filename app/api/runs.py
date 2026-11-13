@@ -111,3 +111,34 @@ def cancel_run(
         "accepted": accepted,
         "run": run_snapshot(run_id),
     }
+
+
+@router.get("/runs/{run_id}/reproducibility/verify")
+def verify_run_archive(
+    run_id: str,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    _owned_run_or_404(db, user, run_id)
+    from app.reproducibility import verify
+    try:
+        return verify(run_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, "Snapshot indisponivel ou invalido") from exc
+
+
+@router.get("/runs/{run_id}/reproducibility/replay")
+def replay_run_archive(
+    run_id: str,
+    db: Session = Depends(get_db),
+    user: AuthUser = Depends(get_current_user),
+):
+    # Full corpus is restricted to the authenticated project owner.
+    _owned_run_or_404(db, user, run_id)
+    from app.reproducibility import replay
+    try:
+        return replay(run_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "Snapshot nao encontrado") from exc
+    except ValueError as exc:
+        raise HTTPException(409, "Snapshot invalido ou corrompido") from exc
