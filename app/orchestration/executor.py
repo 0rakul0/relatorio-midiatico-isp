@@ -60,6 +60,12 @@ def _run_project_worker(run_id: str, project_id: int) -> None:
         check_cancelled(run_id)
         qa_status = (result.get("qa") or {}).get("status", "N/D")
         mark_run_completed(run_id, f"Relatório concluído. QA: {qa_status}")
+        # The audit archive is best-effort: an I/O error cannot invalidate a report.
+        try:
+            from app.reproducibility import snapshot as archive_snapshot
+            archive_snapshot(db, project_id, run_id)
+        except Exception:
+            logger.exception("Falha ao arquivar snapshot da execucao %s", run_id)
     except RunCancelled:
         db.rollback()
         project = db.get(Project, project_id)
