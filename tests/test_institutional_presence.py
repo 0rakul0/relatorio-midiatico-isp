@@ -202,3 +202,21 @@ def test_cover_pdf_shows_verified_monthly_indicators_and_source_link():
     assert "TikTok" not in content
     assert "Menções explícitas" in content
     assert reader.pages[0].get("/Annots")
+
+
+def test_archive_isp_mentions_match_whole_words_only():
+    from app.api.institutional_presence import ArchiveBatch, ArchivePage, extract_archive_matches
+    batch = ArchiveBatch(
+        pages=[ArchivePage(
+            publication="O Globo", edition_date="2026-11-12",
+            page_number=1, source_url="https://example.org/edition.pdf",
+            text="O ISP divulgou dados. O Instituto de Segurança Pública confirmou o estudo. "
+                 "O termo DISPARO não deve gerar uma menção ao ISP.",
+        )],
+    )
+    result = extract_archive_matches(batch)
+    assert {item["matched_term"] for item in result["matches"]} == {
+        "ISP", "Instituto de Segurança Pública"
+    }
+    assert result["textual_occurrences"] == 2
+    assert all(item["status"] == "REVIEW_REQUIRED" for item in result["matches"])
