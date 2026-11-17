@@ -19,3 +19,7 @@ tmp/
 
 # Private reproducibility archives (full collected corpus)
 /data/reproducibility/
+
+# Local authenticated newspaper browser profile and inspection output
+.cover_scout_browser/
+cover_scout_output/
