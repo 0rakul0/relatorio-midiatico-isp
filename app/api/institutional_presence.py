@@ -190,7 +190,7 @@ def corpus_candidates(db: Session, project, *, limit: int = 500) -> dict:
         content = " ".join(str(v or "") for v in
                            (doc.title, doc.snippet, doc.content))
         matched = [term for term in terms if re.search(
-            r"(?<!\\w)" + re.escape(term) + r"(?!\\w)", content, re.IGNORECASE)]
+            r"(?<!\w)" + re.escape(term) + r"(?!\w)", content, re.IGNORECASE)]
         if not matched:
             continue
         candidates.append({
@@ -254,7 +254,7 @@ def extract_archive_matches(payload: ArchiveBatch) -> dict:
         for term in terms:
             if not term.strip():
                 continue
-            pattern = re.compile(r"(?<!\\w)" + re.escape(term) + r"(?!\\w)", re.I)
+            pattern = re.compile(r"(?<!\w)" + re.escape(term) + r"(?!\w)", re.I)
             for match in list(pattern.finditer(page.text))[:20]:
                 excerpt = page.text[max(0, match.start()-110):min(len(page.text), match.end()+110)]
                 matches.append({
